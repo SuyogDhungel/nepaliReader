@@ -348,6 +348,22 @@ class _PdfState:
 		self.location = None
 
 
+class _Yield:
+	"""Background work gives NVDA the processor often: after about 10 ms of work it rests 15 ms,
+	so speech and keys stay quick while a PDF is being read."""
+
+	def __init__(self, work=0.010, rest=0.015):
+		self.work = work
+		self.rest = rest
+		self.last = time.perf_counter()
+
+	def __call__(self):
+		now = time.perf_counter()
+		if now - self.last >= self.work:
+			time.sleep(self.rest)
+			self.last = time.perf_counter()
+
+
 def _cacheDir():
 	try:
 		import globalVars
@@ -432,12 +448,46 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 							break
 				except Exception:
 					pass
+			if taken and key in ("kb:control+c", "kb:c+control"):
+				# another add-on (clipspeak, Clipboard Enhancement...) copies: keep it, and fix the
+				# copied text right after it
+				self._chainCopy(key, ident)
 			if taken:
 				try:
 					self.removeGestureBinding(ident)
 				except Exception:
 					self._gestureMap.pop(ident, None)
 				log.info("Nepali Reader: %s is already used by %s, so it was left free" % (ident, taken))
+
+	def _chainCopy(self, key, ident):
+		plugin = self
+		for o in globalPluginHandler.runningPlugins:
+			if o is self:
+				continue
+			gmap = getattr(o, "_gestureMap", None) or {}
+			name = gmap.get(key) or gmap.get(ident)
+			if not name:
+				continue
+			attr = "script_" + (name if isinstance(name, str) else getattr(name, "__name__", "")[7:])
+			orig = getattr(o, attr, None)
+			if not callable(orig) or getattr(orig, "_nrChained", False):
+				continue
+
+			def chained(gesture, _orig=orig):
+				res = _orig(gesture)
+				if isOn():
+					wx.CallLater(400, plugin._fixClipboard, None)
+				return res
+
+			chained._nrChained = True
+			for k in ("__doc__", "category", "__name__", "resumeSayAllMode", "speakOnDemand", "canPropagate", "bypassInputHelp", "allowInSleepMode"):
+				if hasattr(orig, k):
+					try:
+						setattr(chained, k, getattr(orig, k))
+					except Exception:
+						pass
+			setattr(o, attr, chained)
+			log.info("Nepali Reader: copying with %s now gives the real Nepali text" % type(o).__module__)
 
 	def terminate(self):
 		self._unpatch()
@@ -582,6 +632,11 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			try:
 				if isOn():
 					text = plugin._plainText(info)
+					if diag.wanted():
+						try:
+							diag.write("copy: %r -> %r" % ((_unwrap(info).text or "")[:60], (text or "")[:60]))
+						except Exception:
+							pass
 					if text:
 						return api.copyToClip(textInfos.convertToCrlf(text), notify)
 			except Exception:
@@ -698,7 +753,18 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 					idx = None
 			if idx is None:
 				t0 = time.monotonic()
-				idx = pdfText.DocIndex.build(data, detector=detector, pause=lambda: time.sleep(0.002))
+				pause = _Yield()
+				if len(data) > 400 * 1024:
+					# a long document: the first pages first, so reading can start at once
+					try:
+						first = pdfText.DocIndex.build(data, detector=detector, pause=pause, isWord=neLexicon.isWord, maxPages=6)
+						st.index = first
+						st.status = "ready"
+						self._cache.clear()
+						diag.write("pdf: first pages ready in %.1f s" % (time.monotonic() - t0))
+					except Exception:
+						diag.exception("first pages")
+				idx = pdfText.DocIndex.build(data, detector=detector, pause=pause, isWord=neLexicon.isWord)
 				log.info("Nepali Reader: rebuilt %s in %.1f s: %r" % (loc, time.monotonic() - t0, idx.stats))
 				diag.write("pdf: rebuilt in %.1f s: %r" % (time.monotonic() - t0, idx.stats))
 				try:
@@ -726,8 +792,23 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		key = pdfText.keyOf(text)
 		if not key:
 			return None
+		lines = text.splitlines(True)
+		if len(lines) > 2:
+			# several lines (a paragraph, a selection, select all): line by line, keeping the line breaks
+			out = []
+			found = False
+			for ln in lines:
+				body = ln.rstrip("\r\n")
+				end = ln[len(body):]
+				new = self._indexText(None, idx, body) if pdfText.keyOf(body) else None
+				if new is not None:
+					found = True
+					out.append(new + end)
+				else:
+					out.append(ln)
+			return "".join(out) if found else None
 		pieces = None
-		if len(key) <= 100 and keyOf_(info) == key:
+		if info is not None and len(key) <= 100 and keyOf_(info) == key:
 			# a character, word, or short line selection: find it through its line
 			ctx = self._lineContext(info)
 			if ctx:
@@ -820,6 +901,20 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		self._contextEncoding = None
 
 	def _isPdfWindow(self, obj):
+		"""Same answer for the same window for half a second (it is asked several times per line)."""
+		now = time.monotonic()
+		memo = getattr(self, "_pdfMemo", None)
+		try:
+			hwnd = api.getForegroundObject().windowHandle
+		except Exception:
+			hwnd = None
+		if memo and memo[0] == hwnd and now - memo[1] < 0.5:
+			return memo[2]
+		res = self._isPdfWindowUncached(obj)
+		self._pdfMemo = (hwnd, now, res)
+		return res
+
+	def _isPdfWindowUncached(self, obj):
 		"""A PDF viewer, or a browser showing a PDF: fonts are usually not reported here."""
 		try:
 			app = _appName(obj)
@@ -1115,7 +1210,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 					fixed = devanagariRepair.repair(text, broken=True if st.broken else None)
 					if st.broken:
 						st.afterRepair(fixed)
-						if not st.learning:
+						pst = self._pdfs.get_(self._foregroundKey())
+						if not st.learning and (pst is None or pst.status == "none"):
 							st.learning = True
 							wx.CallAfter(self._learnDocument, info.obj, st)
 					if fixed != text:
@@ -1382,7 +1478,13 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		"""After the application copied a selection of Preeti / damaged text, put the real text on
 		the clipboard instead (only when the clipboard holds exactly that selection)."""
 		try:
-			info = focus.makeTextInfo(textInfos.POSITION_SELECTION)
+			if focus is None:
+				focus = api.getFocusObject()
+			src = focus
+			ti = getattr(focus, "treeInterceptor", None)
+			if ti is not None and not getattr(ti, "passThrough", True):
+				src = ti  # browse mode: the selection is in the virtual document
+			info = src.makeTextInfo(textInfos.POSITION_SELECTION)
 			if info.isCollapsed:
 				return
 			raw = info.text or ""
@@ -1390,7 +1492,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			if not new or new == raw:
 				return
 			clip = api.getClipData() or ""
-			if "".join(clip.split()) == "".join(raw.split()):
+			same = "".join(clip.split()) == "".join(raw.split())
+			diag.write("copy after app: same=%s %r -> %r" % (same, raw[:50], new[:50]))
+			if same:
 				api.copyToClip(textInfos.convertToCrlf(new))
 		except Exception:
 			log.debugWarning("Nepali Reader: could not fix the copied text", exc_info=True)

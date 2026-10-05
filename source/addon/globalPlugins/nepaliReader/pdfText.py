@@ -26,7 +26,7 @@ NUKTA = "़"
 REPH = "र्"
 DEP_SIGNS = set("ऺऻािीुूृॄॅॆेैॉॊोौॎॏॕॖॗॢॣऀँंः़")
 INDEPENDENT = set(chr(c) for c in range(0x0904, 0x0915)) | set("ॠॡॲॳॴॵॶॷ")
-INDEX_VERSION = 8
+INDEX_VERSION = 10
 INFER = True
 
 
@@ -135,7 +135,7 @@ def aksharas(s):
 # Only these characters are compared between what the viewer shows and the PDF: Devanagari,
 # Latin letters, digits and punctuation. Viewers show unmapped glyphs differently (nothing,
 # U+FFFD, or a random character from the glyph number), so everything else is ignored.
-_DROP = re.compile(r"[^\u0021-\u007e\u00a1-\u00ac\u00ae-\u017f\u0900-\u097f\ua8e0-\ua8ff\u2010-\u2027\u2030-\u205e\u20a0-\u20cf\u2100-\u2bff]+")
+_DROP = re.compile("[^\u0021-\u007e\u00a1-\u00ac\u00ae-\u017f\u0900-\u097f\ua8e0-\ua8ff\u2010-\u2027\u2030-\u205e\u20a0-\u20cf]+")
 
 
 def keyOf(s):
@@ -332,11 +332,6 @@ class PdfFont:
 
 	def resolveGlyphs(self):
 		"""Work out the real letters of every used Devanagari glyph from the glyph outlines."""
-		fam_lower = (self.baseFont or "").lower()
-		if any(s in fam_lower for s in ("wingdings", "webdings", "symbol", "dingbats")):
-			for c in self.used:
-				self.truth[c] = "•"
-			return
 		if not self.cid or not self.program or not self.used:
 			return
 		try:
@@ -346,7 +341,7 @@ class PdfFont:
 		emb = {}
 		try:
 			for cp, g in font.cmap().items():
-				if 0x900 <= cp <= 0x97F or 0x20 <= cp < 0xD800:
+				if 0x900 <= cp <= 0x97F or 0x20 <= cp < 0x2100:
 					emb.setdefault(g, chr(cp))
 		except Exception:
 			pass
@@ -389,13 +384,13 @@ class PdfFont:
 		for code, g in gids.items():
 			h = hashes.get(code)
 			t = None
-			if identity is not None and g < len(identity) and identity[g]:
-				t = identity[g]
-			if t is None and h:
+			if h:
 				for tb in tables:
 					t = tb[3].get(h)
 					if t is not None:
 						break
+			if t is None and identity is not None and g < len(identity):
+				t = identity[g]
 			if t is None and h:
 				t2 = glyphRefs.lookupHash(h)
 				if t2 and isDeva(t2) and len(t2) > 1:
@@ -468,7 +463,7 @@ class _PageReader:
 		span = None  # innermost /ActualText span: [id, text]
 		for op, args in pdfReader.contentOps(data):
 			count += 1
-			if count & 1023 == 0:
+			if count & 255 == 0:
 				if time.monotonic() > self.deadline:
 					raise TimeoutError
 				if self.pause:
@@ -593,13 +588,10 @@ class Word:
 def _isSpace(font, code, span=None):
 	if span is not None:
 		return not span[1].strip() if span[1] else False
-	tr = font.truth.get(code)
-	if tr is not None:
-		return tr.isspace() or not tr.strip()
 	t = font.text(code)
 	if t:
 		return not t.strip()
-	return False
+	return font.truth.get(code, "x").isspace()
 
 
 def _words(glyphs, page):
@@ -612,21 +604,6 @@ def _words(glyphs, page):
 		font, code, u, v, size, adv, span = g
 		size = size or 1.0
 		blank = _isSpace(font, code, span)
-		tr = font.truth.get(code)
-		is_bullet = (tr == "•") or (font.text(code) in "•●○■▪◦✓★→←–—")
-
-		if is_bullet:
-			if cur is not None and cur.glyphs:
-				words.append(cur)
-			is_line_start = (lineV is None or abs(v - lineV) > 0.5 * size or u < endU - 2.5 * size)
-			cur = Word((page, is_line_start))
-			cur.glyphs.append(g)
-			words.append(cur)
-			cur = None
-			lineV = v
-			endU = u + adv
-			continue
-
 		if lineV is None or abs(v - lineV) > 0.5 * size or u < endU - 2.5 * size:
 			if cur is not None and cur.glyphs:
 				words.append(cur)
@@ -634,12 +611,10 @@ def _words(glyphs, page):
 			lineV = v
 			endU = u
 		elif blank or u - endU > 0.2 * size:
-			if cur is not None and cur.glyphs:
+			if cur.glyphs:
 				words.append(cur)
 				cur = Word((page, False))
 		if not blank:
-			if cur is None:
-				cur = Word((page, False))
 			cur.glyphs.append(g)
 		endU = max(endU, u + adv)
 	if cur is not None and cur.glyphs:
@@ -655,14 +630,9 @@ class DocIndex:
 	def __init__(self):
 		self.B = ""            # everything the viewer shows, without spaces
 		self.starts = []       # word start offsets in B
-		self.F = ""            # fixed (real) text without spaces
-		self.fStarts = []      # word start offsets in F
 		self.words = []        # (fixed text or None, akshar map or None, legacy encoding or None, raw shown text)
 		self.lineStart = []    # True if the word starts a line
 		self._hint = 0
-		self._hintWord = 0
-		self._tokMap = None
-		self._lastAlignSpan = None
 		self._byKey = None
 		self._byBag = None
 		self.fixedWords = 0
@@ -671,9 +641,12 @@ class DocIndex:
 	# -- building -------------------------------------------------------------
 
 	@classmethod
-	def build(cls, data, timeLimit=120.0, progress=None, detector=None, pause=None, isWord=None):
+	def build(cls, data, timeLimit=120.0, progress=None, detector=None, pause=None, isWord=None, maxPages=None):
+		"""maxPages: only the first pages (a quick first index while the whole document is read)."""
 		doc = pdfReader.Document(data)
 		pages = doc.pages()
+		if maxPages:
+			pages = pages[:maxPages]
 		fonts = {}
 		pageGlyphs = []
 		deadline = time.monotonic() + timeLimit
@@ -693,11 +666,15 @@ class DocIndex:
 		realFonts = [f for k, f in fonts.items() if k != "_keep" and f is not None]
 		for f in realFonts:
 			f.resolveGlyphs()
+			if pause:
+				pause()
 		global _wordCheck
 		_wordCheck = isWord
 		allWords = []
 		for pn, gl in pageGlyphs:
 			allWords.extend(_words(gl, pn))
+			if pause:
+				pause()
 		if isWord is not None and INFER:
 			try:
 				_inferFonts(realFonts, allWords, isWord, deadline + 60, pause)
@@ -707,15 +684,17 @@ class DocIndex:
 		if detector is not None:
 			_detectLegacyFonts(realFonts, allWords, detector)
 		idx = cls()
-		idx._fill(allWords)
+		idx._fill(allWords, pause)
 		idx.stats = {"pages": len(pages), "words": len(idx.words), "fixed": idx.fixedWords,
 			"fonts": [(f.baseFont, f.legacy, len(f.used), len(f.truth)) for f in realFonts if f.used]}
 		return idx
 
-	def _fill(self, allWords):
+	def _fill(self, allWords, pause=None):
 		B = []
 		pos = 0
-		for w in allWords:
+		for n, w in enumerate(allWords):
+			if pause and not n & 255:
+				pause()
 			shown, fixed, amap, enc = _wordTexts(w)
 			key = keyOf(shown)
 			if not key:
@@ -731,44 +710,107 @@ class DocIndex:
 		self._buildF()
 
 	def _buildF(self):
+		"""F: the real text without spaces (when the viewer already shows correct text, it is found here)."""
 		F = []
 		fStarts = []
 		pos = 0
-		tokMap = {}
-		for wi, w in enumerate(self.words):
-			fixed, amap, enc, key = w
-			fw = fixed if fixed is not None else key
-			fk = keyOf(fw) if fw else ""
+		for fixed, amap, enc, key in self.words:
+			fk = keyOf(fixed) if fixed is not None else key
 			fStarts.append(pos)
 			F.append(fk)
 			pos += len(fk)
-			if fk:
-				tokMap.setdefault(fk, []).append(wi)
-			if key and key != fk:
-				tokMap.setdefault(key, []).append(wi)
 		self.F = "".join(F)
 		self.fStarts = fStarts
-		self._tokMap = tokMap
-		self._hintWord = 0
+
+	def _findF(self, key):
+		F = getattr(self, "F", "")
+		if not F:
+			return -1
+		start = self.fStarts[bisect.bisect_right(self.starts, self._hint) - 1] if self.starts and self._hint else 0
+		p = F.find(key, max(0, start))
+		if p < 0 and start:
+			p = F.find(key)
+		return p
+
+	def _spanF(self, a, b):
+		out = []
+		i = bisect.bisect_right(self.fStarts, a) - 1
+		n = len(self.words)
+		while i < n and self.fStarts[i] < b:
+			s = self.fStarts[i]
+			fixed, amap, enc, key = self.words[i]
+			wtext = fixed if fixed is not None else key
+			fk = keyOf(wtext)
+			lo = max(a, s) - s
+			hi = min(b, s + len(fk)) - s
+			if hi > lo:
+				if lo == 0 and hi == len(fk):
+					out.append((wtext, fixed is not None))
+				else:
+					aks = aksharas(fk)
+					pos = 0
+					sel = []
+					for ak in aks:
+						if pos < hi and pos + len(ak) > lo:
+							sel.append(ak)
+						pos += len(ak)
+					out.append(("".join(sel) or wtext, fixed is not None))
+			i += 1
+		self._hint = self.starts[min(max(i - 1, 0), len(self.starts) - 1)] if self.starts else 0
+		return out
 
 	# -- lookups -----------------------------------------------------------------
 
-	def _findB(self, key):
+	def _find(self, key):
+		"""Start of `key` in the document text. Viewers sometimes put a vowel sign one letter
+		later than the PDF does (PDFium orders by position), so when the exact text is not found,
+		pieces of it are used as anchors and the span is accepted if it holds the same letters."""
 		B = self.B
-		hw = getattr(self, "_hintWord", 0)
-		start = self.starts[max(0, hw - 30)] if (self.starts and max(0, hw - 30) < len(self.starts)) else 0
-		p = B.find(key, start)
-		if p < 0 and start > 0:
+		p = B.find(key, self._hint)
+		if p < 0:
 			p = B.find(key)
-		return p
-
-	def _findF(self, key):
-		F = self.F
-		hw = getattr(self, "_hintWord", 0)
-		start = self.fStarts[max(0, hw - 30)] if (self.fStarts and max(0, hw - 30) < len(self.fStarts)) else 0
-		p = F.find(key, start)
-		if p < 0 and start > 0:
-			p = F.find(key)
+		if p < 0 and len(key) >= 10:
+			n = len(key)
+			want = sorted(key)
+			for a in sorted({0, n // 4, n // 2, (3 * n) // 4, max(0, n - 8)}):
+				chunk = key[a:a + 8]
+				if len(chunk) < 6:
+					continue
+				for start in (self._hint, 0):
+					q = B.find(chunk, start)
+					while q >= 0:
+						cand = q - a
+						if cand >= 0 and sorted(B[cand:cand + n]) == want:
+							p = cand
+							break
+						q = B.find(chunk, q + 1) if start == self._hint else -1
+						if q > self._hint + 200000:
+							break
+					if p >= 0:
+						break
+				if p >= 0:
+					break
+			if p < 0:
+				# same letters, a few different (a missing or extra sign): best overlap near an anchor
+				from collections import Counter
+				cw = Counter(key)
+				best = (0, -1)
+				for a in (0, n // 2, max(0, n - 8)):
+					chunk = key[a:a + 8]
+					if len(chunk) < 6:
+						continue
+					q = B.find(chunk, self._hint)
+					if q < 0:
+						q = B.find(chunk)
+					if q >= 0:
+						cand = max(0, q - a)
+						score = sum((cw & Counter(B[cand:cand + n])).values())
+						if score > best[0]:
+							best = (score, cand)
+				if best[0] >= 0.9 * n:
+					p = best[1]
+		if p >= 0:
+			self._hint = p
 		return p
 
 	def lookup(self, text):
@@ -777,37 +819,34 @@ class DocIndex:
 		key = keyOf(text)
 		if not key:
 			return None
+		cache = self.__dict__.setdefault("_lookupCache", {})
+		hit = cache.get(text)
+		if hit is not None:
+			self._hint = hit[1]
+			return hit[0]
+		res = self._lookup(text, key)
+		if len(cache) > 3000:
+			cache.clear()
+		cache[text] = (res, self._hint)
+		return res
 
-		# 1. Exact match in F (for Devanagari, match truth stream first)
+	def _lookup(self, text, key):
+		# 1. exactly what the viewer shows; 2. the viewer already shows the real text;
+		# 3. the same letters a little reordered; 4. word by word
+		B = self.B
+		p = B.find(key, self._hint)
+		if p < 0:
+			p = B.find(key)
+		if p >= 0:
+			self._hint = p
+			return self._span(p, p + len(key))
 		if isDeva(key):
 			pf = self._findF(key)
 			if pf >= 0:
-				wi = bisect.bisect_right(self.fStarts, pf) - 1
-				self._hintWord = max(0, wi)
 				return self._spanF(pf, pf + len(key))
-
-		# 2. Exact match in B
-		p = self._findB(key)
+		p = self._find(key)
 		if p >= 0:
-			self._hint = p
-			wi = bisect.bisect_right(self.starts, p) - 1
-			self._hintWord = max(0, wi)
 			return self._span(p, p + len(key))
-
-		# 3. Exact match in F (if not already tried)
-		pf = self._findF(key)
-		if pf >= 0:
-			wi = bisect.bisect_right(self.fStarts, pf) - 1
-			self._hintWord = max(0, wi)
-			return self._spanF(pf, pf + len(key))
-
-		# 4. Sequential fuzzy alignment
-		toks = [t for t in re.split(r"\s+", text) if t]
-		aligned = self._align(text, toks, key)
-		if aligned:
-			return aligned
-
-		# 5. Fallback: match token by token
 		return self._tokens(text)
 
 	def _span(self, a, b):
@@ -827,106 +866,6 @@ class DocIndex:
 			i += 1
 		return out
 
-	def _spanF(self, a, b):
-		out = []
-		i = bisect.bisect_right(self.fStarts, a) - 1
-		n = len(self.words)
-		while i < n and self.fStarts[i] < b:
-			s = self.fStarts[i]
-			fixed, amap, enc, key = self.words[i]
-			wtext = fixed if fixed is not None else key
-			fk = keyOf(wtext)
-			lo = max(a, s) - s
-			hi = min(b, s + len(fk)) - s
-			if hi > lo:
-				if lo == 0 and hi == len(fk):
-					out.append((wtext, True))
-				else:
-					aks = aksharas(fk)
-					if aks:
-						starts = []
-						p = 0
-						for ak in aks:
-							starts.append(p)
-							p += len(ak)
-						lo_ak = max(0, bisect.bisect_right(starts, lo) - 1)
-						hi_ak = max(0, bisect.bisect_right(starts, max(0, hi - 1)) - 1)
-						out.append(("".join(aks[lo_ak:hi_ak + 1]), True))
-					else:
-						out.append((wtext, True))
-			i += 1
-		return out
-
-	def _spanWords(self, a_word, b_word):
-		out = []
-		for wi in range(a_word, b_word):
-			fixed, amap, enc, key = self.words[wi]
-			out.append((fixed if fixed is not None else key, True))
-		return out
-
-	def _align(self, text, toks, k):
-		self._lastAlignSpan = None
-		if not toks or not self._tokMap:
-			return None
-		from collections import Counter
-		import difflib
-
-		target_len = len(k)
-		votes = Counter()
-		for ti, tok in enumerate(toks):
-			kt = keyOf(tok)
-			if not kt:
-				continue
-			for wi in self._tokMap.get(kt, ()):
-				dist = abs(wi - self._hintWord)
-				w = 5.0 if dist < 20 else (2.0 if dist < 80 else 1.0)
-				votes[wi - ti] += w
-
-		hw = self._hintWord
-		for h_off in range(max(0, hw - 5), min(len(self.words), hw + 15)):
-			votes[h_off] += 0.5
-
-		if not votes:
-			return None
-
-		best = None
-		best_tot = 0.0
-		cands = [c for c, _sc in votes.most_common(8)]
-		for cand in cands:
-			for sw in range(max(0, cand - 2), min(len(self.words), cand + 3)):
-				cur_len = 0
-				ew_char = sw
-				while ew_char < len(self.words) and cur_len < target_len:
-					f, a, e, wkey = self.words[ew_char]
-					cur_len += len(keyOf(f or wkey))
-					ew_char += 1
-
-				ew_min = max(sw + 1, min(sw + len(toks) - 2, ew_char - 2))
-				ew_max = min(len(self.words) + 1, max(sw + len(toks) + 3, ew_char + 3))
-
-				for ew in range(ew_min, ew_max):
-					span_k = "".join(keyOf(self.words[i][0] or self.words[i][3]) for i in range(sw, ew))
-					if not span_k:
-						continue
-					raw_r = difflib.SequenceMatcher(None, k, span_k).ratio()
-					line_start_bonus = 0.05 if (sw == 0 or self.lineStart[sw]) else 0.0
-					line_bonus = 0.08 if (ew < len(self.words) and self.lineStart[ew]) or ew == len(self.words) else 0.0
-					tok_diff = abs((ew - sw) - len(toks))
-					tok_bonus = 0.05 if tok_diff == 0 else (0.02 if tok_diff == 1 else 0.0)
-					prox_bonus = 0.05 if abs(sw - self._hintWord) < 25 else 0.0
-					tot = raw_r + line_start_bonus + line_bonus + tok_bonus + prox_bonus
-					if tot > best_tot:
-						best_tot = tot
-						best = (sw, ew, raw_r, tot)
-
-		if best and best[2] >= 0.55:
-			sw, ew, r, tot = best
-			self._hintWord = sw
-			self._lastAlignSpan = (sw, ew)
-			return self._spanWords(sw, ew)
-
-		return None
-
 	def _part(self, i, lo, hi):
 		fixed, amap, enc, key = self.words[i]
 		if fixed is None:
@@ -934,16 +873,7 @@ class DocIndex:
 		aks = aksharas(fixed)
 		if amap is None:
 			amap = self._legacyMap(i)
-		if not amap:
-			if aks:
-				starts = []
-				p = 0
-				for ak in aks:
-					starts.append(p)
-					p += len(ak)
-				lo_ak = max(0, bisect.bisect_right(starts, lo) - 1)
-				hi_ak = max(0, bisect.bisect_right(starts, max(0, hi - 1)) - 1)
-				return ("".join(aks[lo_ak:hi_ak + 1]), True)
+		if not amap or not aks:
 			return (fixed, True)
 		sel = amap[lo:hi]
 		if not sel:
@@ -969,68 +899,27 @@ class DocIndex:
 		key = keyOf(lineText)
 		if not key:
 			return None
-
-		# 1. Exact match in F (for Devanagari)
-		if isDeva(key):
-			pf = self._findF(key)
-			if pf >= 0:
-				wi = bisect.bisect_right(self.fStarts, pf) - 1
-				self._hintWord = max(0, wi)
-				q = pf + len(keyOf(lineText[:offset]))
-				r = q + len(keyOf(lineText[offset:offset + length]))
-				if r > q:
-					return self._spanF(q, r)
-
-		# 2. Exact match in B
-		p = self._findB(key)
-		if p >= 0:
-			wi = bisect.bisect_right(self.starts, p) - 1
-			self._hintWord = max(0, wi)
-			q = p + len(keyOf(lineText[:offset]))
-			r = q + len(keyOf(lineText[offset:offset + length]))
-			if r > q:
-				return self._span(q, r)
-
-		# 3. Exact match in F (if not already tried)
-		pf = self._findF(key)
-		if pf >= 0:
-			wi = bisect.bisect_right(self.fStarts, pf) - 1
-			self._hintWord = max(0, wi)
-			q = pf + len(keyOf(lineText[:offset]))
-			r = q + len(keyOf(lineText[offset:offset + length]))
-			if r > q:
-				return self._spanF(q, r)
-
-		# 4. Aligned span
-		toks = [t for t in re.split(r"\s+", lineText) if t]
-		aligned = self._align(lineText, toks, key)
-		if aligned and hasattr(self, "_lastAlignSpan") and self._lastAlignSpan:
-			sw, ew = self._lastAlignSpan
-			matches = list(re.finditer(r"\S+", lineText))
-			if matches:
-				for ti, m in enumerate(matches):
-					if m.start() <= offset < m.end():
-						wi = sw + ti
-						if wi < ew and wi < len(self.words):
-							fixed, amap, enc, wkey = self.words[wi]
-							wtext = fixed if fixed is not None else wkey
-							if length <= 1:
-								aks = aksharas(wtext)
-								if aks:
-									starts = []
-									p = 0
-									for ak in aks:
-										starts.append(p)
-										p += len(ak)
-									in_tok = offset - m.start()
-									ak_idx = max(0, min(len(aks) - 1, bisect.bisect_right(starts, in_tok) - 1))
-									return [(aks[ak_idx], True)]
-							return [(wtext, True)]
-		return None
+		p = self._find(key)
+		if p < 0:
+			return None
+		q = p + len(keyOf(lineText[:offset]))
+		r = q + len(keyOf(lineText[offset:offset + length]))
+		if r <= q:
+			return None
+		return self._span(q, r)
 
 	def charAt(self, lineText, offset):
 		"""The syllable of the real text at character `offset` of the viewer's line (or None)."""
-		res = self.spanAt(lineText, offset, 1)
+		key = keyOf(lineText)
+		pre = keyOf(lineText[:offset])
+		here = keyOf(lineText[offset:offset + 1])
+		if not key or not here:
+			return None
+		p = self._find(key)
+		if p < 0:
+			return None
+		q = p + len(pre)
+		res = self._span(q, q + 1)
 		if res and res[0][1]:
 			return res[0][0]
 		return None
@@ -1044,9 +933,6 @@ class DocIndex:
 				if fixed is None:
 					continue
 				self._byKey.setdefault(key, fixed)
-				fk = keyOf(fixed)
-				if fk:
-					self._byKey.setdefault(fk, fixed)
 				self._byBag.setdefault("".join(sorted(key)), fixed)
 		toks = [t for t in re.split(r"\s+", text) if t]
 		out = []
@@ -1068,24 +954,7 @@ class DocIndex:
 					done = True
 					break
 			if not done:
-				tok = toks[i]
-				kt = keyOf(tok)
-				nearby_match = None
-				if kt and len(kt) >= 3:
-					import difflib
-					hw = self._hintWord
-					for n_wi in range(max(0, hw - 5), min(len(self.words), hw + 15)):
-						f, a, e, wkey = self.words[n_wi]
-						target = f if f is not None else wkey
-						if difflib.SequenceMatcher(None, kt, keyOf(target)).ratio() >= 0.7:
-							nearby_match = target
-							self._hintWord = n_wi + 1
-							break
-				if nearby_match is not None:
-					out.append((nearby_match, True))
-					found += 1
-				else:
-					out.append((tok, False))
+				out.append((toks[i], False))
 				i += 1
 		return out if found else None
 
@@ -1111,9 +980,6 @@ class DocIndex:
 
 
 _wordCheck = None  # dictionary check (set while building)
-
-
-_DEVA_DIGITS = str.maketrans("0123456789", "०१२३४५६७८९")
 
 
 def _wordTexts(w):
@@ -1142,8 +1008,6 @@ def _wordTexts(w):
 		enc = segs[0][0].legacy
 		raw = keyOf(shownText)
 		fixed = legacyFonts.convert(raw, enc) or raw
-		if fixed and any("\u0900" <= c <= "\u097f" for c in fixed) and any(c.isdigit() for c in fixed):
-			fixed = fixed.translate(_DEVA_DIGITS)
 		return shownText, fixed, None, enc
 	toks = []      # (text, glyph number)
 	charGlyph = []  # for each shown (key) character: its glyph number
@@ -1194,8 +1058,6 @@ def _wordTexts(w):
 		guessed = False
 	toks = reorder(toks)
 	fixed = "".join(t for t, g in toks)
-	if fixed and any("\u0900" <= c <= "\u097f" for c in fixed) and any(c.isdigit() for c in fixed):
-		fixed = fixed.translate(_DEVA_DIGITS)
 	if guessed:
 		# readings worked out from the document: trusted only when they make a real word
 		checker = next((getattr(f, "isWord", None) for f, _i in segs if getattr(f, "isWord", None)), None)
@@ -1417,6 +1279,12 @@ def _drawsDevanagari(font):
 	return hits >= 0.5 * tried
 
 
+_KNOWN_LATIN_FONTS = (
+	"arial", "calibri", "times", "helvetica", "tahoma", "verdana", "courier",
+	"segoe", "cambria", "georgia", "trebuchet", "roboto", "opensans", "nirmala"
+)
+
+
 def _detectLegacyFonts(fonts, allWords, detector):
 	"""A font with no legacy name (Arial, Times, a subset tag...) whose words read like Preeti or
 	Kruti Dev is treated as that legacy font, judged over all of its text in the document."""
@@ -1444,13 +1312,22 @@ def _detectLegacyFonts(fonts, allWords, detector):
 			b = sum(detector.wordScore(x, "krutidev") for x in sample.split()[:400])
 			f.legacy = "krutidev" if b > a + 6 else "preeti"
 			continue
+		baseName = (f.baseFont or "").lower()
+		if any(lf in baseName for lf in _KNOWN_LATIN_FONTS):
+			continue
 		if shape is False or len(sample) < 40:
 			continue  # the glyphs are plain Latin letters: English, whatever the words look like
+		alphaWords = [w for w in sample.split() if any(c.isalpha() for c in w)]
+		if len(alphaWords) < 15:
+			continue
 		# rebuild words from the sample with spaces (each word was one glyph run)
 		for enc in ("preeti", "krutidev"):
 			dec = detector.decide(sample, enc, context=False)
-			words = [t for t, flag in dec if t.strip()]
-			legacy = sum(1 for t, flag in dec if flag and t.strip())
-			if len(words) >= 20 and legacy >= 0.6 * len(words):
-				f.legacy = enc
-				break
+			words = [t for t, flag in dec if t.strip() and any(c.isalpha() for c in t)]
+			legacy = sum(1 for t, flag in dec if flag and t.strip() and any(c.isalpha() for c in t))
+			if len(words) >= 15 and legacy >= 0.6 * len(words):
+				converted = [legacyFonts.convert(w, enc) for w in words[:40]]
+				from . import neLexicon
+				if any(w and neLexicon.isWord(w) for w in converted if w):
+					f.legacy = enc
+					break

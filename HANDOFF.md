@@ -151,13 +151,33 @@ IMPORTANT NVDA facts learned the hard way:
 
 
 
-## 2026-10-05 evening fix (Claude): web pages and the on/off switch
-* Problem seen on setopati.com (diag.log): correct Unicode Nepali on normal web pages was "repaired"
-  by `devanagariRepair` (भनसुन -> निसान, गर्नुपर्छ -> गन्नुपर्छ, उपेन्द्रबहादुर split).
-  Fix: `_convertFieldList` runs the Unicode repair **only when `_isPdfWindow(info.obj)`**. On web pages
-  and in Word, Unicode Nepali is left exactly as it is and only marked as Nepali (language "ne") so
-  the voice and numbers are Nepali; Preeti in a Preeti/Kruti font on a web page is still converted.
-* Problem: NVDA+Ctrl+Shift+Space sometimes seemed not to switch off. Cause: the on/off value lived in
-  the *active NVDA configuration profile*, so an app-specific profile (e.g. for Chrome) kept its own
-  value. Fix: `isOn()` / `setOn()` — one in-memory switch, saved in the base profile, used by every hook.
-* Tests: `tests/test_web.py` (news-site text unchanged + tagged Nepali, toggle off/on).
+## 2026-10-05 later (Claude): speed, copy with clipspeak, engine regression
+* **Slowness**: (1) `pdfText.DocIndex._align` (difflib, added by Antigravity) ran ~400 SequenceMatcher
+  comparisons per spoken line (8 ms here, much more on the user's PC). Engine lookup is back to the
+  measured-better design: exact B match -> exact F (real text, when the viewer already shows it) ->
+  tolerant anchors (`_find`) -> word by word, with a 3000-entry per-line cache. Word accuracy vs
+  OCR truth: sitrep 87.5 %, flood 72.7 %, bulletin 82.1 %, EW4ALL 87.3 % (the `_align` version gave
+  sitrep 24 %, bulletin 81 %, EW4ALL 86.6 %). (2) Building the index: faster content tokenizer
+  (`pdfReader.contentOps`, drawing operators skipped in one regex step), work/rest time slicing
+  (`_Yield`: 10 ms work / 15 ms rest), first 6 pages indexed first for files > 400 KB. (3) The old
+  whole-document "letter pattern" learning (`_learnDocument`, slow, reads the whole document on the
+  main thread) no longer runs when the PDF file itself is being read. (4) `_isPdfWindow` answer is
+  memoised for 0.5 s per foreground window. `isWord=neLexicon.isWord` is now passed to the build.
+* `devanagariRepair.py` reverted to the earlier version (Antigravity's `_isRealWord` + `_splitWord`
+  change lowered repair accuracy on sitrep from 86.7 % to 67.2 %; web pages no longer use the repair
+  at all, so the original reason for that change is gone). `neLexicon._COMMON_NEPALI` kept.
+* **Copy with clipspeak**: clipspeak owns Ctrl+C, so Nepali Reader's Ctrl+C was dropped. Now
+  `_chainCopy` wraps the other add-on's copy script: after it runs, `_fixClipboard` puts the real text
+  on the clipboard when the clipboard holds exactly the selection. Browse-mode copy through NVDA
+  (clipspeak calls the tree interceptor's script) already goes through the patched
+  `TextInfo.copyToClipboard`. Long selections / select all are looked up line by line.
+* diag.log now also records copies (`copy:` / `copy after app:`), 150 readings per session.
+* **Table abbreviations dot -> ण् fix**: On `२०८२-०८३_परधकरणबट_गरएक_तथ_हद_गरक_पहर_अधययनक_सथनहर.pdf`,
+  table abbreviations `टोखा न . पा .`, `गा . पा .`, `सि . नं .` were read as `टोखा न ण् पाण्`.
+  Cause: `ArialRoundedMTBold` drew the dots and project acronyms (`NDRRMA`, `LI-BIRD`); `_detectLegacyFonts`
+  classified it as `krutidev` because uppercase acronyms scored in Kruti Dev and 520 punctuation dots
+  counted as legacy words. In Kruti Dev, `.` is `ण्`.
+  Fix: `_detectLegacyFonts` ignores standard Latin fonts (`Arial`, `Calibri`, `Times`, `NirmalaUI`, etc.)
+  unless glyph contours explicitly draw Devanagari; requires candidate words to have letters (`isalpha()`);
+  and verifies that converted words exist in `neLexicon`. Bumped `INDEX_VERSION` to 10 and cleared stale `.idx` caches.
+

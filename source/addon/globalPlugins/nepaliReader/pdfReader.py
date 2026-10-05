@@ -668,40 +668,99 @@ class Document:
 
 # ---------------------------------------------------------------- content streams
 
+_FAST = re.compile(
+	rb"[\x00\t\n\x0c\r ]*(?:"
+	# drawing operators with their numbers (most of a page): skipped in one step
+	rb"(?P<gfx>(?:[+-]?(?:\d+\.?\d*|\.\d+)[\x00\t\n\x0c\r ]+)*"
+	rb"(?:re|m|l|c|v|y|h|f\*?|F|B\*?|b\*?|S|s|n|W\*?|w|J|j|M|i|g|G|rg|RG|k|K)(?![^\x00\t\n\x0c\r ()<>\[\]{}/%]))"
+	rb"|(?P<n>[+-]?(?:\d+\.?\d*|\.\d+))(?![^\x00\t\n\x0c\r ()<>\[\]{}/%])"
+	rb"|(?P<k>[^\x00\t\n\x0c\r ()<>\[\]{}/%]+)"
+	rb"|(?P<nm>/[^\x00\t\n\x0c\r ()<>\[\]{}/%]*)"
+	rb"|(?P<s>\((?:[^()\\]|\\.|\((?:[^()\\]|\\.|\((?:[^()\\]|\\.)*\))*\))*\))"
+	rb"|(?P<h><(?!<)[0-9A-Fa-f\x00\t\n\x0c\r ]*>)"
+	rb"|(?P<o>\[|<<)"
+	rb"|(?P<c>\]|>>)"
+	rb"|(?P<cm>%[^\r\n]*)"
+	rb"|(?P<x>.))",
+	re.S,
+)
+_EI = re.compile(rb"[\x00\t\n\x0c\r ]EI(?=[\x00\t\n\x0c\r ]|$)")
+
+
 def contentOps(data):
-	"""Yield (operator, operands) from a content stream. Inline images are skipped."""
-	ps = _Parser(data, 0)
-	operands = []
+	"""Yield (operator, operands) from a content stream. Inline images are skipped.
+	Fast path: one regular expression scan; only literal strings with escapes or deeply nested
+	parentheses are parsed by hand."""
+	pos = 0
 	n = len(data)
-	while True:
-		m = _TOKEN.match(data, ps.pos)
-		while m and m.lastgroup == "ws":
-			ps.pos = m.end()
-			m = _TOKEN.match(data, ps.pos)
-		if not m:
-			return
-		kind = m.lastgroup
-		tok = m.group()
-		ps.pos = m.end()
-		if kind == "kw":
-			if tok == b"BI":
-				# inline image: skip to EI
-				e = re.compile(rb"[\x00\t\n\x0c\r ]EI(?=[\x00\t\n\x0c\r ]|$)").search(data, ps.pos)
-				ps.pos = e.end() if e else n
+	operands = []
+	stack = []  # open arrays / dictionaries: (kind, list, previous operands)
+	while pos < n:
+		restart = None
+		for m in _FAST.finditer(data, pos):
+			g = m.lastgroup
+			if g == "gfx":
+				if not stack:
+					operands = []
+				continue
+			if g == "n":
+				t = m.group(g)
+				v = float(t) if b"." in t else int(t)
+				operands.append(v)
+			elif g == "k":
+				t = m.group(g)
+				if stack:
+					# keyword inside an array or dictionary: true / false / null
+					operands.append(True if t == b"true" else (False if t == b"false" else None))
+					continue
+				if t == b"BI":
+					e = _EI.search(data, m.end())
+					restart = e.end() if e else n
+					operands = []
+					break
+				if t == b"true" or t == b"false":
+					operands.append(t == b"true")
+					continue
+				if t == b"null":
+					operands.append(None)
+					continue
+				yield t.decode("latin-1"), operands
 				operands = []
-				continue
-			if tok in (b"true", b"false", b"null"):
-				operands.append(tok == b"true" if tok != b"null" else None)
-				continue
-			yield tok.decode("latin-1"), operands
-			operands = []
-			continue
-		if kind == "bad" or kind in ("aclose", "dclose"):
-			continue
-		try:
-			operands.append(ps._value(kind, tok, True))
-		except Exception:
-			operands = []
-		if ps.pos >= n:
-			if operands:
-				return
+			elif g == "nm":
+				operands.append(_name(m.group(g)[1:]))
+			elif g == "s":
+				t = m.group(g)
+				inner = t[1:-1]
+				if b"\\" in inner or b"(" in inner:
+					inner = _literal(t, 1)[0]
+				operands.append(inner)
+			elif g == "h":
+				operands.append(_hexstr(m.group(g)))
+			elif g == "o":
+				stack.append((m.group(g), operands))
+				operands = []
+			elif g == "c":
+				if stack:
+					kind, prev = stack.pop()
+					if kind == b"<<":
+						d = {}
+						it = iter(operands)
+						for k in it:
+							if isinstance(k, Name):
+								d[k] = next(it, None)
+						val = d
+					else:
+						val = operands
+					prev.append(val)
+					operands = prev
+			elif g == "x":
+				t = m.group(g)
+				if t == b"(":
+					# a string the expression could not take (deep nesting): parse by hand
+					s, end = _literal(data, m.end())
+					operands.append(s)
+					restart = end
+					break
+		else:
+			return
+		pos = restart if restart is not None else n
