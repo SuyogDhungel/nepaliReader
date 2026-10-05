@@ -181,3 +181,18 @@ IMPORTANT NVDA facts learned the hard way:
   unless glyph contours explicitly draw Devanagari; requires candidate words to have letters (`isalpha()`);
   and verifies that converted words exist in `neLexicon`. Bumped `INDEX_VERSION` to 10 and cleared stale `.idx` caches.
 
+## 2026-10-05 (Glued Accessibility Nodes, Preeti Digit Typos & Fake-Bold Cleanups)
+* **Glued Accessibility Boundary Splitting (`cleanGluedTokens`)**:
+  - In Chromium, Brave, and Edge, adjacent inline accessibility nodes (such as image descriptions `alt="Description: Gvt"`, `graphic`, landmarks, and page numbers `(1)`) get concatenated directly to document text without spaces (e.g. `l;+xb/af/Description: Gvt(1)`).
+  - This prevented both `DocIndex` lookup (exact token match failed) and `detector.decide` (the composite token scored as English due to "Description").
+  - Added `cleanGluedTokens` to cleanly split accessibility keywords (`Description:`, `graphic`, `landmark`, `heading`, `level`, etc.), bracketed/parenthesized numbers, and Unicode bullets/arrows (`•`, `§`, etc.).
+  - In `DocIndex.lookup`, if `cleanGluedTokens` separates tokens, lookup routes directly to `_tokens(clean)`, converting legacy words (`l;+xb/af/` -> `सिंहदरबार`, `(1)` -> `(१)`) while preserving English metadata (`Description: Gvt`).
+  - In `DocIndex._tokens`, added prefix and suffix sub-token matching against `self._byKey` for any glued composite words.
+  - In `detector.py`, added accessibility terms (`description`, `gvt`, `gov`, `govt`, `landmark`) to `COMMON_ENGLISH` and preprocessed input in `decide()`.
+* **Devanagari OCR & Preeti Digit Typo Repair (`devanagariRepair.cleanShuffled`)**:
+  - Restored visual glyph confusions: `०ा` (zero + aa) -> `ण` (`प्रमा०ाीकर०ा` -> `प्रमाणीकरण`), `लैि·क` / `ि·` -> `लैङ्गिक` / `ङ्ग`.
+  - Repaired keyboard-shifted digit typos from corrupt/unshifted layouts: `द्द)टघ।ड।द्दद्द` -> `२०६३।८।२२`, `द्द)ठद्द` -> `२०७२`, `द्द)ठद्द।ट।ज्ञद्ध` -> `२०७२।०६।१४`, `द्द)ठद्द।ज्ञज्ञ।ज्ञघ` -> `२०७२।११।१३`, list numbers `ज्ञ.` -> `१.`, `द्द.` -> `२.`.
+  - Fixed fake-bold single-letter echoes before words (`प पयोग` -> `पयोग`, resolving `अख्तियार दु अख्तियार दु प प प पयोग` -> `अख्तियार दुरुपयोग`).
+* **Cache Invalidation**: Bumped `INDEX_VERSION = 13` in `pdfText.py`.
+
+

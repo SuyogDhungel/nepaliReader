@@ -150,6 +150,25 @@ def cleanShuffled(text):
 	text = re.sub(r'ऋ([\u0900-\u097f]+?)म्' + _BOUNDARY, r'“\1”', text)
 	# Preeti ´ (झ) recognized as ः (visarga) after म्: म्ः -> म्झ (e.g. सम्ःनु -> सम्झनु)
 	text = re.sub(r'म्ः', 'म्झ', text)
+	# Visual glyph confusions: ०ा (digit zero + aa matra) visually represents ण (e.g. प्रमा०ाीकर०ा -> प्रमाणीकरण)
+	text = re.sub(r'०ा', 'ण', text)
+	# ि· (i matra + middle dot) represents ङ्ग (e.g. लैि·क -> लैङ्गिक)
+	text = re.sub(r'लैि·क', 'लैङ्गिक', text)
+	text = re.sub(r'ि\s*·', 'ङ्ग', text)
+
+	# Keyboard-shifted digit typo confusions (dates like द्द)टघ।ड।द्दद्द -> २०६३।८।२२, द्द)ठद्द -> २०७२, list numbers ज्ञ. -> १., द्द. -> २.)
+	_preeti_keys = [('द्द', '२'), ('द्ध', '४'), ('ज्ञ', '१'), ('छ', '५'), ('ट', '६'), ('ठ', '७'), ('ड', '८'), ('ढ', '९'), ('घ', '३')]
+	text = re.sub(r'(^|\s)(ज्ञ|द्द|द्ध|छ|ट|ठ|ड|ढ|घ)\.', lambda m: m.group(1) + dict(_preeti_keys)[m.group(2)] + '.', text)
+	def _rep_preeti_num(m):
+		s = m.group(0).replace(')', '०')
+		for k, v in _preeti_keys:
+			s = s.replace(k, v)
+		return s
+	text = re.sub(r'द्द\)[द्दद्धज्ञछटठडढघ\)\d।\.\-]+', _rep_preeti_num, text)
+
+	# Fake-bold leading single-letter echoes before word: 'प पयोग' -> 'पयोग'
+	text = re.sub(r'\b([\u0904-\u0939])\s+(\1[\u0900-\u097f]+)\b', r'\2', text)
+
 	# 2. Restore dropped characters (e.g. unmapped Preeti ¿ -> रु / र) using the dictionary
 	if neLexicon.isLoaded():
 		def check_dropped_gap(m):

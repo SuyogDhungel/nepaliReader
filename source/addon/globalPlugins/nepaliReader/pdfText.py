@@ -21,8 +21,10 @@ from . import pdfReader
 from . import sfnt
 try:
 	from . import devanagariRepair
+	from .detector import cleanGluedTokens
 except ImportError:
 	import devanagariRepair
+	from detector import cleanGluedTokens
 
 VIRAMA = "्"
 I_SIGN = "ि"
@@ -30,7 +32,7 @@ NUKTA = "़"
 REPH = "र्"
 DEP_SIGNS = set("ऺऻािीुूृॄॅॆेैॉॊोौॎॏॕॖॗॢॣऀँंः़")
 INDEPENDENT = set(chr(c) for c in range(0x0904, 0x0915)) | set("ॠॡॲॳॴॵॶॷ")
-INDEX_VERSION = 12
+INDEX_VERSION = 13
 INFER = True
 
 
@@ -905,13 +907,17 @@ class DocIndex:
 		if hit is not None:
 			self._hint = hit[1]
 			return hit[0]
-		res = self._lookup(text, key)
-		if res is None and isDeva(text):
-			clean = devanagariRepair.cleanShuffled(text)
-			if clean != text:
-				ckey = keyOf(clean)
-				if ckey:
-					res = self._lookup(clean, ckey)
+		clean = cleanGluedTokens(text)
+		if clean != text:
+			res = self._tokens(clean)
+		else:
+			res = self._lookup(text, key)
+			if res is None and isDeva(text):
+				clean_shuf = devanagariRepair.cleanShuffled(text)
+				if clean_shuf != text:
+					ckey = keyOf(clean_shuf)
+					if ckey:
+						res = self._lookup(clean_shuf, ckey)
 		if len(cache) > 3000:
 			cache.clear()
 		cache[text] = (res, self._hint)
@@ -1025,7 +1031,30 @@ class DocIndex:
 				if fk:
 					self._byKey.setdefault(fk, fixed)
 					self._byBag.setdefault("".join(sorted(fk)), fixed)
-		toks = [t for t in re.split(r"\s+", text) if t]
+		text = cleanGluedTokens(text)
+		rawToks = [t for t in re.split(r"\s+", text) if t]
+		toks = []
+		for t in rawToks:
+			k = keyOf(t)
+			if not k or k in self._byKey or self._byBag.get("".join(sorted(k))) is not None:
+				toks.append(t)
+				continue
+			split = False
+			for j in range(len(t) - 1, 3, -1):
+				if keyOf(t[:j]) in self._byKey:
+					toks.append(t[:j])
+					toks.append(t[j:])
+					split = True
+					break
+			if not split:
+				for j in range(1, len(t) - 3):
+					if keyOf(t[j:]) in self._byKey:
+						toks.append(t[:j])
+						toks.append(t[j:])
+						split = True
+						break
+			if not split:
+				toks.append(t)
 		out = []
 		found = 0
 		i = 0

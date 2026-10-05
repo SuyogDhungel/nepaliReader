@@ -1355,7 +1355,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
 	def _decideUnknown(self, info, unknown, convert, c, allowVisual=True, isUnicodeDoc=False):
 		"""Runs with no font information (most PDFs): detector, window context and the screen check."""
-		joined = "".join(t for _, t in unknown)
+		joined = detector.cleanGluedTokens("".join(t for _, t in unknown))
 		# window memory ("this document is Preeti") only for text without font information;
 		# text in an ordinary font (Calibri...) is judged on its own words
 		ctxEnc = self._inContext() if allowVisual else None

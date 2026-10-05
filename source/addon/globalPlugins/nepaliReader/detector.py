@@ -20,15 +20,43 @@ nor not now of off on once only or other our ours ourselves out over own same sh
 that the their theirs them themselves then there these they this those through to too under until up very
 was we were what when where which while who whom why will with would you your yours yourself yourselves
 yes ok okay cancel close open save file edit view help tools window home back next previous new delete
-insert format page pages level heading link visited button check box checked not unchecked radio menu item
+insert format page pages level heading headings link visited button check box checked not unchecked radio menu item
 bar tab list table row column cell graphic image document dialog edit text clipboard selected unselected
 blank out of focus expanded collapsed pressed unavailable read only required invalid entry has popup
+description descriptions gvt gov govt landmark landmarks
 search address settings options start end top bottom left right up down enter escape space shift control
 alt windows desktop folder name date time size type modified one two three four five six seven eight nine
 ten first last please thank thanks hello hi welcome sign log login logout account password email user
 mail inbox sent draft reply forward send message chat call video share like comment follow more less
 show hide play pause stop volume mute copy cut paste undo redo find replace print zoom full screen
 """.split())
+
+_A11Y_GLUED_AFTER = re.compile(
+	r'([^\s])(Description:|graphic\b|image\b|landmark\b|heading\b|level\s*\d+\b|button\b|link\b|Page\s*\d+\b|table\b|row\s*\d+\b|column\s*\d+\b)',
+	re.I
+)
+_A11Y_GLUED_BEFORE = re.compile(
+	r'\b(Description:|graphic|image|landmark|heading|level\s*\d+|button|link|Page\s*\d+|table|row\s*\d+|column\s*\d+)([A-Za-z\u0900-\u097f])',
+	re.I
+)
+_PAREN_NUM_AFTER = re.compile(r'([^\s\(\[\{])(\([0-9]+\)|\[[0-9]+\])')
+_PAREN_NUM_BEFORE = re.compile(r'(\([0-9]+\)|\[[0-9]+\])([^\s\)\]\}])')
+_BULLET_SYMS = '•‣⁃▪▫○●★☆✓✔►◄→←↑↓↔⇒⇐◆◇◈◉◎§¶※†‡©®™°±×÷≠≤≥∞≈‰➢➤✦✧❖▲▼◀▶'
+_BULLET_GLUED_BEFORE = re.compile(r'([' + _BULLET_SYMS + r'])([^\s' + _BULLET_SYMS + r'])')
+_BULLET_GLUED_AFTER = re.compile(r'([^\s' + _BULLET_SYMS + r'])([' + _BULLET_SYMS + r'])')
+
+
+def cleanGluedTokens(s):
+	if not s:
+		return s
+	s = _A11Y_GLUED_AFTER.sub(r'\1 \2', s)
+	s = _A11Y_GLUED_BEFORE.sub(r'\1 \2', s)
+	s = _PAREN_NUM_AFTER.sub(r'\1 \2', s)
+	s = _PAREN_NUM_BEFORE.sub(r'\1 \2', s)
+	s = _BULLET_GLUED_BEFORE.sub(r'\1 \2', s)
+	s = _BULLET_GLUED_AFTER.sub(r'\1 \2', s)
+	return s
+
 
 # Patterns typed in Preeti that essentially never occur inside English words
 _PREETI_SIGNATURE = re.compile(r"[a-zA-Z;/:][\]\}][a-zA-Z;:/'\"]|[a-zA-Z][\]\}]$|f[\]\}]|[a-zA-Z]\{|[a-zA-Z]\\[a-zA-Z]|[a-zA-Z]\|[a-zA-Z]|^l[a-zA-Z:;]|[a-zA-Z]'[a-zA-Z/]{2}|[a-zA-Z]\"[a-zA-Z/]")
@@ -132,6 +160,7 @@ def decide(text, encoding="preeti", context=False):
 	* `context=True` means the surrounding document was recently confirmed legacy, so short
 	  fragments (single words, characters) lean towards legacy unless they look English.
 	"""
+	text = cleanGluedTokens(text)
 	if not context and _looksLikeCode(text):
 		return [(t, False) for t in re.split(r"(\s+)", text)]
 	tokens = re.split(r"(\s+)", text)
@@ -153,7 +182,7 @@ def decide(text, encoding="preeti", context=False):
 		elif sc <= ENGLISH_THRESHOLD:
 			english += 1
 	total = legacy + english
-	_BULLETS_ARROWS = frozenset("•‣⁃▪▫○●★☆✓✔►◄→←↑↓↔⇒⇐")
+	_BULLETS_ARROWS = frozenset(_BULLET_SYMS)
 	if total == 0:
 		hasScorable = any(sc is not None and sc > 0 for _, sc in scored)
 		if context and hasScorable:
