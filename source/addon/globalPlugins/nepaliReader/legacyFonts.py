@@ -248,13 +248,18 @@ def preetiFamilyToUnicode(text, font="preeti"):
 							return "M"
 						return "\xb4"
 					word = re.sub(r"M", _rep_m, word)
-		# Parenthesized Devanagari or digits: preserve parentheses
+		# Standalone digits (e.g. page numbers, list numbers, percentages):
+		# in Preeti family layouts, unshifted digit keys give consonants/conjuncts (1=ज्ञ, 2=द्द);
+		# standalone digit strings in documents are never words, always numbers.
+		m_num = re.match(r"^([.,;:!?\(\)\[\]\{\}\-\–—/\\%]*)([0-9]+)([.,;:!?\(\)\[\]\{\}\-\–—/\\%]*)$", word)
+		if m_num:
+			lead, mid, trail = m_num.group(1), m_num.group(2), m_num.group(3)
+			result.append(lead + mid.translate(_DIGIT_MAP) + trail)
+			continue
+		# Parenthesized Devanagari: preserve parentheses
 		m = re.match(r"^([\(\[\{])([^\(\)\[\]\{\}]+)([\)\]\}])$", word)
 		if m:
 			lead, mid, trail = m.group(1), m.group(2), m.group(3)
-			if mid.isdigit():
-				result.append(lead + mid.translate(_DIGIT_MAP) + trail)
-				continue
 			if any("\u0900" <= c <= "\u097f" for c in mid):
 				result.append(lead + preetiFamilyToUnicode(mid, font) + trail)
 				continue

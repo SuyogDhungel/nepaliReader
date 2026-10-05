@@ -283,8 +283,9 @@ class PdfFont:
 					v = r(v)
 					if isinstance(v, (int, float)):
 						self.widths[fc + k] = float(v)
-			self.dw = 0.0
 			desc = r(fdict.get("FontDescriptor"))
+			mw = r(desc.get("MissingWidth")) if isinstance(desc, dict) else None
+			self.dw = float(mw) if isinstance(mw, (int, float)) and mw > 0 else (500.0 if not self.widths else 0.0)
 			enc = r(fdict.get("Encoding"))
 			baseEnc = enc if isinstance(enc, str) else (r(enc.get("BaseEncoding")) if isinstance(enc, dict) else None)
 			codec = "mac_roman" if baseEnc == "MacRomanEncoding" else "cp1252"
@@ -1143,10 +1144,19 @@ def _wordTexts(w):
 		# a font the add-on doesn't know: the PDF's own text for each glyph, put in Unicode order,
 		# is used only if it makes a dictionary word
 		if _wordCheck is None:
+			cand = "".join(t for t, g in reorder(toks))
+			if isDeva(cand) or isDeva(shownText):
+				rep = devanagariRepair.repair(cand or shownText)
+				if rep and (rep != shownText or devanagariRepair.hasDevanagari(rep)):
+					return shownText, rep, None, None
 			return shownText, None, None, None
 		cand = "".join(t for t, g in reorder(toks))
 		core = cand.strip(_PUNCT)
 		if not core or not isDeva(core) or not all(_wordCheck(p) for p in re.split(r"[-/]", core) if p):
+			if isDeva(shownText):
+				rep = devanagariRepair.repair(shownText)
+				if rep and rep != shownText:
+					return shownText, rep, None, None
 			return shownText, None, None, None
 		guessed = False
 	toks = reorder(toks)
@@ -1156,7 +1166,15 @@ def _wordTexts(w):
 		checker = next((getattr(f, "isWord", None) for f, _i in segs if getattr(f, "isWord", None)), None)
 		core = fixed.strip(_PUNCT)
 		if checker is None or len(core) < 3 or not checker(core):
+			if isDeva(shownText):
+				rep = devanagariRepair.repair(shownText)
+				if rep and rep != shownText:
+					return shownText, rep, None, None
 			return shownText, None, None, None
+	if isDeva(fixed) or isDeva(shownText):
+		rep = devanagariRepair.repair(fixed or shownText)
+		if rep and (rep != fixed or rep != shownText):
+			fixed = rep
 	# akshar of every glyph, then of every shown character
 	aks = aksharas(fixed)
 	charAk = []
