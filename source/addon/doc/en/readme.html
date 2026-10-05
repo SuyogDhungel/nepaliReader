@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>Nepali Reader</title></head>
+<body>
+<h1>Nepali Reader for NVDA</h1>
+<p>Reads Preeti, Kantipur, Sagarmatha, Fontasy Himali and PCS Nepali text, and Hindi Kruti Dev text, as Devanagari with a Nepali or Hindi voice. Unicode Nepali and English are read as usual. Everything works offline.</p>
+<h2>Turning it on and off</h2>
+<p>Nothing needs to be set up: install the add-on and read. It is on from the start.</p>
+<ul>
+<li><b>NVDA+Ctrl+Shift+Space</b>: Nepali mode on or off. NVDA says "Nepali mode on" or "Nepali mode off".</li>
+<li>Or NVDA menu (NVDA+N), Tools, Nepali Reader, "Nepali mode" (check box). The same submenu has "Convert selected text or clipboard" and "Settings".</li>
+<li>All options: NVDA menu, Preferences, Settings, Nepali Reader.</li>
+</ul>
+<h2>Keys</h2>
+<ul>
+<li><b>NVDA+Ctrl+Shift+Space</b>: Nepali mode on / off.</li>
+<li><b>Ctrl+C</b> works as usual. In Nepali mode the copied text is the correct Unicode Nepali (Preeti converted, PDF text rebuilt), in browse mode, with NVDA's review copy (NVDA+F9, NVDA+F10), and after selecting Preeti text in Word.</li>
+<li><b>NVDA+Alt+P</b>: legacy font reading: automatic (default), always convert, off.</li>
+<li><b>NVDA+Alt+Shift+P</b>: default legacy font (Preeti, Kantipur, Sagarmatha, Himali, PCS Nepali, Kruti Dev).</li>
+<li><b>NVDA+Alt+U</b>: convert the selected text (or the clipboard) to Unicode, copy it, and read it.</li>
+<li><b>NVDA+Alt+O</b>: offline OCR of the current object (for example a PDF page) in Nepali, Hindi and English. Use arrow keys to read the result, Escape to close.</li>
+<li>None of these keys clash with NVDA 2026.2. If NVDA, another add-on or you have already given one of these keys to something else, Nepali Reader leaves that key alone; assign it a free key under NVDA menu, Preferences, Input gestures, Nepali Reader.</li>
+</ul>
+<p>All keys can be changed in NVDA menu, Preferences, Input gestures, Nepali Reader.</p>
+<h2>Where it works</h2>
+<p>Only document text is changed: text read with the arrow keys, say all, and browse mode (Word, PDF readers, Notepad, web pages and similar). Menus, dialogs, buttons, the NVDA menu and NVDA's own messages are never changed.</p>
+<h2>How it decides</h2>
+<ol>
+<li>Text in a Preeti, Kantipur, Sagarmatha, Himali, PCS Nepali or Kruti Dev font is always converted.</li>
+<li>Text in an ordinary font (Calibri, Arial, Times...) is checked word by word, because Preeti text is often left in the wrong font. English stays English.</li>
+<li>Text in a Unicode Devanagari font (Mangal, Kalimati, Nirmala...) is read as it is.</li>
+<li>In PDF viewers (and PDFs in Chrome or Edge), where fonts are not reported, the screen check is used for every line written in English letters that are not English words: if the line looks Nepali on screen it is Preeti and is converted, if it looks English it stays English. Unicode Nepali is never converted again.</li>
+<li>If not, the add-on looks at the screen at the cursor line. Preeti text is stored as English letters but is drawn as Devanagari, with the head line (shirorekha) on top. If the screen shows Devanagari and the text is English letters, it is converted. This takes a few milliseconds and is skipped automatically where it is slow.</li>
+<li>Otherwise a built-in detector (letter statistics plus a 234,000-word English dictionary) recognises legacy-font lines. Programming code, web addresses and e-mail addresses are not converted.</li>
+<li>Once a line in a window is confirmed as Preeti, short pieces in that same window (single words, letters while arrowing) are also read as Preeti.</li>
+<li>On web pages and in chat apps (Chrome, Edge, Firefox, WhatsApp, Messenger and similar), text is converted only when the page uses a Preeti, Kruti Dev or similar font. PDFs opened in a browser are checked like other documents.</li>
+<li>Single letters and very short words cannot always be told apart from English on their own. Once one line in a window is confirmed as Preeti, short pieces in that window are read as Preeti too. Use "always convert" (NVDA+Alt+P) for a document that is still missed.</li>
+</ol>
+<h2>PDFs</h2>
+<p><b>Exact text from the PDF file.</b> When a PDF is open (Adobe Reader, Foxit, SumatraPDF, or a PDF in Chrome, Edge or Firefox), the add-on finds the PDF file and reads it itself, in the background, the first time (a fraction of a second for small files, a few seconds for very long ones; after that it is remembered). A PDF stores, for every letter, the glyph (letter shape) that is drawn on the page. The add-on knows which letters each glyph of the common Nepali fonts shows (Kalimati, Mangal, Kokila, Nirmala, Noto, Mukta, Rajdhani, Hind, Preeti and more), and also reads the fonts installed on your computer. So it rebuilds the text exactly as it looks on the page, even when the PDF's own text is wrong, as in most PDFs saved from Microsoft Word. Then:</p>
+<ul>
+<li>Every line you read (arrow keys, say all) is spoken from the rebuilt text.</li>
+<li>Moving by character (left / right arrow) says the whole syllable: कि, र्मा, क्ष.</li>
+<li>Moving by word (Ctrl+left / right) says the real word.</li>
+<li>Selecting (Shift+arrows) and copying (Ctrl+C) give the real text.</li>
+<li>A PDF whose font has no Preeti name but whose letters are drawn as Devanagari (an "untagged" Preeti PDF) is recognised from the shapes of its letters and converted.</li>
+<li>If the PDF file cannot be found or read, the repairs below are used instead.</li>
+</ul>
+<p>Other repairs, used while the file is being read, for fonts the add-on does not know, and for PDFs it cannot open:</p>
+<ul>
+<li>Preeti or Kruti Dev PDFs: read normally; text is converted automatically.</li>
+<li>Unicode Devanagari PDFs whose text layer is broken (common with PDFs made in InDesign or compressed with iLovePDF): the text NVDA gets has doubled vowel signs (नााराायणीी), broken characters (वि�पद्), signs split off with spaces (कुु ल, रहेकाे ा) and similar faults. These are repaired as you read. Words split by a space are joined only when the joined form is a word in the Nepali dictionary. Once a document is found to be broken, the add-on remembers it while that window is open.</li>
+<li>PDFs made with Microsoft Word ("Save as PDF") store some letters wrongly: ि as त/ज/ट, ट as ि, reph as य, ु one letter too far right (घिना for घटना, जजल्ला for जिल्ला, पूणय for पूर्ण). These swaps are undone when the result is a dictionary word.</li>
+<li>PDFs from LibreOffice and from browsers ("print to PDF") repeat pieces of words or put spaces inside words. These are repaired the same way.</li>
+<li>When a document's text is damaged, the add-on reads the whole document once, in the background, and learns that document's own letter pattern: each PDF made with Word stores its own wrong letters, sometimes like a code (ि stored as ग, ष्ट्र or च; ग, ध and ख stored as ि; व stored as र्). A stored piece may have several meanings; each word is decoded to the meaning that is a dictionary word. When it has learned the pattern it says "learned this document's letter pattern". Words that are already real words are never changed.</li>
+<li>Place names of Nepal (districts, municipalities, rural municipalities) and common bulletin words are included, so they can be checked too.</li>
+<li>The add-on decides per document whether its text is damaged: a fault that never occurs in correct text, or a trial repair that turns many unknown words into real words. Correct documents are left alone.</li>
+<li>Names and new words that are not in the dictionary cannot always be repaired. If a document still reads badly after repair, the add-on says so once: press NVDA+Alt+O to read the page with OCR. OCR reads the page image, so it works with any PDF, including scanned ones.</li>
+</ul>
+<h2>OCR engine</h2>
+<p>The Nepali, Hindi and English OCR data is included. The Tesseract engine itself must be installed once: download the Windows installer from the Tesseract project (UB Mannheim build, <code>https://github.com/UB-Mannheim/tesseract/wiki</code>) and install it with default options. The add-on finds it automatically in Program Files; otherwise set its path in NVDA settings, Nepali Reader.</p>
+<h2>Voice</h2>
+<p>Converted text is marked as Nepali (or Hindi for Kruti Dev) so NVDA can switch voice. Use a synthesizer with a Nepali voice, for example eSpeak NG (built in) or the Hear2Read add-on, and keep "Automatic language switching" on in NVDA's voice settings.</p>
+<h2>Credits</h2>
+<p>Kruti Dev rules ported from kru2uni / krutidev-unicode (ISC). Preeti family tables cross-checked with npttf2utf. English word list: Webster's Second International (public domain). Nepali word list: Nepali Hunspell dictionary, Madan Puraskar Pustakalaya (LGPL 2.1). Detector statistics derived from wordfreq. OCR data: tesseract-ocr/tessdata_best and tessdata_fast (Apache 2.0).</p>
+</body></html>

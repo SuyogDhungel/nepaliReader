@@ -1,0 +1,25 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# NVDA and addon build packages (distributed via GitHub Releases)
+*.nvda-addon
+*.zip
+
+# Index caches & logs
+*.idx
+*.log
+*.log.*
+*.tmp
+
+# Test PDFs and scratch files
+moljpa_test.pdf
+scratch/
+
+# OS generated files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
