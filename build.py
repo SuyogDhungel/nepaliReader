@@ -15,9 +15,11 @@ MANIFEST_PATH = os.path.join(ADDON_DIR, "manifest.ini")
 
 
 def get_version():
-	config = configparser.ConfigParser()
-	config.read(MANIFEST_PATH, encoding="utf-8")
-	return config.get("DEFAULT", "version", fallback="1.0.0").strip()
+	with open(MANIFEST_PATH, "r", encoding="utf-8") as f:
+		for line in f:
+			if line.startswith("version"):
+				return line.split("=", 1)[1].strip().strip('"').strip("'")
+	return "1.0.0"
 
 
 def build_addon(version):

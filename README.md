@@ -126,10 +126,9 @@ Yes, **Nepali Reader also supports Hindi**:
 
 Distributed under the **GNU General Public License v2.0 (GPL-2.0)**. See [LICENSE](LICENSE) for details.
 
-## 👤 Author & Feedback
+## 🤝 Project & Support
 
-* **Author**: Suyog Dhungel
-* **Email**: [dhungelsuyog13@gmail.com](mailto:dhungelsuyog13@gmail.com)
+* **Project**: Nepali Reader for NVDA
 * **GitHub Repository**: [https://github.com/SuyogDhungel/nepaliReader](https://github.com/SuyogDhungel/nepaliReader)
-
-If you encounter any inaccessible Nepali document or have suggestions, please open an Issue on GitHub or send an email.
+* **Feedback & Issues**: Please report issues or suggest improvements by opening an [Issue](https://github.com/SuyogDhungel/nepaliReader/issues) on GitHub.
+* **Tags**: `nepali`, `nvda`, `nvda-addon`, `preeti-font`, `screen-reader`, `accessibility`, `devanagari`, `kantipur-font`, `kruti-dev`, `nepali-ocr`

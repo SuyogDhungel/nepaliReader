@@ -177,7 +177,11 @@ def _core(tok):
 
 
 def _known(word):
-	return neLexicon.isLoaded() and neLexicon.isWord(word)
+	if not neLexicon.isLoaded():
+		return False
+	if neLexicon.isWord(word):
+		return True
+	return bool(_splitWord(word))
 
 
 _fixCache = {}
@@ -509,7 +513,6 @@ def _structuralSwaps(w):
 		if a in _CONS_SET and b in _CONS_SET and (k == 0 or w[k - 1] != "\u094d"):
 			if a == b:
 				pairs.append((a + b, a + REPH_MARK, 0))
-			pairs.append((a + b, "\u093f" + b, 0))
 	return pairs
 
 

@@ -6,6 +6,7 @@ __pycache__/
 # NVDA and addon build packages (distributed via GitHub Releases)
 *.nvda-addon
 *.zip
+nepaliReader-source/
 
 # Index caches & logs
 *.idx

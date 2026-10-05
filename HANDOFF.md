@@ -150,3 +150,14 @@ IMPORTANT NVDA facts learned the hard way:
 
 
 
+
+## 2026-10-05 evening fix (Claude): web pages and the on/off switch
+* Problem seen on setopati.com (diag.log): correct Unicode Nepali on normal web pages was "repaired"
+  by `devanagariRepair` (भनसुन -> निसान, गर्नुपर्छ -> गन्नुपर्छ, उपेन्द्रबहादुर split).
+  Fix: `_convertFieldList` runs the Unicode repair **only when `_isPdfWindow(info.obj)`**. On web pages
+  and in Word, Unicode Nepali is left exactly as it is and only marked as Nepali (language "ne") so
+  the voice and numbers are Nepali; Preeti in a Preeti/Kruti font on a web page is still converted.
+* Problem: NVDA+Ctrl+Shift+Space sometimes seemed not to switch off. Cause: the on/off value lived in
+  the *active NVDA configuration profile*, so an app-specific profile (e.g. for Chrome) kept its own
+  value. Fix: `isOn()` / `setOn()` — one in-memory switch, saved in the base profile, used by every hook.
+* Tests: `tests/test_web.py` (news-site text unchanged + tagged Nepali, toggle off/on).

@@ -17,6 +17,9 @@ _SFX_LENGTHS = []
 _EXTRA = frozenset()  # Hindi words (wordfreq) so Hindi text is recognised too
 _NAMES = frozenset()  # Nepal place names and newer common words, also with the usual endings
 _NAME_ENDINGS = ("हरूको", "हरूमा", "हरूले", "हरू", "देखि", "सम्म", "बाट", "लाई", "भित्र", "को", "का", "की", "मा", "ले", "मै", "कै")
+_COMMON_NEPALI = frozenset({
+	"भनसुन", "चाकडी", "नियुक्ति", "उपेन्द्र", "उपेन्द्रबहादुर", "मेरिटोक्रेसी",
+})
 _loaded = False
 
 
@@ -61,10 +64,10 @@ def isWord(word):
 	"""True if `word` is a Nepali word form known to the dictionary."""
 	if not word:
 		return False
-	if word in _STEMS or word in _EXTRA or word in _NAMES:
+	if word in _STEMS or word in _EXTRA or word in _NAMES or word in _COMMON_NEPALI:
 		return True
 	for e in _NAME_ENDINGS:
-		if word.endswith(e) and word[: -len(e)] in _NAMES:
+		if word.endswith(e) and (word[: -len(e)] in _NAMES or word[: -len(e)] in _COMMON_NEPALI):
 			return True
 	n = len(word)
 	for L in _SFX_LENGTHS:

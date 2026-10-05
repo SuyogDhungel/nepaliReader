@@ -111,6 +111,35 @@ def conf():
 	return config.conf[CONF_SECTION]
 
 
+_ON = [None]  # Nepali mode on/off, the same in every NVDA configuration profile
+
+
+def isOn():
+	if _ON[0] is None:
+		try:
+			base = config.conf.profiles[0].get(CONF_SECTION, {})
+			v = base.get("enabled", True)
+			_ON[0] = v not in (False, "False", "false", "0", 0)
+		except Exception:
+			_ON[0] = bool(conf()["enabled"])
+	return _ON[0]
+
+
+def setOn(value):
+	_ON[0] = bool(value)
+	try:
+		conf()["enabled"] = bool(value)
+	except Exception:
+		pass
+	try:
+		prof = config.conf.profiles[0]
+		if CONF_SECTION not in prof:
+			prof[CONF_SECTION] = {}
+		prof[CONF_SECTION]["enabled"] = bool(value)
+	except Exception:
+		pass
+
+
 _menuSync = [lambda: None]  # set by the plugin so the settings panel can update the menu check mark
 
 
@@ -211,6 +240,8 @@ class _ConvertingTextInfo:
 
 	@property
 	def text(self):
+		if not isOn():
+			return self.__dict__["_nrInfo"].text
 		info = self.__dict__["_nrInfo"]
 		raw = info.text
 		if not raw or len(raw) > 5000:
@@ -218,9 +249,13 @@ class _ConvertingTextInfo:
 		return self.__dict__["_nrPlugin"]._plainText(info)
 
 	def getTextWithFields(self, formatConfig=None):
+		if not isOn():
+			return self.__dict__["_nrInfo"].getTextWithFields(formatConfig)
 		return self.__dict__["_nrPlugin"]._convertFields(self.__dict__["_nrInfo"], formatConfig)
 
 	def copy(self):
+		if not isOn():
+			return self.__dict__["_nrInfo"].copy()
 		return _ConvertingTextInfo(self.__dict__["_nrInfo"].copy(), self.__dict__["_nrPlugin"])
 
 	def setEndPoint(self, other, which):
@@ -248,6 +283,8 @@ class _PlainTextInfo:
 
 	@property
 	def text(self):
+		if not isOn():
+			return self.__dict__["_nrInfo"].text
 		info = self.__dict__["_nrInfo"]
 		raw = info.text
 		if not raw or len(raw) > 5000:
@@ -255,9 +292,13 @@ class _PlainTextInfo:
 		return self.__dict__["_nrPlugin"]._plainText(info)
 
 	def getTextWithFields(self, formatConfig=None):
+		if not isOn():
+			return self.__dict__["_nrInfo"].getTextWithFields(formatConfig)
 		return self.__dict__["_nrPlugin"]._convertFields(self.__dict__["_nrInfo"], formatConfig)
 
 	def copy(self):
+		if not isOn():
+			return self.__dict__["_nrInfo"].copy()
 		return _PlainTextInfo(self.__dict__["_nrInfo"].copy(), self.__dict__["_nrPlugin"])
 
 	def setEndPoint(self, other, which):
@@ -417,7 +458,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		menu = wx.Menu()
 		# Translators: menu item that turns the add-on on or off
 		self._onOffItem = menu.AppendCheckItem(wx.ID_ANY, _("&Nepali mode (NVDA+Ctrl+Shift+Space)"))
-		self._onOffItem.Check(conf()["enabled"])
+		self._onOffItem.Check(isOn())
 		gui.mainFrame.sysTrayIcon.Bind(wx.EVT_MENU, self._onMenuToggle, self._onOffItem)
 		# Translators: menu item
 		item = menu.Append(wx.ID_ANY, _("Convert selected text or clipboard (NVDA+Alt+U)"))
@@ -440,19 +481,24 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
 	def _syncMenu(self):
 		try:
-			self._onOffItem.Check(conf()["enabled"])
+			self._onOffItem.Check(isOn())
 		except Exception:
 			pass
 
 	def _toggleEnabled(self):
 		c = conf()
-		c["enabled"] = not c["enabled"]
-		if c["enabled"] and c["mode"] == "off":
+		newVal = not isOn()
+		setOn(newVal)
+		if newVal and c["mode"] == "off":
 			c["mode"] = c["lastOnMode"]
 		self._cache.clear()
 		self._clearContext()
+		if not newVal:
+			self._docs.clear()
+			self._pdfs.clear()
+			devanagariRepair.setDocumentSwaps([], None)
 		self._syncMenu()
-		return c["enabled"]
+		return newVal
 
 	def _onMenuToggle(self, evt):
 		on = self._toggleEnabled()
@@ -487,8 +533,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
 		def getTextInfoSpeech(info, *args, **kwargs):
 			c = conf()
-			if c["enabled"] and (c["mode"] != "off" or c["repairUnicode"]):
-				info = _ConvertingTextInfo(info, plugin)
+			if not isOn():
+				return orig(_unwrap(info), *args, **kwargs)
+			if c["mode"] != "off" or c["repairUnicode"] or c["switchLanguage"]:
+				info = _ConvertingTextInfo(_unwrap(info), plugin)
 			return orig(info, *args, **kwargs)
 
 		self._origGetTextInfoSpeech = orig
@@ -532,13 +580,13 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
 		def copyToClipboard(info, notify=False):
 			try:
-				if conf()["enabled"]:
+				if isOn():
 					text = plugin._plainText(info)
 					if text:
 						return api.copyToClip(textInfos.convertToCrlf(text), notify)
 			except Exception:
 				log.debugWarning("Nepali Reader: copy failed", exc_info=True)
-			return origCopy(info, notify)
+			return origCopy(_unwrap(info), notify)
 
 		textInfos.TextInfo.copyToClipboard = copyToClipboard
 		self._patched2.append((textInfos.TextInfo, "copyToClipboard", origCopy, copyToClipboard))
@@ -548,12 +596,15 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			origSel = speechModule.speakSelectionChange
 
 			def speakSelectionChange(oldInfo, newInfo, *args, **kwargs):
-				if conf()["enabled"]:
+				if isOn():
 					try:
-						oldInfo = _PlainTextInfo(oldInfo, plugin)
-						newInfo = _PlainTextInfo(newInfo, plugin)
+						oldInfo = _PlainTextInfo(_unwrap(oldInfo), plugin)
+						newInfo = _PlainTextInfo(_unwrap(newInfo), plugin)
 					except Exception:
 						pass
+				else:
+					oldInfo = _unwrap(oldInfo)
+					newInfo = _unwrap(newInfo)
 				return origSel(oldInfo, newInfo, *args, **kwargs)
 
 			speechModule.speakSelectionChange = speakSelectionChange
@@ -567,6 +618,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 	def _plainText(self, info):
 		"""The real text of a TextInfo (Preeti converted, PDF text rebuilt), as plain text."""
 		info = _unwrap(info)
+		if not isOn():
+			return info.text
 		try:
 			fields = self._convertFields(info, None)
 		except Exception:
@@ -826,20 +879,14 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		return False
 
 	def _isWebNonPdf(self, obj):
-		"""True in a browser or chat app showing a normal page (not a PDF). Cached for 0.2 s."""
-		now = time.monotonic()
-		if now - self._webCheckTime < CHECK_INTERVAL:
-			return self._webResult
-		self._webCheckTime = now
-		result = False
+		"""True in a browser or chat app showing a normal page (not a PDF)."""
 		try:
 			app = _appName(obj)
 			if app in WEB_APPS:
-				result = not self._isPdfWindow(obj)
+				return not self._isPdfWindow(obj)
 		except Exception:
 			pass
-		self._webResult = result
-		return result
+		return False
 
 	# ------------------------------------------------------------------
 	# screen check
@@ -905,7 +952,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
 	def _convertFields(self, info, formatConfig):
 		c = conf()
-		if not c["enabled"]:
+		if not isOn():
 			return info.getTextWithFields(formatConfig)
 		if diag.wanted():
 			fields = self._convertFieldsInner(info, formatConfig, c)
@@ -974,6 +1021,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
 	def _learnDocument(self, obj, st):
 		"""Read the damaged document's whole text once and learn its letter swaps in the background."""
+		if not self._isPdfWindow(obj):
+			return
 		try:
 			ti = getattr(obj, "treeInterceptor", None)
 			src = ti if ti is not None else obj
@@ -1054,7 +1103,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				runs = [r for r in runs if r[0] not in rebuilt]
 				if rebuilt and not runs:
 					return self._withLanguage(out, rebuilt, c)
-		if repair:
+		if repair and self._isPdfWindow(info.obj) and not self._isWebNonPdf(info.obj):
+			# only PDF text layers are damaged; Unicode Nepali on web pages and in documents is
+			# correct and must never be "repaired" (it turned भनसुन into निसान on news sites)
 			st = self._docState()
 			devanagariRepair.setDocumentSwaps(st.swaps, (id(st), len(st.swaps)))
 			for k, (i, text, known, enc) in enumerate(runs):
@@ -1130,7 +1181,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				continue
 			if switchLang and isinstance(item, str) and (rebuilt.get(i) or devanagariRepair.hasDevanagari(item)):
 				curLang = (lastFormat.get("language") or "").lower() if lastFormat else ""
-				if not curLang.startswith("ne"):
+				if not curLang.startswith(("ne", "hi")):
 					result.append(self._formatWithLanguage(lastFormat, "ne"))
 					result.append(item)
 					result.append(self._formatWithLanguage(lastFormat, None, restore=True))
@@ -1174,7 +1225,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				continue
 			if isinstance(item, str) and (rebuilt.get(i) or devanagariRepair.hasDevanagari(item)):
 				curLang = (lastFormat.get("language") or "").lower() if lastFormat else ""
-				if not curLang.startswith("ne"):
+				if not curLang.startswith(("ne", "hi")):
 					result.append(self._formatWithLanguage(lastFormat, "ne"))
 					result.append(item)
 					result.append(self._formatWithLanguage(lastFormat, None, restore=True))
@@ -1311,7 +1362,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		gesture="kb:control+c",
 	)
 	def script_copyFixed(self, gesture):
-		if not conf()["enabled"]:
+		if not isOn():
 			gesture.send()
 			return
 		try:
@@ -1455,7 +1506,7 @@ class NepaliReaderSettingsPanel(SettingsPanel):
 		helper = guiHelper.BoxSizerHelper(self, sizer=settingsSizer)
 		# Translators: settings label
 		self.enabledCheck = helper.addItem(wx.CheckBox(self, label=_("Nepali mode (NVDA+Ctrl+Shift+Space)")))
-		self.enabledCheck.SetValue(c["enabled"])
+		self.enabledCheck.SetValue(isOn())
 		# Translators: settings label
 		self.pdfCheck = helper.addItem(wx.CheckBox(self, label=_("For PDFs, read the PDF file itself to get the exact Nepali text")))
 		self.pdfCheck.SetValue(c["pdfFile"])
@@ -1492,7 +1543,7 @@ class NepaliReaderSettingsPanel(SettingsPanel):
 
 	def onSave(self):
 		c = conf()
-		c["enabled"] = self.enabledCheck.GetValue()
+		setOn(self.enabledCheck.GetValue())
 		c["pdfFile"] = self.pdfCheck.GetValue()
 		c["mode"] = MODES[self.modeChoice.GetSelection()]
 		if c["mode"] != "off":
