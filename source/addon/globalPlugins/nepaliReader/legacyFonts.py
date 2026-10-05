@@ -86,7 +86,7 @@ PREETI_MAP = {
 	"‘": "ॅ", "•": "ड्ड", "˜": "ऽ", "›": "द्र", "\xa1": "ज्ञ्",
 	"\xa2": "द्घ", "\xa3": "घ्", "\xa4": "झ्", "\xa5": "्र", "\xa7": "ट्ट", "\xa9": "र",
 	"\xaa": "ङ", "\xab": "्र", "\xb0": "ङ्ढ", "\xb1": "+", "\xb4": "झ", "\xb6": "ठ्ठ",
-	"\xbf": "रू", "\xc5": "हृ", "\xc6": "”", "\xcb": "ङ्ग", "\xcc": "न्न", "\xcd": "ङ्क",
+	"\xbf": "रु", "\xc5": "हृ", "\xc6": "”", "\xcb": "ङ्ग", "\xcc": "न्न", "\xcd": "ङ्क",
 	"\xce": "ङ्ख", "\xd2": "\xa8", "\xd6": "=", "\xd7": "\xd7", "\xd8": "्य", "\xd9": ";",
 	"\xda": "’", "\xdb": "!", "\xdc": "%", "\xdd": "ट्ठ", "\xdf": "द्म", "\xe5": "द्व",
 	"\xe6": "“", "\xe7": "ॐ", "\xf7": "/",
@@ -236,6 +236,24 @@ def preetiFamilyToUnicode(text, font="preeti"):
 		if word in BULLETS or (len(word) == 1 and word in "•●○■▪◦✓★→←–—…"):
 			result.append(word)
 			continue
+		if font == "preeti":
+			# Smart quote detection: C<word>D used as “<word>” in Preeti
+			if word.startswith("C") and word.endswith("D") and len(word) >= 3:
+				if not word.startswith(("Clif", "C0f", "Crt", "Crf", "C4b", "Cuj")):
+					word = "“" + word[1:-1] + "”"
+			# Handle Preeti 'M' (झ vs visarga/colon)
+			if "M" in word:
+				if not (word in ("M", "M–", "M-", "M:") or re.match(r"^M[–—\-_: ]*$", word) or "b'Mv" in word):
+					if "-M_" in word:
+						word = word.replace("-M_", "-\xb4_")
+					if "(M)" in word:
+						word = word.replace("(M)", "(\xb4)")
+					def _rep_m(m):
+						idx = m.start()
+						if idx == len(word) - 1 and idx > 0 and word[idx - 1] not in ("D", "l", ";", "+"):
+							return "M"
+						return "\xb4"
+					word = re.sub(r"M", _rep_m, word)
 		# Parenthesized Devanagari or digits: preserve parentheses
 		m = re.match(r"^([\(\[\{])([^\(\)\[\]\{\}]+)([\)\]\}])$", word)
 		if m:
@@ -271,6 +289,9 @@ def preetiFamilyToUnicode(text, font="preeti"):
 		s = s.replace("टृ", "ट्ट")
 		if s.startswith("ः"):
 			s = ":" + s[1:]
+		if font == "preeti" and s.startswith("ऋ") and s.endswith("म्") and len(s) >= 4:
+			if not s.startswith(("ऋषि", "ऋण", "ऋतु", "ऋचा", "ऋद्धि", "ऋग्वेद")):
+				s = "“" + s[1:-1] + "”"
 		result.append(s)
 	return unicodedata.normalize("NFC", "".join(result))
 

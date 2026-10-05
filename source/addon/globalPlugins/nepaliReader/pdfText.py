@@ -26,7 +26,7 @@ NUKTA = "़"
 REPH = "र्"
 DEP_SIGNS = set("ऺऻािीुूृॄॅॆेैॉॊोौॎॏॕॖॗॢॣऀँंः़")
 INDEPENDENT = set(chr(c) for c in range(0x0904, 0x0915)) | set("ॠॡॲॳॴॵॶॷ")
-INDEX_VERSION = 10
+INDEX_VERSION = 11
 INFER = True
 
 
@@ -155,6 +155,12 @@ _GLYPHNAMES = {
 	"seven": "7", "eight": "8", "nine": "9", "quoteleft": "‘", "quoteright": "’",
 	"quotedblleft": "“", "quotedblright": "”", "endash": "–", "emdash": "—",
 	"bullet": "•", "ellipsis": "…",
+	"questiondown": "\xbf", "ae": "\xe6", "AE": "\xc6", "acute": "\xb4",
+	"ordfeminine": "\xaa", "aring": "\xe5", "Aring": "\xc5", "yen": "\xa5",
+	"Iacute": "\xcd", "section": "\xa7", "guillemotleft": "\xab", "guillemotright": "\xbb",
+	"germandbls": "\xdf", "paragraph": "\xb6", "degree": "\xb0", "cent": "\xa2",
+	"sterling": "\xa3", "currency": "\xa4", "exclamdown": "\xa1", "divide": "\xf7",
+	"multiply": "\xd7", "plusminus": "\xb1", "target": "•", "command": "•", "scissorscutting": "✂",
 }
 
 
@@ -165,6 +171,8 @@ def _glyphNameToText(n):
 		return n
 	if n in _GLYPHNAMES:
 		return _GLYPHNAMES[n]
+	if n.lower().startswith("bullet") or n.lower() in ("target", "command"):
+		return "•"
 	m = re.match(r"^uni([0-9A-Fa-f]{4,})", n)
 	if m:
 		h = m.group(1)
@@ -328,7 +336,17 @@ class PdfFont:
 			return t
 		if self.cid:
 			return ""
-		return self.encodingMap.get(code, chr(code))
+		base = self.baseFont.lower()
+		if "wingdings" in base or "webdings" in base:
+			return "•"
+		if "symbol" in base and code in (167, 180, 197):
+			return "•"
+		if self.legacy == "preeti" and code == 0x0b:
+			return "\xbf"
+		t = self.encodingMap.get(code, chr(code))
+		if ("wingdings" in base or "webdings" in base or "symbol" in base) and t and ord(t) < 32:
+			return "•"
+		return t
 
 	def resolveGlyphs(self):
 		"""Work out the real letters of every used Devanagari glyph from the glyph outlines."""
@@ -596,21 +614,42 @@ def _isSpace(font, code, span=None):
 
 def _words(glyphs, page):
 	"""Group drawn glyphs into lines and words (by position), in drawing order."""
+	# Deduplicate fake-bold overprinting (same font & code drawn within <= 0.8 pt)
+	seen = {}
+	dedup = []
+	for g in glyphs:
+		font, code, u, v, size, adv, span = g
+		k = (id(font), code)
+		is_dup = False
+		if k in seen:
+			for pu, pv in seen[k]:
+				if abs(u - pu) <= 0.8 and abs(v - pv) <= 0.8:
+					is_dup = True
+					break
+		if not is_dup:
+			seen.setdefault(k, []).append((u, v))
+			t = font.text(code)
+			if ("wingdings" in font.baseFont.lower() or "symbol" in font.baseFont.lower()) and t in ("\x01", "\x02", "\x03", "§", "Å", "´", "•"):
+				g = (font, code, u, v, size, adv, ("bullet", "•"))
+			dedup.append(g)
+
 	words = []
 	cur = None
 	lineV = None
 	endU = 0.0
-	for g in glyphs:
+	for g in dedup:
 		font, code, u, v, size, adv, span = g
 		size = size or 1.0
 		blank = _isSpace(font, code, span)
+		is_bullet = (span and span[0] == "bullet") or font.text(code) == "•" or ("wingdings" in font.baseFont.lower())
+		prev_is_bullet = cur.glyphs and ((cur.glyphs[-1][6] and cur.glyphs[-1][6][0] == "bullet") or cur.glyphs[-1][0].text(cur.glyphs[-1][1]) == "•" or ("wingdings" in cur.glyphs[-1][0].baseFont.lower())) if cur else False
 		if lineV is None or abs(v - lineV) > 0.5 * size or u < endU - 2.5 * size:
 			if cur is not None and cur.glyphs:
 				words.append(cur)
 			cur = Word((page, True))
 			lineV = v
 			endU = u
-		elif blank or u - endU > 0.2 * size:
+		elif blank or u - endU > 0.2 * size or is_bullet or prev_is_bullet:
 			if cur.glyphs:
 				words.append(cur)
 				cur = Word((page, False))

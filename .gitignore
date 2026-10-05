@@ -15,6 +15,7 @@ nepaliReader-source/
 *.tmp
 
 # Test PDFs and scratch files
+*.pdf
 moljpa_test.pdf
 scratch/
 
