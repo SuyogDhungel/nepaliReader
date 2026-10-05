@@ -138,7 +138,7 @@ def wordScore(token, encoding="preeti"):
 
 
 def _isScorable(token):
-	return any(c.isalpha() for c in _core(token))
+	return any(c.isascii() and c.isalpha() for c in _core(token))
 
 
 def _strongAlone(token, sc, encoding):
@@ -166,8 +166,9 @@ def decide(text, encoding="preeti", context=False):
 	tokens = re.split(r"(\s+)", text)
 	scored = []
 	legacy = english = 0
+	hasDeva = any("\u0900" <= c <= "\u097f" for c in text)
 	for t in tokens:
-		if not t or t.isspace() or not _isScorable(t):
+		if not t or t.isspace() or not _isScorable(t) or any("\u0900" <= c <= "\u097f" for c in t):
 			scored.append((t, None))
 			continue
 		sc = wordScore(t, encoding)
@@ -189,17 +190,19 @@ def decide(text, encoding="preeti", context=False):
 			# ambiguous fragment inside a legacy document: only convert if it has ASCII letters and is not a bullet/arrow
 			return [(t, bool(t) and any(c.isascii() and c.isalpha() for c in t) and not any(c in _BULLETS_ARROWS for c in t) and not _URLISH.search(t)) for t, _ in scored]
 		return [(t, False) for t, _ in scored]
-	if context:
+	if context and not hasDeva:
 		wholeLine = legacy >= english and not any(
 			sc is not None and sc <= -10 for _, sc in scored if len(scored) <= 3)
 		if not wholeLine and english == 0:
 			wholeLine = True
-	else:
+	elif not hasDeva:
 		wholeLine = (legacy >= 2 and legacy >= 3 * english) or (
 			legacy >= 1 and english == 0 and any(sc is not None and _strongAlone(t, sc, encoding) for t, sc in scored))
+	else:
+		wholeLine = False
 	result = []
 	for t, sc in scored:
-		if not t or t.isspace():
+		if not t or t.isspace() or any("\u0900" <= c <= "\u097f" for c in t):
 			result.append((t, False))
 		elif any(c in _BULLETS_ARROWS for c in t):
 			result.append((t, False))

@@ -87,7 +87,7 @@ PREETI_MAP = {
 	"\xa2": "द्घ", "\xa3": "घ्", "\xa4": "झ्", "\xa5": "्र", "\xa7": "ट्ट", "\xa9": "र",
 	"\xaa": "ङ", "\xab": "्र", "\xb0": "ङ्ढ", "\xb1": "+", "\xb4": "झ", "\xb6": "ठ्ठ",
 	"\xb7": "ङ्ग", "·": "ङ्ग",
-	"\xbf": "ु", "\xc5": "हृ", "\xc6": "”", "\xcb": "ङ्ग", "\xcc": "न्न", "\xcd": "ङ्क",
+	"\xbf": "रू", "\xc5": "हृ", "\xc6": "”", "\xcb": "ङ्ग", "\xcc": "न्न", "\xcd": "ङ्क",
 	"\xce": "ङ्ख", "\xd2": "\xa8", "\xd6": "=", "\xd7": "\xd7", "\xd8": "्य", "\xd9": ";",
 	"\xda": "’", "\xdb": "!", "\xdc": "%", "\xdd": "ट्ठ", "\xdf": "द्म", "\xe5": "द्व",
 	"\xe6": "“", "\xe7": "ॐ", "\xf7": "/",
@@ -218,8 +218,59 @@ BULLETS = set("•●○■▪◦✓★→←–—…")
 _DIGIT_MAP = str.maketrans("0123456789", "०१२३४५६७८९")
 
 
-def preetiFamilyToUnicode(text, font="preeti"):
-	table = _PREETI_FAMILY_MAPS.get(font, PREETI_MAP)
+_C1 = {}
+for _c in range(0x80, 0xA0):
+	try:
+		_C1[_c] = bytes([_c]).decode("cp1252")
+	except UnicodeDecodeError:
+		pass
+
+
+# "¿" is रू in Preeti (x¿ हरू, b'¿kof]u दुरूपयोग) but some fonts of the family draw the
+# u-sign there (lgs¿~h निकुञ्ज): the reading that gives a dictionary word wins.
+_BF_CHOICES = ("रू", "ु", "रु")
+_bfTables = {}
+
+
+def _bfTable(font, sub):
+	t = _bfTables.get((font, sub))
+	if t is None:
+		t = dict(_PREETI_FAMILY_MAPS.get(font, PREETI_MAP))
+		t["\xbf"] = sub
+		_bfTables[(font, sub)] = t
+	return t
+
+
+def _isWord(w):
+	try:
+		from . import neLexicon
+	except ImportError:
+		try:
+			import neLexicon
+		except ImportError:
+			return False
+	try:
+		return neLexicon.isWord(w)
+	except Exception:
+		return False
+
+
+def preetiFamilyToUnicode(text, font="preeti", _table=None):
+	table = _table or _PREETI_FAMILY_MAPS.get(font, PREETI_MAP)
+	if _table is None and "\xbf" in text and font in ("preeti", "kantipur", "himali", "sagarmatha", "fontasy"):
+		parts = re.split(r"(\s+)", text)
+		if len(parts) > 1:
+			return "".join(preetiFamilyToUnicode(p, font) if p and not p.isspace() else p for p in parts)
+		first = None
+		for sub in _BF_CHOICES:
+			out = preetiFamilyToUnicode(text, font, _bfTable(font, sub))
+			if first is None:
+				first = out
+			if _isWord(out.strip(".,;:!?()[]{}\"'“”‘’।–—-")):
+				return out
+		return first
+	# fonts without an encoding give raw codes 0x80-0x9F; the layouts are defined on Windows-1252
+	text = text.translate(_C1)
 	parts = re.split(r"(\s+)", text)
 	result = []
 	for word in parts:
@@ -235,24 +286,16 @@ def preetiFamilyToUnicode(text, font="preeti"):
 			if word.startswith("C") and word.endswith("D") and len(word) >= 3:
 				if not word.startswith(("Clif", "C0f", "Crt", "Crf", "C4b", "Cuj")):
 					word = "“" + word[1:-1] + "”"
-			# Handle Preeti 'M' (झ vs visarga/colon)
-			if "M" in word:
-				if not (word in ("M", "M–", "M-", "M:") or re.match(r"^M[–—\-_: ]*$", word) or "b'Mv" in word):
-					if "-M_" in word:
-						word = word.replace("-M_", "-\xb4_")
-					if "(M)" in word:
-						word = word.replace("(M)", "(\xb4)")
-					def _rep_m(m):
-						idx = m.start()
-						if idx == len(word) - 1 and idx > 0 and word[idx - 1] not in ("D", "l", ";", "+"):
-							return "M"
-						return "\xb4"
-					word = re.sub(r"M", _rep_m, word)
+			# Preeti 'M' is the visarga (निःशुल्क lgMz'Ns, पुनः k'gM); alone it is a colon
+			if word == "M":
+				result.append(":")
+				continue
 		# Standalone digits (e.g. page numbers, list numbers, percentages):
 		# in Preeti family layouts, unshifted digit keys give consonants/conjuncts (1=ज्ञ, 2=द्द);
 		# standalone digit strings in documents are never words, always numbers.
 		m_num = re.match(r"^([.,;:!?\(\)\[\]\{\}\-\–—/\\%]*)([0-9]+)([.,;:!?\(\)\[\]\{\}\-\–—/\\%]*)$", word)
-		if m_num:
+		if m_num and m_num.group(2) != "5":
+			# (a lone "5" is the very common verb छ, not a number)
 			lead, mid, trail = m_num.group(1), m_num.group(2), m_num.group(3)
 			result.append(lead + mid.translate(_DIGIT_MAP) + trail)
 			continue
@@ -261,7 +304,7 @@ def preetiFamilyToUnicode(text, font="preeti"):
 		if m:
 			lead, mid, trail = m.group(1), m.group(2), m.group(3)
 			if any("\u0900" <= c <= "\u097f" for c in mid):
-				result.append(lead + preetiFamilyToUnicode(mid, font) + trail)
+				result.append(lead + preetiFamilyToUnicode(mid, font, _table) + trail)
 				continue
 		# If word already has Devanagari characters: preserve boundary punctuation
 		if any("\u0900" <= c <= "\u097f" for c in word):
@@ -272,9 +315,11 @@ def preetiFamilyToUnicode(text, font="preeti"):
 			core = word[lead:len(word) - trail] if trail else word[lead:]
 			if not any(c.isascii() and c.isalpha() for c in core):
 				result.append(word)
-			else:
-				result.append(lp + preetiFamilyToUnicode(core, font) + rp)
-			continue
+				continue
+			if lp or rp:
+				result.append(lp + preetiFamilyToUnicode(core, font, _table) + rp)
+				continue
+			# mixed letters with nothing to strip: convert it as one word below
 		s = "".join(table.get(ch, ch) for ch in word)
 		s = s.replace(HALANT + "ा", "")  # half letter + ा = full letter
 		s = _applyModifier(s)
@@ -426,10 +471,19 @@ def encodingForFontName(fontName):
 	return None
 
 
+_DATE_DANDA = re.compile("(?<=[०-९])।(?=[०-९])")
+# a visarga after a virama, or before a dash, or before "(" is the colon typed with the same key
+_COLON = re.compile("(?<=्)ः|ः(?=\\s*[–—\\-(])|^ः$")
+
+
 def convert(text, encoding="preeti"):
 	if encoding == "krutidev":
 		return krutiDevToUnicode(text)
-	return preetiFamilyToUnicode(text, encoding)
+	# a "." typed between digits draws a danda in Preeti, but it is a date/number separator
+	out = _DATE_DANDA.sub(".", preetiFamilyToUnicode(text, encoding))
+	if "ः" in out:
+		out = _COLON.sub(":", out)
+	return out
 
 
 def languageForEncoding(encoding):

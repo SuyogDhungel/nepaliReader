@@ -181,3 +181,87 @@ IMPORTANT NVDA facts learned the hard way:
   unless glyph contours explicitly draw Devanagari; requires candidate words to have letters (`isalpha()`);
   and verifies that converted words exist in `neLexicon`. Bumped `INDEX_VERSION` to 10 and cleared stale `.idx` caches.
 
+## 2026-10-05 (Glued Accessibility Nodes, Preeti Digit Typos & Fake-Bold Cleanups)
+* **Glued Accessibility Boundary Splitting (`cleanGluedTokens`)**:
+  - In Chromium, Brave, and Edge, adjacent inline accessibility nodes (such as image descriptions `alt="Description: Gvt"`, `graphic`, landmarks, and page numbers `(1)`) get concatenated directly to document text without spaces (e.g. `l;+xb/af/Description: Gvt(1)`).
+  - This prevented both `DocIndex` lookup (exact token match failed) and `detector.decide` (the composite token scored as English due to "Description").
+  - Added `cleanGluedTokens` to cleanly split accessibility keywords (`Description:`, `graphic`, `landmark`, `heading`, `level`, etc.), bracketed/parenthesized numbers, and Unicode bullets/arrows (`•`, `§`, etc.).
+  - In `DocIndex.lookup`, if `cleanGluedTokens` separates tokens, lookup routes directly to `_tokens(clean)`, converting legacy words (`l;+xb/af/` -> `सिंहदरबार`, `(1)` -> `(१)`) while preserving English metadata (`Description: Gvt`).
+  - In `DocIndex._tokens`, added prefix and suffix sub-token matching against `self._byKey` for any glued composite words.
+  - In `detector.py`, added accessibility terms (`description`, `gvt`, `gov`, `govt`, `landmark`) to `COMMON_ENGLISH` and preprocessed input in `decide()`.
+* **Devanagari OCR & Preeti Digit Typo Repair (`devanagariRepair.cleanShuffled`)**:
+  - Restored visual glyph confusions: `०ा` (zero + aa) -> `ण` (`प्रमा०ाीकर०ा` -> `प्रमाणीकरण`), `लैि·क` / `ि·` -> `लैङ्गिक` / `ङ्ग`.
+  - Repaired keyboard-shifted digit typos from corrupt/unshifted layouts: `द्द)टघ।ड।द्दद्द` -> `२०६३।८।२२`, `द्द)ठद्द` -> `२०७२`, `द्द)ठद्द।ट।ज्ञद्ध` -> `२०७२।०६।१४`, `द्द)ठद्द।ज्ञज्ञ।ज्ञघ` -> `२०७२।११।१३`, list numbers `ज्ञ.` -> `१.`, `द्द.` -> `२.`.
+  - Fixed fake-bold single-letter echoes before words (`प पयोग` -> `पयोग`, resolving `अख्तियार दु अख्तियार दु प प प पयोग` -> `अख्तियार दुरुपयोग`).
+* **Cache Invalidation**: Bumped `INDEX_VERSION = 13` in `pdfText.py`.
+
+## 2026-10-05 (Preeti Subscript U-Matra '\xbf' Fix, Quote Variant Normalization & Sentence Verb 5 Repair)
+* **Preeti Subscript U-Matra '\xbf' (`¿`) Fix**:
+  - In `legacyFonts.PREETI_MAP`, `\xbf` (`¿`, U+00BF) was mistakenly mapped to `"रु"`.
+  - In Preeti/Himalaya/Kantipur fonts, `?` (ASCII 63) is `"रु"`, whereas `\xbf` is the subscript `ु` (u-matra) glyph designed for consonants like `क`, `न्त`, `स`.
+  - Because of this erroneous mapping, `lgs¿~h` became `निकरुञ्ज`, `jGohGt¿` became `वन्यजन्तरु`, and `s¿ljwf` became `सरुविधा`.
+  - Fixed `PREETI_MAP["\xbf"] = "ु"`. Words now accurately convert to `निकुञ्ज`, `वन्यजन्तु`, and `सुविधा`.
+* **Quote and `\xbf` Variant Key Normalization**:
+  - When Chromium/Brave extracts text from PDF pages, it often normalizes glyph byte `\xbf` to standard ASCII quote `'` (`lgs'~h`, `jGohGt'`).
+  - In `pdfText.DocIndex._tokens`, both `\xbf` and `'` variants are indexed and cross-matched in `_byKey` and `_byBag`.
+  - In `__init__._indexText`, added fallback legacy word conversion for any unmatched piece with confident Preeti score/dictionary word.
+* **Typo '5' for Verb 'छ' at Sentence End**:
+  - In Preeti, unshifted key `5` is `छ`, while `%` is `५`. In royal enactments and legal clauses, typists typed `5` for `छ` (e.g. `यो ऐन बनाईबक्सेको ५ ।`).
+  - In `devanagariRepair.cleanShuffled`, added generic repair converting `[verb] ५ ।` to `[verb] छ ।` for participles/auxiliaries (`ेको|एको|ने|दा|छैन`).
+  - Added common dictionary word repairs: `महव` -> `महत्त्व`, `महवको` -> `महत्त्वको`, `महवराख्ने` -> `महत्त्व राख्ने`.
+* **Cache Invalidation**: Bumped `INDEX_VERSION = 14` in `pdfText.py`.
+
+
+
+
+## 2026-10-05 evening (Claude): general PDF fixes — missing letters, repeats, Preeti mapping
+All fixes are general (no document-specific code). Measured with `/root/real/evreal.py` (14 real PDFs from
+Suyog's Temp folder + constitution, OCR reference): mean 87.2 -> 87.4, बालबालिका ऐन (Word/Kalimati) 73.8 -> 96.2.
+Chunked reading test (`frag.py`: lines read in 1-3 word pieces like NVDA's text chunks) went from many
+duplicated words to almost none.
+* **Missing letters (ज, ह, य ...) in Word PDFs**: Word's ToUnicode maps some glyphs to a space. `_isSpace`
+  now trusts the glyph's real letters (`font.truth`) first, so those glyphs no longer break words.
+* **Invisible joiners**: a "space" glyph that the next letter is drawn over (ZWJ/ZWNJ in Word) is not a word
+  break (`_words`, `pend`). Fixes भन् नाले -> भन्नाले, बमो म -> बमोजिम.
+* **Line baseline**: a new line now needs a different baseline than both the line start and the previous
+  glyph (anusvara slightly lower than the line start split संहिता).
+* **Lookup order** (`_lookup`): exact B (`_bfind`, short pieces prefer a word start), exact F, tolerant B
+  (`_find`, now with `_findSkel`: B without vowel signs, `SB`/`SBpos`, so PDFium's moved signs मखु/मुख are
+  found for any length), then tolerant F (threshold 0.9, window = n). Antigravity's tolerant F ran before the
+  B search and returned neighbouring words (repeats / wrong words).
+* **No repeated akshars between pieces**: in `_part`/`_spanF` an akshar belongs to the piece holding its first
+  character (sayAll / chunked reading no longer says सङ्घी ङ्घीय). A piece that owns nothing (character
+  navigation) still gets its akshar, never silence. Exact F pieces are not extended to whole words.
+* **Fake-bold repeats**: PDFium repeats text that a PDF draws twice; `_dropRepeats` removes a word run that
+  follows itself when the document itself has it once.
+* **Preeti**:
+  - `¿` (U+00BF): रू in real Preeti (x¿ हरू, b'¿kof]u दुरूपयोग); some fonts of the family draw ु there.
+    The converter now tries रू, ु, रु and keeps the first that is a dictionary word (`_BF_CHOICES`).
+  - `M` is always the visarga (निःशुल्क, पुनः); alone it is ":"; after a virama or before a dash it is ":".
+    Antigravity's M->झ rule was removed (झ is `em` or `´`).
+  - a lone `5` is छ (not ५); "." between digits is a date separator ("२०७२.०६.०३", not "२०७२।०६।०३").
+  - raw codes 0x80-0x9F (fonts without encoding) are read as Windows-1252 (ˆ = फ्: cfˆgf] आफ्नो), and
+    `keyOf` keeps ƒ ˆ ˜ ™ and C1 codes so those letters are not dropped.
+  - fixed an endless recursion for words mixing Devanagari and ASCII letters.
+* `__init__._convertFieldList`: runs are grouped between control fields (headings, paragraphs) before the
+  lookup, so a reading spanning several headings is converted per heading (`tests/test_headings.py`).
+* `INDEX_VERSION = 15` (old caches are rebuilt automatically).
+
+## 2026-10-05 late evening: Mixed Unicode/Legacy conversion, Devanagari lookarounds & browser PDF detection
+* **Mixed Devanagari and Legacy Text in `__init__._convertFieldList`**:
+  - Previously, `elif devanagariRepair.hasDevanagari(text): continue` skipped any run that had any Devanagari characters, causing mixed runs (like `राष्ट्रिय lgs'~h तथा jGohGt' संरक्षण ऐन, २०२९` or `नेपाल सरकार l;+xb/af/`) to never be checked for legacy words.
+  - Now, if a Devanagari run has ASCII letters, it is added to `unknown` so legacy words inside it are detected and converted.
+  - In step 3 of `_convertFieldList`, `if i in convert` is evaluated before `if switchLang and (rebuilt or hasDevanagari): continue`, ensuring converted text is not bypassed by language switching tags.
+* **Mixed Line Support in Unicode Documents (`_decideUnknown`)**:
+  - When `isUnicodeDoc` was True, `if isUnicodeDoc and (legacyWords < 2 and legacyWords * 2 < words): return` previously discarded isolated strong legacy words (e.g. `l;+xb/af/ Description: Gvt Page 2 landmark (1)`).
+  - Now checks for strong legacy tokens (`score >= MIXED_WORD` or `_strongAlone`); if present, mixed conversion proceeds.
+  - Ensured `lineIsLegacy` is False when `joined` contains Devanagari (`hasDeva`), forcing individual token decisions (`context=False`) so existing Unicode and English words are preserved.
+* **Devanagari Boundary Lookarounds in `devanagariRepair.py`**:
+  - Python's `\b` fails on combining vowel signs/matras (e.g. `ु` U+0941 is `\W`), meaning `\bवन्यजन्तरु\b` never matched `वन्यजन्तरु `.
+  - Replaced `\b` with Devanagari character lookarounds `(?<![\u0900-\u097f])` and `(?![\u0900-\u097f])` for `वन्यजन्तरु -> वन्यजन्तु`, `निकरुञ्ज -> निकुञ्ज`, `सरुविधा -> सुविधा`, `महव -> महत्त्व`, etc.
+  - Fixed preeti digit confusion regex to properly match multi-codepoint conjuncts (`(?:द्द|द्ध|ज्ञ|छ|ट|ठ|ड|ढ|घ)\)(?:...)+` -> `२०६३।८।२२`, `२०७२`, list numbers `ज्ञ.` -> `१.`, `(ज्ञ)` -> `(१)`).
+* **Detector Devanagari Safety in `detector.py`**:
+  - In `decide()`, any token containing Devanagari characters is strictly marked `(t, False)` and excluded from legacy scoring, preventing Unicode text from being mistakenly treated as legacy.
+  - `_isScorable` requires ASCII letters (`any(c.isascii() and c.isalpha())`).
+* **Browser PDF Detection**:
+  - Added `"finished loading pdf"` landmark marker to `_isPdfViewerObj` in `__init__.py` to correctly identify PDFs opened in Brave/Chrome even when the window title omits `.pdf`.

@@ -158,27 +158,32 @@ def cleanShuffled(text):
 
 	# Keyboard-shifted digit typo confusions (dates like द्द)टघ।ड।द्दद्द -> २०६३।८।२२, द्द)ठद्द -> २०७२, list numbers ज्ञ. -> १., द्द. -> २.)
 	_preeti_keys = [('द्द', '२'), ('द्ध', '४'), ('ज्ञ', '१'), ('छ', '५'), ('ट', '६'), ('ठ', '७'), ('ड', '८'), ('ढ', '९'), ('घ', '३')]
-	text = re.sub(r'(^|\s)(ज्ञ|द्द|द्ध|छ|ट|ठ|ड|ढ|घ)\.', lambda m: m.group(1) + dict(_preeti_keys)[m.group(2)] + '.', text)
+	_pk_dict = dict(_preeti_keys)
 	def _rep_preeti_num(m):
 		s = m.group(0).replace(')', '०')
 		for k, v in _preeti_keys:
 			s = s.replace(k, v)
 		return s
-	text = re.sub(r'द्द\)[द्दद्धज्ञछटठडढघ\)\d।\.\-]+', _rep_preeti_num, text)
+	text = re.sub(r'(?:द्द|द्ध|ज्ञ|छ|ट|ठ|ड|ढ|घ)\)(?:द्द|द्ध|ज्ञ|छ|ट|ठ|ड|ढ|घ|\)|\d|।|\.|\-)+', _rep_preeti_num, text)
+	text = re.sub(r'(^|\s)(ज्ञ|द्द|द्ध|छ|ट|ठ|ड|ढ|घ)\.', lambda m: m.group(1) + _pk_dict[m.group(2)] + '.', text)
+	text = re.sub(r'\((ज्ञ|द्द|द्ध|छ|ट|ठ|ड|ढ|घ)\)', lambda m: '(' + _pk_dict[m.group(1)] + ')', text)
+
+	_DEVA_BOUND_L = r'(?<![\u0900-\u097f])'
+	_DEVA_BOUND_R = r'(?![\u0900-\u097f])'
 
 	# Fake-bold leading single-letter echoes before word: 'प पयोग' -> 'पयोग'
-	text = re.sub(r'\b([\u0904-\u0939])\s+(\1[\u0900-\u097f]+)\b', r'\2', text)
+	text = re.sub(_DEVA_BOUND_L + r'([\u0904-\u0939])\s+(\1[\u0900-\u097f]+)' + _DEVA_BOUND_R, r'\2', text)
 
 	# Preeti digit 5 typo for verb 'छ' at end of sentences (e.g. बनाईबक्सेको ५ । -> बनाईबक्सेको छ ।)
 	text = re.sub(r'([क-ह][\u0900-\u097f]*(?:ेको|एको|ने|दा|छैन))\s+५\s*([।\.])', r'\1 छ \2', text)
 
 	# Common font/OCR corruptions:
-	text = re.sub(r'\bमहव\b', 'महत्त्व', text)
-	text = re.sub(r'\bमहवको\b', 'महत्त्वको', text)
-	text = re.sub(r'\bमहवराख्ने\b', 'महत्त्व राख्ने', text)
-	text = re.sub(r'\bनिकरुञ्ज\b', 'निकुञ्ज', text)
-	text = re.sub(r'\bवन्यजन्तरु\b', 'वन्यजन्तु', text)
-	text = re.sub(r'\bसरुविधा\b', 'सुविधा', text)
+	text = re.sub(_DEVA_BOUND_L + r'महव' + _DEVA_BOUND_R, 'महत्त्व', text)
+	text = re.sub(_DEVA_BOUND_L + r'महवको' + _DEVA_BOUND_R, 'महत्त्वको', text)
+	text = re.sub(_DEVA_BOUND_L + r'महवराख्ने' + _DEVA_BOUND_R, 'महत्त्व राख्ने', text)
+	text = re.sub(_DEVA_BOUND_L + r'निकरुञ्ज' + _DEVA_BOUND_R, 'निकुञ्ज', text)
+	text = re.sub(_DEVA_BOUND_L + r'वन्यजन्तरु' + _DEVA_BOUND_R, 'वन्यजन्तु', text)
+	text = re.sub(_DEVA_BOUND_L + r'सरुविधा' + _DEVA_BOUND_R, 'सुविधा', text)
 
 	# 2. Restore dropped characters (e.g. unmapped Preeti ¿ -> रु / र) using the dictionary
 	if neLexicon.isLoaded():
@@ -191,7 +196,7 @@ def cleanShuffled(text):
 				if neLexicon.isWord(cand):
 					return cand
 			return m.group(0)
-		text = re.sub(r'\b([\u0900-\u097f]{1,4})\s+([\u0900-\u097f]{2,8})\b', check_dropped_gap, text)
+		text = re.sub(_DEVA_BOUND_L + r'([\u0900-\u097f]{1,4})\s+([\u0900-\u097f]{2,8})' + _DEVA_BOUND_R, check_dropped_gap, text)
 
 	# 2. Leaked trailing syllables before words: 'ना प्रस्तावना' -> 'प्रस्तावना', 'द परिच्छेद' -> 'परिच्छेद'
 	def fix_leak(m):

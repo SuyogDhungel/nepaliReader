@@ -962,14 +962,14 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				val = (getattr(o, "value", None) or "").lower()
 				if any(marker in name or marker in val for marker in (
 					"pdf is inaccessible", "add text annotations", "save to google drive",
-					"application/pdf"
+					"application/pdf", "finished loading pdf"
 				)):
 					return True
 				try:
 					ia = getattr(o, "IAccessibleObject", None)
 					if ia:
 						accName = (ia.accName(getattr(o, "IAccessibleChildID", 0)) or "").lower()
-						if any(marker in accName for marker in ("pdf is inaccessible", "add text annotations")):
+						if any(marker in accName for marker in ("pdf is inaccessible", "add text annotations", "finished loading pdf")):
 							return True
 				except Exception:
 					pass
@@ -1183,22 +1183,42 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		if self._isPdfWindow(info.obj):
 			idx = self._pdfIndex(info.obj)
 			if idx is not None:
-				# all text pieces of this reading together (a line may be cut by format changes)
-				whole = "".join(t for _i, t, _k, _e in runs)
-				try:
-					new = self._indexText(info, idx, whole)
-				except Exception:
-					log.debugWarning("Nepali Reader: PDF text lookup failed", exc_info=True)
-					new = None
-				if new is not None:
-					first = runs[0][0]
+				# text pieces that belong together: a line cut by format changes is joined, but
+				# never across headings, links, list items or other controls (joining those put
+				# one heading's text into another and left the other empty)
+				groups = []
+				cur = []
+				runAt = {r[0]: r for r in runs}
+				for i, item in enumerate(fields):
+					if i in runAt:
+						cur.append(runAt[i])
+					elif isinstance(item, textInfos.FieldCommand) and item.command == "formatChange":
+						continue
+					elif isinstance(item, str):
+						continue
+					else:
+						if cur:
+							groups.append(cur)
+						cur = []
+				if cur:
+					groups.append(cur)
+				for grp in groups:
+					whole = "".join(t for _i, t, _k, _e in grp)
+					try:
+						new = self._indexText(info if len(groups) == 1 else None, idx, whole)
+					except Exception:
+						log.debugWarning("Nepali Reader: PDF text lookup failed", exc_info=True)
+						new = None
+					if new is None:
+						continue
+					first = grp[0][0]
 					rebuilt[first] = bool(new and (devanagariRepair.hasDevanagari(new) or new != whole))
 					if new != whole:
 						out[first] = new
-						for i, _t, _k, _e in runs[1:]:
+						for i, _t, _k, _e in grp[1:]:
 							out[i] = ""
 						changed = True
-					for i, _t, _k, _e in runs[1:]:
+					for i, _t, _k, _e in grp[1:]:
 						rebuilt[i] = False
 				runs = [r for r in runs if r[0] not in rebuilt]
 				if rebuilt and not runs:
@@ -1243,7 +1263,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			elif known == "unicode":
 				continue  # Mangal, Kalimati, Nirmala...: real Unicode text
 			elif devanagariRepair.hasDevanagari(text):
-				continue  # Unicode text
+				if any(ch.isascii() and ch.isalpha() for ch in text):
+					anyKnownFont = anyKnownFont or bool(known)
+					unknown.append((i, text))
+				continue
 			elif not any(ch.isascii() and ch.isalpha() for ch in text):
 				# numbers/symbols: if in confirmed legacy context, convert!
 				if ctxEnc and any(ch in "!@#$%^&*()+=~`_{}[]\\|/<>?" for ch in text):
@@ -1280,13 +1303,6 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				lastFormat = item.field
 				result.append(item)
 				continue
-			if switchLang and isinstance(item, str) and (rebuilt.get(i) or devanagariRepair.hasDevanagari(item)):
-				curLang = (lastFormat.get("language") or "").lower() if lastFormat else ""
-				if not curLang.startswith(("ne", "hi")):
-					result.append(self._formatWithLanguage(lastFormat, "ne"))
-					result.append(item)
-					result.append(self._formatWithLanguage(lastFormat, None, restore=True))
-					continue
 			if i in convert and isinstance(item, str):
 				enc, protect = convert[i][0], convert[i][1]
 				if len(convert[i]) > 2:
@@ -1307,6 +1323,13 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 						result.append(self._formatWithLanguage(lastFormat, None, restore=True))
 					else:
 						result.append(newText)
+					continue
+			if switchLang and isinstance(item, str) and (rebuilt.get(i) or devanagariRepair.hasDevanagari(item)):
+				curLang = (lastFormat.get("language") or "").lower() if lastFormat else ""
+				if not curLang.startswith(("ne", "hi")):
+					result.append(self._formatWithLanguage(lastFormat, "ne"))
+					result.append(item)
+					result.append(self._formatWithLanguage(lastFormat, None, restore=True))
 					continue
 			result.append(item)
 		if usedEnc and c["mode"] == "auto" and count >= 2:
@@ -1373,7 +1396,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		if allEnglish:
 			return
 		if isUnicodeDoc and (legacyWords < 2 and legacyWords * 2 < words):
-			return
+			hasStrong = any(f and (detector.wordScore(t, used) >= detector.MIXED_WORD or detector._strongAlone(t, detector.wordScore(t, used), used)) for t, f in decisions if not t.isspace())
+			if not hasStrong:
+				return
 		inPdf = self._isPdfWindow(info.obj)
 		if allowVisual and c["visualCheck"] and not allEnglish and (legacyWords or (ctxEnc and words <= 3) or inPdf):
 			if legacyWords < 2 and not (legacyWords * 2 >= words and legacyWords >= 1):
@@ -1393,7 +1418,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			return
 		if not legacyWords:
 			return
-		lineIsLegacy = legacyWords * 2 >= words or legacyWords >= 2
+		hasDeva = any("\u0900" <= c <= "\u097f" for c in joined)
+		lineIsLegacy = not hasDeva and (legacyWords * 2 >= words or legacyWords >= 2)
 		for i, text in unknown:
 			if lineIsLegacy:
 				# a Preeti line: convert its words, but keep words that clearly read as English

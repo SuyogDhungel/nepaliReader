@@ -10,6 +10,7 @@
 # for single characters and words.
 # No NVDA dependencies.
 
+import array
 import bisect
 import math
 import re
@@ -32,7 +33,7 @@ NUKTA = "़"
 REPH = "र्"
 DEP_SIGNS = set("ऺऻािीुूृॄॅॆेैॉॊोौॎॏॕॖॗॢॣऀँंः़")
 INDEPENDENT = set(chr(c) for c in range(0x0904, 0x0915)) | set("ॠॡॲॳॴॵॶॷ")
-INDEX_VERSION = 14
+INDEX_VERSION = 15
 INFER = True
 
 
@@ -141,7 +142,11 @@ def aksharas(s):
 # Only these characters are compared between what the viewer shows and the PDF: Devanagari,
 # Latin letters, digits and punctuation. Viewers show unmapped glyphs differently (nothing,
 # U+FFFD, or a random character from the glyph number), so everything else is ignored.
-_DROP = re.compile("[^\u0021-\u007e\u00a1-\u00ac\u00ae-\u017f\u0900-\u097f\ua8e0-\ua8ff\u2010-\u2027\u2030-\u205e\u20a0-\u20cf]+")
+_DROP = re.compile("[^\u0021-\u007e\u0080-\u009f\u00a1-\u00ac\u00ae-\u017f\u0192\u02c6\u02dc\u2122\u0900-\u097f\ua8e0-\ua8ff\u2010-\u2027\u2030-\u205e\u20a0-\u20cf]+")
+
+
+_MARKS = re.compile("[\u0900-\u0903\u093a-\u094f\u0951-\u0957\u0962\u0963]")
+_NOTMARK = re.compile("[^\u0900-\u0903\u093a-\u094f\u0951-\u0957\u0962\u0963]")
 
 
 def keyOf(s):
@@ -613,10 +618,14 @@ class Word:
 def _isSpace(font, code, span=None):
 	if span is not None:
 		return not span[1].strip() if span[1] else False
+	tr = font.truth.get(code)
+	if tr:
+		# the glyph's real letters win: Word often maps letters like ज/ह to a space in its text table
+		return tr.isspace()
 	t = font.text(code)
 	if t:
 		return not t.strip()
-	return font.truth.get(code, "x").isspace()
+	return False
 
 
 def _words(glyphs, page):
@@ -644,24 +653,39 @@ def _words(glyphs, page):
 	cur = None
 	lineV = None
 	endU = 0.0
+	pend = None
+	lastV = None
 	for g in dedup:
 		font, code, u, v, size, adv, span = g
 		size = size or 1.0
 		blank = _isSpace(font, code, span)
 		is_bullet = (span and span[0] == "bullet") or font.text(code) == "•" or ("wingdings" in font.baseFont.lower())
 		prev_is_bullet = cur.glyphs and ((cur.glyphs[-1][6] and cur.glyphs[-1][6][0] == "bullet") or cur.glyphs[-1][0].text(cur.glyphs[-1][1]) == "•" or ("wingdings" in cur.glyphs[-1][0].baseFont.lower())) if cur else False
-		if lineV is None or abs(v - lineV) > 0.5 * size or u < endU - 2.5 * size:
+		if lineV is None or (abs(v - lineV) > 0.5 * size and (lastV is None or abs(v - lastV) > 0.5 * size)) or u < endU - 2.5 * size:
 			if cur is not None and cur.glyphs:
 				words.append(cur)
 			cur = Word((page, True))
 			lineV = v
 			endU = u
-		elif blank or u - endU > 0.2 * size or is_bullet or prev_is_bullet:
+			pend = None
+		elif blank:
+			# decide at the next glyph: a "space" that the next letter is drawn over is an
+			# invisible joiner (Word puts ZWJ/ZWNJ as a space glyph), not a word break
+			if pend is None:
+				pend = (u, adv)
+		elif pend is not None:
+			if u >= pend[0] + 0.5 * pend[1] or pend[1] <= 0.05 * size or is_bullet or prev_is_bullet:
+				if cur.glyphs:
+					words.append(cur)
+					cur = Word((page, False))
+			pend = None
+		elif u - endU > 0.2 * size or is_bullet or prev_is_bullet:
 			if cur.glyphs:
 				words.append(cur)
 				cur = Word((page, False))
 		if not blank:
 			cur.glyphs.append(g)
+			lastV = v
 		endU = max(endU, u + adv)
 	if cur is not None and cur.glyphs:
 		words.append(cur)
@@ -767,8 +791,16 @@ class DocIndex:
 			pos += len(fk)
 		self.F = "".join(F)
 		self.fStarts = fStarts
+		# skeleton of B: B without vowel signs/marks, so a viewer that moves a sign one letter
+		# (PDFium orders by position: मुख -> मखु) still finds its place
+		B = self.B
+		self.SB = _MARKS.sub("", B)
+		pos = array.array("i")
+		for m in _NOTMARK.finditer(B):
+			pos.append(m.start())
+		self.SBpos = pos
 
-	def _findF(self, key):
+	def _findF(self, key, tolerant=True):
 		F = getattr(self, "F", "")
 		if not F:
 			return -1
@@ -778,6 +810,8 @@ class DocIndex:
 			p = F.find(key)
 		if p >= 0:
 			return p
+		if not tolerant:
+			return -1
 		# Anchor and overlap search in F (tolerant to dropped/extra characters or bullets from viewers)
 		n = len(key)
 		if n >= 6:
@@ -792,7 +826,7 @@ class DocIndex:
 					q = F.find(chunk, s)
 					while q >= 0:
 						cand = max(0, q - a)
-						score = sum((cw & Counter(F[cand:cand + n + 6])).values())
+						score = sum((cw & Counter(F[cand:cand + n])).values())
 						if score > best[0]:
 							best = (score, cand)
 						q = F.find(chunk, q + 1)
@@ -802,13 +836,14 @@ class DocIndex:
 						break
 				if best[0] >= 0.8 * n:
 					break
-			if best[0] >= 0.75 * n:
+			if best[0] >= 0.9 * n:
 				return best[1]
 		return -1
 
-	def _spanF(self, a, b):
+	def _spanF(self, a, b, extend=True):
 		# Extend b to the full boundary of the last word covering b so trailing words are never cut in half
-		if getattr(self, "fStarts", None):
+		# (only for a tolerant match: an exact piece of a word must stay that piece, or it is read twice)
+		if extend and getattr(self, "fStarts", None):
 			i_b = bisect.bisect_right(self.fStarts, b) - 1
 			if 0 <= i_b < len(self.words):
 				s_b = self.fStarts[i_b]
@@ -833,16 +868,66 @@ class DocIndex:
 					aks = aksharas(fk)
 					pos = 0
 					sel = []
+					over = []
 					for ak in aks:
-						if pos < hi and pos + len(ak) > lo:
+						if lo <= pos < hi:
 							sel.append(ak)
+						if pos < hi and pos + len(ak) > lo:
+							over.append(ak)
 						pos += len(ak)
-					out.append(("".join(sel) or wtext, fixed is not None))
+					out.append(("".join(sel or over) or wtext, fixed is not None))
 			i += 1
 		self._hint = self.starts[min(max(i - 1, 0), len(self.starts) - 1)] if self.starts else 0
 		return out
 
 	# -- lookups -----------------------------------------------------------------
+
+	def _bfind(self, key):
+		"""Exact place of `key` in B, near the last place read. A short piece ('वा') also occurs
+		inside many longer words, so a place where it starts a word is preferred."""
+		B = self.B
+		short = len(key) < 8
+		for start in ((self._hint, 0) if self._hint else (0,)):
+			p = B.find(key, start)
+			if p < 0 or not short:
+				if p >= 0:
+					return p
+				continue
+			first = p
+			tries = 0
+			while p >= 0 and tries < 40:
+				i = bisect.bisect_right(self.starts, p) - 1
+				if i >= 0 and self.starts[i] == p:
+					return p
+				tries += 1
+				p = B.find(key, p + 1)
+			return first
+		return -1
+
+	def _findSkel(self, key):
+		"""Start in B of the same letters as `key` with the vowel signs possibly moved."""
+		SB = getattr(self, "SB", None)
+		if not SB:
+			return -1
+		sk = _MARKS.sub("", key)
+		if len(sk) < 2 or len(sk) == len(key):
+			return -1
+		lead = len(key) - len(key.lstrip("\u0900\u0901\u0902\u0903\u093a\u093b\u093c\u093d\u093e\u093f\u0940\u0941\u0942\u0943\u0944\u0945\u0946\u0947\u0948\u0949\u094a\u094b\u094c\u094d\u094e\u094f"))
+		n = len(key)
+		want = sorted(key)
+		B = self.B
+		pos = self.SBpos
+		hs = bisect.bisect_left(pos, self._hint) if self._hint else 0
+		for start in ((hs, 0) if hs else (0,)):
+			q = SB.find(sk, start)
+			tries = 0
+			while q >= 0 and tries < 60:
+				tries += 1
+				a = pos[q] - lead
+				if a >= 0 and sorted(B[a:a + n]) == want:
+					return a
+				q = SB.find(sk, q + 1)
+		return -1
 
 	def _find(self, key):
 		"""Start of `key` in the document text. Viewers sometimes put a vowel sign one letter
@@ -852,6 +937,8 @@ class DocIndex:
 		p = B.find(key, self._hint)
 		if p < 0:
 			p = B.find(key)
+		if p < 0:
+			p = self._findSkel(key)
 		if p < 0 and len(key) >= 10:
 			n = len(key)
 			want = sorted(key)
@@ -907,6 +994,11 @@ class DocIndex:
 		if hit is not None:
 			self._hint = hit[1]
 			return hit[0]
+		if self.B.find(key) < 0:
+			dd = self._dropRepeats(text)
+			if dd != text:
+				text = dd
+				key = keyOf(text)
 		clean = cleanGluedTokens(text)
 		if clean != text:
 			res = self._tokens(clean)
@@ -923,23 +1015,52 @@ class DocIndex:
 		cache[text] = (res, self._hint)
 		return res
 
+	def _dropRepeats(self, text):
+		"""Viewers repeat text that a PDF draws twice for a bold look (PDFium does): 'नाम नाम'.
+		Drop a word run that follows itself when the document itself does not have it twice."""
+		toks = text.split()
+		n = len(toks)
+		if n < 2 or n > 80:
+			return text
+		B = self.B
+		changed = False
+		i = 0
+		while i < len(toks):
+			done = False
+			for L in range(min((len(toks) - i) // 2, 20), 0, -1):
+				a = toks[i:i + L]
+				if a != toks[i + L:i + 2 * L]:
+					continue
+				one = keyOf("".join(a))
+				if len(one) < 3 or (L == 1 and len(one) < 4):
+					continue
+				if B.find(one + one) < 0 and B.find(one) >= 0:
+					del toks[i + L:i + 2 * L]
+					changed = done = True
+					break
+			if not done:
+				i += 1
+		return " ".join(toks) if changed else text
+
 	def _lookup(self, text, key):
 		# 1. exactly what the viewer shows; 2. the viewer already shows the real text;
 		# 3. the same letters a little reordered; 4. word by word
-		B = self.B
-		p = B.find(key, self._hint)
-		if p < 0:
-			p = B.find(key)
+		p = self._bfind(key)
 		if p >= 0:
 			self._hint = p
 			return self._span(p, p + len(key))
-		if isDeva(key):
-			pf = self._findF(key)
+		deva = isDeva(key)
+		if deva:
+			pf = self._findF(key, tolerant=False)
 			if pf >= 0:
-				return self._spanF(pf, pf + len(key))
+				return self._spanF(pf, pf + len(key), extend=False)
 		p = self._find(key)
 		if p >= 0:
 			return self._span(p, p + len(key))
+		if deva:
+			pf = self._findF(key)
+			if pf >= 0:
+				return self._spanF(pf, pf + len(key))
 		return self._tokens(text)
 
 	def _span(self, a, b):
@@ -968,10 +1089,27 @@ class DocIndex:
 			amap = self._legacyMap(i)
 		if not amap or not aks:
 			return (fixed, True)
-		sel = amap[lo:hi]
-		if not sel:
+		if not amap[lo:hi]:
 			return ("", True)
-		return ("".join(aks[min(sel):max(sel) + 1]), True)
+		# each akshar belongs to the piece holding its first character, so pieces read one after
+		# the other (sayAll, NVDA's text chunks) never say an akshar twice
+		first = {}
+		for j, k in enumerate(amap):
+			if k not in first:
+				first[k] = j
+		own = []
+		for k in range(len(aks)):
+			j = first.get(k)
+			if j is None:
+				j = first.get(k - 1, 0) if k else 0
+				first[k] = j
+			if lo <= j < hi:
+				own.append(k)
+		if not own:
+			# nothing starts here (a single sign during character navigation): say its akshar
+			sel = amap[lo:hi]
+			return ("".join(aks[min(sel):max(sel) + 1]), True)
+		return ("".join(aks[min(own):max(own) + 1]), True)
 
 	def _legacyMap(self, i):
 		fixed, amap, enc, key = self.words[i]
