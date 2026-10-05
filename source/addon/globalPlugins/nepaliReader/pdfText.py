@@ -32,7 +32,7 @@ NUKTA = "़"
 REPH = "र्"
 DEP_SIGNS = set("ऺऻािीुूृॄॅॆेैॉॊोौॎॏॕॖॗॢॣऀँंः़")
 INDEPENDENT = set(chr(c) for c in range(0x0904, 0x0915)) | set("ॠॡॲॳॴॵॶॷ")
-INDEX_VERSION = 13
+INDEX_VERSION = 14
 INFER = True
 
 
@@ -1031,6 +1031,14 @@ class DocIndex:
 				if fk:
 					self._byKey.setdefault(fk, fixed)
 					self._byBag.setdefault("".join(sorted(fk)), fixed)
+				if "\xbf" in key:
+					kn = key.replace("\xbf", "'")
+					self._byKey.setdefault(kn, fixed)
+					self._byBag.setdefault("".join(sorted(kn)), fixed)
+				elif "'" in key:
+					kn = key.replace("'", "\xbf")
+					self._byKey.setdefault(kn, fixed)
+					self._byBag.setdefault("".join(sorted(kn)), fixed)
 		text = cleanGluedTokens(text)
 		rawToks = [t for t in re.split(r"\s+", text) if t]
 		toks = []
@@ -1067,6 +1075,9 @@ class DocIndex:
 				if not k:
 					continue
 				f = self._byKey.get(k) or self._byBag.get("".join(sorted(k)))
+				if f is None and ("\xbf" in k or "'" in k):
+					k_alt = k.replace("\xbf", "'") if "\xbf" in k else k.replace("'", "\xbf")
+					f = self._byKey.get(k_alt) or self._byBag.get("".join(sorted(k_alt)))
 				if f is not None:
 					out.append((f, True))
 					found += 1

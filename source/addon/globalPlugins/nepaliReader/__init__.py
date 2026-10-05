@@ -824,7 +824,12 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			if not piece:
 				continue
 			if not ok:
-				piece = devanagariRepair.repair(piece, broken=True) if devanagariRepair.hasDevanagari(piece) else piece
+				if devanagariRepair.hasDevanagari(piece):
+					piece = devanagariRepair.repair(piece, broken=True)
+				elif any(c.isascii() and c.isalpha() for c in piece) and not detector.isEnglishWord(detector._core(piece)):
+					cand = legacyFonts.convert(piece, "preeti")
+					if cand and (devanagariRepair.hasDevanagari(cand) and (neLexicon.isWord(cand.strip(".,:;!?()")) or detector.wordScore(piece, "preeti") >= 3.0)):
+						piece = cand
 			out.append(piece)
 		lead = text[: len(text) - len(text.lstrip())]
 		trail = text[len(text.rstrip()):]

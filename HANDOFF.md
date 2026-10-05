@@ -195,4 +195,21 @@ IMPORTANT NVDA facts learned the hard way:
   - Fixed fake-bold single-letter echoes before words (`प पयोग` -> `पयोग`, resolving `अख्तियार दु अख्तियार दु प प प पयोग` -> `अख्तियार दुरुपयोग`).
 * **Cache Invalidation**: Bumped `INDEX_VERSION = 13` in `pdfText.py`.
 
+## 2026-10-05 (Preeti Subscript U-Matra '\xbf' Fix, Quote Variant Normalization & Sentence Verb 5 Repair)
+* **Preeti Subscript U-Matra '\xbf' (`¿`) Fix**:
+  - In `legacyFonts.PREETI_MAP`, `\xbf` (`¿`, U+00BF) was mistakenly mapped to `"रु"`.
+  - In Preeti/Himalaya/Kantipur fonts, `?` (ASCII 63) is `"रु"`, whereas `\xbf` is the subscript `ु` (u-matra) glyph designed for consonants like `क`, `न्त`, `स`.
+  - Because of this erroneous mapping, `lgs¿~h` became `निकरुञ्ज`, `jGohGt¿` became `वन्यजन्तरु`, and `s¿ljwf` became `सरुविधा`.
+  - Fixed `PREETI_MAP["\xbf"] = "ु"`. Words now accurately convert to `निकुञ्ज`, `वन्यजन्तु`, and `सुविधा`.
+* **Quote and `\xbf` Variant Key Normalization**:
+  - When Chromium/Brave extracts text from PDF pages, it often normalizes glyph byte `\xbf` to standard ASCII quote `'` (`lgs'~h`, `jGohGt'`).
+  - In `pdfText.DocIndex._tokens`, both `\xbf` and `'` variants are indexed and cross-matched in `_byKey` and `_byBag`.
+  - In `__init__._indexText`, added fallback legacy word conversion for any unmatched piece with confident Preeti score/dictionary word.
+* **Typo '5' for Verb 'छ' at Sentence End**:
+  - In Preeti, unshifted key `5` is `छ`, while `%` is `५`. In royal enactments and legal clauses, typists typed `5` for `छ` (e.g. `यो ऐन बनाईबक्सेको ५ ।`).
+  - In `devanagariRepair.cleanShuffled`, added generic repair converting `[verb] ५ ।` to `[verb] छ ।` for participles/auxiliaries (`ेको|एको|ने|दा|छैन`).
+  - Added common dictionary word repairs: `महव` -> `महत्त्व`, `महवको` -> `महत्त्वको`, `महवराख्ने` -> `महत्त्व राख्ने`.
+* **Cache Invalidation**: Bumped `INDEX_VERSION = 14` in `pdfText.py`.
+
+
 

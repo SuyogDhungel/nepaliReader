@@ -169,6 +169,17 @@ def cleanShuffled(text):
 	# Fake-bold leading single-letter echoes before word: 'प पयोग' -> 'पयोग'
 	text = re.sub(r'\b([\u0904-\u0939])\s+(\1[\u0900-\u097f]+)\b', r'\2', text)
 
+	# Preeti digit 5 typo for verb 'छ' at end of sentences (e.g. बनाईबक्सेको ५ । -> बनाईबक्सेको छ ।)
+	text = re.sub(r'([क-ह][\u0900-\u097f]*(?:ेको|एको|ने|दा|छैन))\s+५\s*([।\.])', r'\1 छ \2', text)
+
+	# Common font/OCR corruptions:
+	text = re.sub(r'\bमहव\b', 'महत्त्व', text)
+	text = re.sub(r'\bमहवको\b', 'महत्त्वको', text)
+	text = re.sub(r'\bमहवराख्ने\b', 'महत्त्व राख्ने', text)
+	text = re.sub(r'\bनिकरुञ्ज\b', 'निकुञ्ज', text)
+	text = re.sub(r'\bवन्यजन्तरु\b', 'वन्यजन्तु', text)
+	text = re.sub(r'\bसरुविधा\b', 'सुविधा', text)
+
 	# 2. Restore dropped characters (e.g. unmapped Preeti ¿ -> रु / र) using the dictionary
 	if neLexicon.isLoaded():
 		def check_dropped_gap(m):
