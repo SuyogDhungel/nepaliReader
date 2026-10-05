@@ -98,7 +98,7 @@ PDF_APPS = {"acrord32", "acrobat", "foxitreader", "foxitpdfreader", "foxitphanto
 UNICODE_DEVANAGARI_FONTS = (
 	"mangal", "kalimati", "nirmala", "noto sans devanagari", "noto serif devanagari", "aparajita",
 	"kokila", "utsaah", "sanskrit text", "arial unicode", "lohit", "mukta", "hind", "annapurna",
-	"devanagari", "himalb", "kanchan", "madan",
+	"devanagari", "kanchan", "madan",
 )
 
 # characters that carry letters in Preeti / Kruti Dev (letters, digits and the symbol keys)
@@ -938,7 +938,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				cached = pdfLocate._isPdfUrl(url)
 				if not cached:
 					cached = self._isPdfViewerObj(obj)
-				if not cached and ".pdf" in title:
+				if not cached:
 					cached = bool(pdfLocate.findFromTitle(rawTitle, getattr(fg, "processID", None)))
 				self._pdfTabs.put(key, cached)
 			return cached

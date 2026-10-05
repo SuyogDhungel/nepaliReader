@@ -1093,12 +1093,15 @@ def _wordTexts(w):
 	shownText = "".join(shown)
 	if not keyOf(shownText):
 		return shownText, None, None, None
-	# a whole word in a legacy font: the converter
-	if len(segs) == 1 and segs[0][0].legacy:
-		enc = segs[0][0].legacy
-		raw = keyOf(shownText)
-		fixed = legacyFonts.convert(raw, enc) or raw
-		return shownText, fixed, None, enc
+	# a word in a legacy font (possibly with punctuation in a standard font like Times or Arial)
+	legacy_encs = {s[0].legacy for s in segs if s[0].legacy}
+	if len(legacy_encs) == 1:
+		non_legacy_text = "".join(t for s in segs if not s[0].legacy for c, t in s[1])
+		if not non_legacy_text or all(c in "()[]{}<>'\"“”‘’.,;:!?-_/\\•* " for c in non_legacy_text):
+			enc = next(iter(legacy_encs))
+			raw = keyOf(shownText)
+			fixed = legacyFonts.convert(raw, enc) or raw
+			return shownText, fixed, None, enc
 	toks = []      # (text, glyph number)
 	charGlyph = []  # for each shown (key) character: its glyph number
 	certain = True

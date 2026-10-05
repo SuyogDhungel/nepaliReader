@@ -210,18 +210,24 @@ def _extractPdfTitle(path):
 		if m:
 			raw = m.group(1)
 			val = re.sub(rb'\\([0-7]{1,3})', lambda mo: bytes([int(mo.group(1), 8)]), raw)
-			try:
-				t = val.decode("utf-16").strip()
-			except Exception:
+			if val.startswith((b'\xfe\xff', b'\xff\xfe')):
+				try:
+					t = val.decode("utf-16").strip()
+				except Exception:
+					t = val.decode("latin-1", "ignore").strip()
+			else:
 				t = val.decode("latin-1", "ignore").strip()
 			if t:
 				return t
 		m = re.search(rb'/Title\s*<([0-9a-fA-F]+)>', data)
 		if m:
 			val = bytes.fromhex(m.group(1).decode("ascii"))
-			try:
-				t = val.decode("utf-16").strip()
-			except Exception:
+			if val.startswith((b'\xfe\xff', b'\xff\xfe')):
+				try:
+					t = val.decode("utf-16").strip()
+				except Exception:
+					t = val.decode("latin-1", "ignore").strip()
+			else:
 				t = val.decode("latin-1", "ignore").strip()
 			if t:
 				return t
