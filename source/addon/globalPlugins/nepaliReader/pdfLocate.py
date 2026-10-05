@@ -307,13 +307,6 @@ def _findRecentPdfByTitle(title):
 			if sum(1 for w in clean_words if w in bn) >= 2:
 				return p
 
-	# 4. If viewing a PDF document and a file was downloaded very recently (last 30 minutes), link it
-	import time
-	now = time.time()
-	for mtime, p in candidates[:5]:
-		if now - mtime < 1800:
-			return p
-
 	return None
 
 

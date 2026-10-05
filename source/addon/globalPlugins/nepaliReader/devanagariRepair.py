@@ -150,9 +150,18 @@ def cleanShuffled(text):
 	text = re.sub(r'ऋ([\u0900-\u097f]+?)म्' + _BOUNDARY, r'“\1”', text)
 	# Preeti ´ (झ) recognized as ः (visarga) after म्: म्ः -> म्झ (e.g. सम्ःनु -> सम्झनु)
 	text = re.sub(r'म्ः', 'म्झ', text)
-	# Dropped रु from ¿
-	text = re.sub(r'\bदु\s*पयोग', 'दुरुपयोग', text)
-	text = re.sub(r'\bतु\s*न्त', 'तुरुन्त', text)
+	# 2. Restore dropped characters (e.g. unmapped Preeti ¿ -> रु / र) using the dictionary
+	if neLexicon.isLoaded():
+		def check_dropped_gap(m):
+			a, b = m.group(1), m.group(2)
+			if neLexicon.isWord(a) and neLexicon.isWord(b):
+				return m.group(0)
+			for ins in ("रु", "र"):
+				cand = a + ins + b
+				if neLexicon.isWord(cand):
+					return cand
+			return m.group(0)
+		text = re.sub(r'\b([\u0900-\u097f]{1,4})\s+([\u0900-\u097f]{2,8})\b', check_dropped_gap, text)
 
 	# 2. Leaked trailing syllables before words: 'ना प्रस्तावना' -> 'प्रस्तावना', 'द परिच्छेद' -> 'परिच्छेद'
 	def fix_leak(m):
