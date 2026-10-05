@@ -153,11 +153,12 @@ def decide(text, encoding="preeti", context=False):
 		elif sc <= ENGLISH_THRESHOLD:
 			english += 1
 	total = legacy + english
+	_BULLETS_ARROWS = frozenset("•‣⁃▪▫○●★☆✓✔►◄→←↑↓↔⇒⇐")
 	if total == 0:
-		hasScorable = any(sc is not None for _, sc in scored)
-		if context and (hasScorable or any(not t.isspace() for t, _ in scored if t)):
-			# ambiguous fragment (e.g. a single key like "f" or "5") inside a legacy document
-			return [(t, bool(t) and not t.isspace() and not _URLISH.search(t)) for t, _ in scored]
+		hasScorable = any(sc is not None and sc > 0 for _, sc in scored)
+		if context and hasScorable:
+			# ambiguous fragment inside a legacy document: only convert if it has ASCII letters and is not a bullet/arrow
+			return [(t, bool(t) and any(c.isascii() and c.isalpha() for c in t) and not any(c in _BULLETS_ARROWS for c in t) and not _URLISH.search(t)) for t, _ in scored]
 		return [(t, False) for t, _ in scored]
 	if context:
 		wholeLine = legacy >= english and not any(
@@ -171,12 +172,15 @@ def decide(text, encoding="preeti", context=False):
 	for t, sc in scored:
 		if not t or t.isspace():
 			result.append((t, False))
+		elif any(c in _BULLETS_ARROWS for c in t):
+			result.append((t, False))
 		elif wholeLine:
 			# keep words that clearly read as English/romanised ("roshan", "Office") inside a legacy line
 			core = _core(t)
 			sig = _KRUTI_SIGNATURE if encoding == "krutidev" else _PREETI_SIGNATURE
 			englishLooking = sc is not None and sc <= ENGLISH_THRESHOLD * 4 and len(core) >= 3 and not sig.search(core)
-			result.append((t, not _URLISH.search(t) and not englishLooking))
+			hasLetters = any(c.isascii() and c.isalpha() for c in t)
+			result.append((t, not _URLISH.search(t) and not englishLooking and (hasLetters or not t.replace(".", "").isdigit())))
 		else:
 			result.append((t, sc is not None and (
 				(legacy > english and _strongAlone(t, sc, encoding))

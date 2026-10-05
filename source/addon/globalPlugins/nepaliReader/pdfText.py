@@ -19,6 +19,10 @@ from . import glyphRefs
 from . import legacyFonts
 from . import pdfReader
 from . import sfnt
+try:
+	from . import devanagariRepair
+except ImportError:
+	import devanagariRepair
 
 VIRAMA = "्"
 I_SIGN = "ि"
@@ -26,7 +30,7 @@ NUKTA = "़"
 REPH = "र्"
 DEP_SIGNS = set("ऺऻािीुूृॄॅॆेैॉॊोौॎॏॕॖॗॢॣऀँंः़")
 INDEPENDENT = set(chr(c) for c in range(0x0904, 0x0915)) | set("ॠॡॲॳॴॵॶॷ")
-INDEX_VERSION = 11
+INDEX_VERSION = 12
 INFER = True
 
 
@@ -769,9 +773,46 @@ class DocIndex:
 		p = F.find(key, max(0, start))
 		if p < 0 and start:
 			p = F.find(key)
-		return p
+		if p >= 0:
+			return p
+		# Anchor and overlap search in F (tolerant to dropped/extra characters or bullets from viewers)
+		n = len(key)
+		if n >= 6:
+			from collections import Counter
+			cw = Counter(key)
+			best = (0, -1)
+			for a in sorted({0, n // 4, n // 2, (3 * n) // 4, max(0, n - 8)}):
+				chunk = key[a:a + 6]
+				if len(chunk) < 5:
+					continue
+				for s in (start, 0):
+					q = F.find(chunk, s)
+					while q >= 0:
+						cand = max(0, q - a)
+						score = sum((cw & Counter(F[cand:cand + n + 6])).values())
+						if score > best[0]:
+							best = (score, cand)
+						q = F.find(chunk, q + 1)
+						if q > cand + 500:
+							break
+					if best[0] >= 0.8 * n:
+						break
+				if best[0] >= 0.8 * n:
+					break
+			if best[0] >= 0.75 * n:
+				return best[1]
+		return -1
 
 	def _spanF(self, a, b):
+		# Extend b to the full boundary of the last word covering b so trailing words are never cut in half
+		if getattr(self, "fStarts", None):
+			i_b = bisect.bisect_right(self.fStarts, b) - 1
+			if 0 <= i_b < len(self.words):
+				s_b = self.fStarts[i_b]
+				wtext_b = self.words[i_b][0] if self.words[i_b][0] is not None else self.words[i_b][3]
+				wlen_b = len(keyOf(wtext_b))
+				if b < s_b + wlen_b:
+					b = s_b + wlen_b
 		out = []
 		i = bisect.bisect_right(self.fStarts, a) - 1
 		n = len(self.words)
@@ -864,6 +905,12 @@ class DocIndex:
 			self._hint = hit[1]
 			return hit[0]
 		res = self._lookup(text, key)
+		if res is None and isDeva(text):
+			clean = devanagariRepair.cleanShuffled(text)
+			if clean != text:
+				ckey = keyOf(clean)
+				if ckey:
+					res = self._lookup(clean, ckey)
 		if len(cache) > 3000:
 			cache.clear()
 		cache[text] = (res, self._hint)
@@ -973,6 +1020,10 @@ class DocIndex:
 					continue
 				self._byKey.setdefault(key, fixed)
 				self._byBag.setdefault("".join(sorted(key)), fixed)
+				fk = keyOf(fixed)
+				if fk:
+					self._byKey.setdefault(fk, fixed)
+					self._byBag.setdefault("".join(sorted(fk)), fixed)
 		toks = [t for t in re.split(r"\s+", text) if t]
 		out = []
 		found = 0

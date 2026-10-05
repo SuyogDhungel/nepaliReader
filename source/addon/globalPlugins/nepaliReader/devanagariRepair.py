@@ -129,6 +129,78 @@ def wordRate(text):
 	return sum(1 for w in ws if neLexicon.isWord(w)) / float(len(ws))
 
 
+_BOUNDARY = r'(?=\s|[।॥,.;:!?()\[\]{}"\'\-\–\—]|$)'
+_DEVA_LETTERS = r'[\u0904-\u0939\u0958-\u095f\u093e-\u094d]'
+
+
+def cleanShuffled(text):
+	"""Fixes viewer / PDFium artifacts: leaked syllables, OCR misrecognitions, and fake-bold repeats."""
+	if not _DEVANAGARI.search(text):
+		return text
+	# 0. Deduplicate consecutive identical words / numbers
+	words = text.split()
+	deduped = []
+	for w in words:
+		if not deduped or w != deduped[-1]:
+			deduped.append(w)
+	text = " ".join(deduped)
+
+	# 1. OCR confusions from Preeti glyphs
+	# Preeti quotes æ and Æ recognized as ऋ and म्: ऋ...म् -> “...”
+	text = re.sub(r'ऋ([\u0900-\u097f]+?)म्' + _BOUNDARY, r'“\1”', text)
+	# Preeti ´ (झ) recognized as ः (visarga) after म्: म्ः -> म्झ (e.g. सम्ःनु -> सम्झनु)
+	text = re.sub(r'म्ः', 'म्झ', text)
+	# Dropped रु from ¿
+	text = re.sub(r'\bदु\s*पयोग', 'दुरुपयोग', text)
+	text = re.sub(r'\bतु\s*न्त', 'तुरुन्त', text)
+
+	# 2. Leaked trailing syllables before words: 'ना प्रस्तावना' -> 'प्रस्तावना', 'द परिच्छेद' -> 'परिच्छेद'
+	def fix_leak(m):
+		pre, word = m.group(1), m.group(2)
+		if word.endswith(pre) and len(word) > len(pre):
+			return word
+		return m.group(0)
+	text = re.sub(f'({_DEVA_LETTERS}{{1,3}})\\s+({_DEVA_LETTERS}{{3,}})', fix_leak, text)
+
+	# Leaked glued syllable at start of word: 'षापरिभाषा' -> 'परिभाषा'
+	def fix_glued_leak(m):
+		w = m.group(0)
+		for L in (2, 3):
+			if L < len(w):
+				pre = w[:L]
+				rest = w[L:]
+				if rest.endswith(pre) and any(c in "\u093e\u093f\u0940\u0941\u0942\u0947\u0948\u094b\u094c" for c in pre):
+					return rest
+		return w
+	text = re.sub(f'{_DEVA_LETTERS}{{4,}}', fix_glued_leak, text)
+
+	# 3. Glued repeated word: 'परिभाषापरिभाषा' -> 'परिभाषा'
+	def fix_glued_rep(m):
+		w = m.group(0)
+		half = len(w) // 2
+		if len(w) >= 6 and len(w) % 2 == 0 and w[:half] == w[half:]:
+			return w[:half]
+		return w
+	text = re.sub(f'{_DEVA_LETTERS}{{6,}}', fix_glued_rep, text)
+
+	# Repeated punctuation: '––' -> '–'
+	text = re.sub(r'([–—\-])\1+', r'\1', text)
+
+	# 4. Repeated phrases: 'A B C A B C' -> 'A B C'
+	ws = text.split()
+	n = len(ws)
+	for k in range(n // 2, 1, -1):
+		if ws[:k] == ws[k:2*k]:
+			rem = ws[2*k:]
+			if len(rem) <= 1:
+				text = ' '.join(ws[:k])
+				break
+			else:
+				text = ' '.join(ws[:k] + rem)
+				break
+	return text.strip()
+
+
 def repair(text, broken=None):
 	"""Repair `text`. `broken`: True when the document is already known to have a broken
 	text layer (the caller remembers this per window); None = decide from this text."""
@@ -136,6 +208,7 @@ def repair(text, broken=None):
 		return text
 	if broken is None:
 		broken = isBroken(text)
+	text = cleanShuffled(text)
 	text = _JUNK.sub("", text)
 	if broken:
 		text = _GLUED_I.sub(lambda m: m.group(1) + "\u093f", text)

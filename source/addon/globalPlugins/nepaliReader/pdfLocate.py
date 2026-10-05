@@ -51,6 +51,12 @@ def _urlFromObject(obj):
 		except Exception:
 			pass
 		try:
+			val = getattr(o, "value", None)
+			if val and _isPdfUrl(val):
+				return val
+		except Exception:
+			pass
+		try:
 			ia = getattr(o, "IAccessibleObject", None)
 			if ia is not None:
 				v = ia.accValue(getattr(o, "IAccessibleChildID", 0))
@@ -82,6 +88,17 @@ def _pathFromUrl(url):
 			p = "\\\\" + host + p.replace("/", "\\")
 		return os.path.normpath(p)
 	if u.lower().startswith(("http://", "https://")):
+		# If the file was downloaded to Downloads, Desktop or Documents, use the local copy directly!
+		try:
+			fn = os.path.basename(urllib.parse.urlparse(u).path)
+			if fn.lower().endswith(".pdf"):
+				home = os.path.expanduser("~")
+				for folder in ("Downloads", "Desktop", "Documents"):
+					local_f = os.path.join(home, folder, fn)
+					if os.path.isfile(local_f) and os.path.getsize(local_f) > 1024:
+						return local_f
+		except Exception:
+			pass
 		return u
 	return None
 
@@ -184,6 +201,35 @@ def _searchFolders(name, limit=40000):
 	return None
 
 
+def _extractPdfTitle(path):
+	"""Extract metadata /Title from a PDF file (supporting plain text, octal-escaped UTF-16, and hex strings)."""
+	try:
+		with open(path, "rb") as f:
+			data = f.read(5 * 1024 * 1024)
+		m = re.search(rb'/Title\s*\((.*?)\)', data)
+		if m:
+			raw = m.group(1)
+			val = re.sub(rb'\\([0-7]{1,3})', lambda mo: bytes([int(mo.group(1), 8)]), raw)
+			try:
+				t = val.decode("utf-16").strip()
+			except Exception:
+				t = val.decode("latin-1", "ignore").strip()
+			if t:
+				return t
+		m = re.search(rb'/Title\s*<([0-9a-fA-F]+)>', data)
+		if m:
+			val = bytes.fromhex(m.group(1).decode("ascii"))
+			try:
+				t = val.decode("utf-16").strip()
+			except Exception:
+				t = val.decode("latin-1", "ignore").strip()
+			if t:
+				return t
+	except Exception:
+		pass
+	return None
+
+
 def _findRecentPdfByTitle(title):
 	"""Tries to find a recent PDF file matching a window title that doesn't end in .pdf."""
 	if not title:
@@ -212,6 +258,15 @@ def _findRecentPdfByTitle(title):
 		except OSError:
 			pass
 	candidates.sort(reverse=True)
+
+	# 0. Match PDF metadata /Title in recent candidate PDFs
+	clean_low = clean.lower()
+	for _mtime, p in candidates[:25]:
+		meta_title = _extractPdfTitle(p)
+		if meta_title:
+			m_low = meta_title.lower()
+			if clean_low == m_low or clean_low in m_low or m_low in clean_low:
+				return p
 
 	# 1. Match title byte substring in recent PDFs (first 5MB)
 	raw_b = clean.encode("latin-1", "ignore")[:25]
@@ -251,6 +306,13 @@ def _findRecentPdfByTitle(title):
 			bn = os.path.basename(p).lower()
 			if sum(1 for w in clean_words if w in bn) >= 2:
 				return p
+
+	# 4. If viewing a PDF document and a file was downloaded very recently (last 30 minutes), link it
+	import time
+	now = time.time()
+	for mtime, p in candidates[:5]:
+		if now - mtime < 1800:
+			return p
 
 	return None
 
