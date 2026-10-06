@@ -15,7 +15,7 @@
 
 Screen reader users in Nepal regularly encounter two major barriers when reading documents:
 
-1. **Legacy Devanagari Fonts**: Official government acts, gazettes, legal notices, newspapers, and school materials are frequently typed in legacy fonts like **Preeti**, **Kantipur**, **Sagarmatha**, **Fontasy Himali**, and **PCS Nepali** (or Hindi **Kruti Dev**). Screen readers see these fonts as plain English characters, reading meaningless gibberish (such as reading `"g]kfn"` instead of `"नेपाल"`).
+1. **Legacy Devanagari Fonts**: Official government acts, gazettes, legal notices, newspapers, and school materials are frequently typed in legacy fonts like **Preeti**, **Kantipur**, **Sagarmatha**, **Fontasy Himali**, and **PCS Nepali**. Screen readers see these fonts as plain English characters, reading meaningless gibberish (such as reading `"g]kfn"` instead of `"नेपाल"`).
 2. **Damaged PDF Text Layers**: When government offices and organizations export documents to PDF from Microsoft Word ("Save as PDF"), InDesign, or web print tools, the underlying Devanagari Unicode text layer becomes heavily jumbled. Matras appear out of order, letters are missing, and conjuncts are broken.
 3. **Silent Numbers in eSpeak**: Screen reader synthesizers like eSpeak often skip or remain silent on Devanagari numerals (`०, १, २, ३, ४, ५, ६, ७, ८, ९`), making section numbers, act years, and dates unreadable.
 
@@ -68,7 +68,7 @@ You can control all features directly through the NVDA menu using your keyboard:
 | **`Ctrl + C`** | **Smart Copy**: While Nepali mode is active, copying selected text automatically places clean, standard Unicode Devanagari onto your clipboard (ready to paste into Word, Facebook, or messaging apps). |
 | **`NVDA + Alt + U`** | **Convert and Read**: Converts whatever text is currently selected (or on the clipboard) to Unicode and speaks it aloud. |
 | **`NVDA + Alt + P`** | **Legacy Font Mode**: Cycles font conversion between *Automatic* (default), *Always Convert*, and *Off*. |
-| **`NVDA + Alt + Shift + P`** | **Default Font Family**: Switches the default legacy font between Preeti, Kantipur, Sagarmatha, Himali, PCS, and Kruti Dev. |
+| **`NVDA + Alt + Shift + P`** | **Default Font Family**: Switches the default legacy font between Preeti, Kantipur, Sagarmatha, Himali, and PCS. |
 
 ---
 
@@ -95,33 +95,37 @@ If any shortcut conflicts with another add-on or if you prefer different keys, y
 ## 📑 Reading PDFs and Documents
 
 * **Up / Down Arrow**: Reads line by line. Scrambled government PDFs are rebuilt into clear Nepali sentences.
-* **Left / Right Arrow**: Moves character by character. Speaks full syllables accurately (e.g. `कि`, `र्मा`, `क्ष`, `ला`, `गू`).
+* **Left / Right Arrow**: Moves character by character. Accurately speaks individual characters and vowel signs without repetition.
 * **Ctrl + Left / Right Arrow**: Moves word by word through real Devanagari words.
 * **Shift + Arrows**: Selects text accurately without broken characters.
 * **Numbers & Dates**: Dates like `२०७५` and numbers like `१.`, `(१)`, `२३` are announced in spoken Nepali via eSpeak.
 
 ---
 
-## 🌐 Hindi Support Confirmation
-
-Yes, **Nepali Reader also supports Hindi**:
-* **Kruti Dev Fonts**: Text written in Kruti Dev (the standard Hindi typewriter font) is converted to Hindi Devanagari and spoken using a Hindi voice.
-
----
-
 ## 📜 Changelog
 
-### Version 1.1.2 (Current Stable Release)
-* **Selective Delta Announcements**: Fixed selection speech announcement so ONLY newly selected/unselected characters, words, or lines are spoken instead of repeating the entire selection from top to bottom.
+### Version 1.1.4 (Current Stable Release)
+* **Double Character Reading Elimination**: Character navigation (`Left/Right Arrow`) speaks individual characters and vowel signs cleanly without repeating syllables twice.
+* **Preeti Clause Brackets & 9/0 Key Resolution**: Parenthesized words and legal clauses (e.g. `(s)` -> `(क)`, `(v)` -> `(ख)`, `(lzIff)` -> `(शिक्षा)`, `(!)` -> `(१)`, `9s0` -> `(क)`) accurately preserve outer parentheses rather than turning into digits `९...०` or `ढकण्`, while genuine multi-digit Preeti numbers (`@)@(` -> `२०२९`, `@)` -> `२०`) remain numbers.
+* **Native Unicode Selection & Copying**: Preserves native Devanagari text and clipboard formats on `Ctrl+C`, `Ctrl+A`, `Shift+Arrows`, and `Ctrl+Shift+Arrows` in standard applications (Word, Notepad, Chrome) without unintended conversion.
+* **Universal Script & Symbol Protection**: Arabic numbers and decimals (`8848.86`, `8516`, `100%`), math symbols, emojis, bullets (`•`, `*`, `-`), and stars (`★`) are strictly protected from false legacy conversion.
+* **Document Language Dominance (>=20% Rule)**: If >=20% of observed words in a document are Unicode Devanagari, the context is locked to Unicode so English text, numbers, and symbols are never converted as Preeti unless explicitly tagged by font name.
+* **Startup Guidance & Toggle Reminders**: Clear user notifications on startup and on toggle (`NVDA+Alt+N`) advising users to keep Nepali mode OFF during English typing or system menus and ON when reading Nepali documents.
+
+### Version 1.1.3
+* Startup announcement and settings panel tip recommending users keep Nepali mode OFF (`NVDA + Alt + N`) during English typing or system menus and ON when reading Nepali documents.
+* Streamlined distribution package size to 2.99 MB.
+
+### Version 1.1.2
+* **Selective Delta Announcements**: Fixed selection speech announcement so ONLY newly selected/unselected text is spoken instead of repeating the entire selection from top to bottom.
 * **Typo Repairs & Normalization**: Added automatic correction for Preeti typewriter typos (`dxj` -> `महत्त्व`, `महवको` -> `महत्त्वको`, `महवराख्ने` -> `महत्त्व राख्ने`).
 * **Line-Wrap Artifact Removal**: Removed trailing multi-space artifacts and orphan hyphenated syllables at PDF line breaks.
 * **Laptop Rollover Fix**: Full support for `NVDA + Alt + N` as a conflict-free toggle gesture for laptop keyboard layouts.
 * **NVDA Store Compatibility**: Fully validated for stable NVDA 2024.1 through 2026.2.
 
 ### Version 1.0.0 (Official Initial Release)
-* Universal automatic conversion for Preeti, Kantipur, Sagarmatha, Fontasy Himali, PCS Nepali, and Kruti Dev.
-* Deep TrueType glyph reconstruction for broken Devanagari PDFs from Word, InDesign, Chrome, and LibreOffice.
-* Syllable-accurate character navigation (`Left/Right Arrow`) with exact akshara boundaries.
+* Universal automatic conversion for Preeti, Kantipur, Sagarmatha, Fontasy Himali, and PCS Nepali fonts.
+* Deep TrueType glyph reconstruction for broken text-based Devanagari PDFs from Word, InDesign, Chrome, and LibreOffice.
 * Automatic Nepali language tagging for eSpeak Devanagari numeral pronunciation.
 * Smart clipboard copy (`Ctrl + C`) that converts legacy and PDF text directly to standard Unicode.
 * Full NVDA menu and custom input gesture integration.
@@ -137,4 +141,4 @@ Distributed under the **GNU General Public License v2.0 (GPL-2.0)**. See [LICENS
 * **Project**: Nepali Reader for NVDA
 * **GitHub Repository**: [https://github.com/SuyogDhungel/nepaliReader](https://github.com/SuyogDhungel/nepaliReader)
 * **Feedback & Issues**: Please report issues or suggest improvements by opening an [Issue](https://github.com/SuyogDhungel/nepaliReader/issues) on GitHub.
-* **Tags**: `nepali`, `nvda`, `nvda-addon`, `preeti-font`, `screen-reader`, `accessibility`, `devanagari`, `kantipur-font`, `kruti-dev`, `nepali-ocr`
+* **Tags**: `nepali`, `nvda`, `nvda-addon`, `preeti-font`, `screen-reader`, `accessibility`, `devanagari`, `kantipur-font`
