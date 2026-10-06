@@ -1,13 +1,13 @@
 # Nepali Reader for NVDA
 
-[![Download Add-on](https://img.shields.io/badge/Download-nepaliReader--1.1.2.nvda--addon-brightgreen?style=for-the-badge&logo=nvda)](https://github.com/SuyogDhungel/nepaliReader/releases/download/v1.1.2/nepaliReader-1.1.2.nvda-addon)
+[![Download Add-on](https://img.shields.io/badge/Download-nepaliReader--1.1.4.nvda--addon-brightgreen?style=for-the-badge&logo=nvda)](https://github.com/SuyogDhungel/nepaliReader/releases/download/v1.1.4/nepaliReader-1.1.4.nvda-addon)
 [![License: GPL v2](https://img.shields.io/badge/License-GPL%20v2-blue.svg)](LICENSE)
 [![NVDA Compatibility](https://img.shields.io/badge/NVDA-2024.1%20to%202026.2-purple.svg)](https://www.nvaccess.org/)
 
 **Nepali Reader** is a free, open-source NVDA screen reader add-on created to solve the long-standing Devanagari reading issues faced by blind and visually impaired computer users in Nepal.
 
 > [!TIP]
-> **Recommendation**: Keep Nepali Mode OFF (`NVDA + Alt + N`) when working in English documents, browsing English websites, or programming. Toggle it ON when reading Nepali documents, gazettes, or PDFs. This ensures English abbreviations and symbols are pronounced normally while Nepali documents read cleanly.
+> **Recommendation**: Keep Nepali Mode OFF (`NVDA + Alt + N`) when working in English documents, browsing English websites, or programming. Toggle it ON when reading Nepali documents, gazettes, or PDFs.
 
 ---
 
@@ -26,8 +26,8 @@ Screen reader users in Nepal regularly encounter two major barriers when reading
 ## 📥 How to Download and Install
 
 1. Download the add-on file:
-   👉 [**Click here to download nepaliReader-1.1.3.nvda-addon**](https://github.com/SuyogDhungel/nepaliReader/releases/download/v1.1.3/nepaliReader-1.1.3.nvda-addon)
-2. Once downloaded, open your **Downloads** folder and press **Enter** on `nepaliReader-1.1.3.nvda-addon`.
+   👉 [**Click here to download nepaliReader-1.1.4.nvda-addon**](https://github.com/SuyogDhungel/nepaliReader/releases/download/v1.1.4/nepaliReader-1.1.4.nvda-addon)
+2. Once downloaded, open your **Downloads** folder and press **Enter** on `nepaliReader-1.1.4.nvda-addon`.
 3. NVDA will ask: *"Are you sure you want to install this add-on?"* — Press **Yes** (`Alt + Y`).
 4. When prompted to restart NVDA, select **Yes**.
 5. That is all! Nepali Reader activates automatically upon startup.
@@ -106,7 +106,6 @@ If any shortcut conflicts with another add-on or if you prefer different keys, y
 
 Yes, **Nepali Reader also supports Hindi**:
 * **Kruti Dev Fonts**: Text written in Kruti Dev (the standard Hindi typewriter font) is converted to Hindi Devanagari and spoken using a Hindi voice.
-* **Offline OCR**: The built-in offline OCR includes complete Hindi recognition data (`hin.traineddata`).
 
 ---
 
@@ -125,7 +124,6 @@ Yes, **Nepali Reader also supports Hindi**:
 * Syllable-accurate character navigation (`Left/Right Arrow`) with exact akshara boundaries.
 * Automatic Nepali language tagging for eSpeak Devanagari numeral pronunciation.
 * Smart clipboard copy (`Ctrl + C`) that converts legacy and PDF text directly to standard Unicode.
-* Built-in offline OCR for Nepali, Hindi, and English (`NVDA + Alt + O`).
 * Full NVDA menu and custom input gesture integration.
 
 ---

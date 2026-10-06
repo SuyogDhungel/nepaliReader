@@ -155,6 +155,18 @@ def _strongAlone(token, sc, encoding):
 	return sc >= STRONG_WORD and len(core) >= 4 and not core.isupper()
 
 
+def isNonLegacySymbolOrEmoji(t):
+	if not t:
+		return False
+	if any(ord(c) > 255 and not (0x0900 <= ord(c) <= 0x097F) for c in t):
+		return True
+	if any(c in _BULLET_SYMS for c in t):
+		return True
+	if t in _STANDALONE_BULLET:
+		return True
+	return False
+
+
 def decide(text, encoding="preeti", context=False):
 	"""Return a list of (token, isLegacy) covering `text` (whitespace tokens included, never legacy).
 
@@ -187,15 +199,13 @@ def decide(text, encoding="preeti", context=False):
 		if sc >= WORD_THRESHOLD:
 			legacy += 1
 		elif sc <= ENGLISH_THRESHOLD:
-			if isEnglishWord(core) or (len(core) >= 3 and sc <= -3.0):
-				english += 1
+			english += 1
 	total = legacy + english
-	_BULLETS_ARROWS = frozenset(_BULLET_SYMS)
 	if total == 0:
 		hasScorable = any(sc is not None and sc > 0 for _, sc in scored)
 		if context and hasScorable:
-			# ambiguous fragment inside a legacy document: only convert if it has ASCII letters and is not a bullet/arrow
-			return [(t, bool(t) and any(c.isascii() and c.isalpha() for c in t) and not any(c in _BULLETS_ARROWS for c in t) and not _URLISH.search(t)) for t, _ in scored]
+			# ambiguous fragment inside a legacy document: only convert if it has ASCII letters and is not a bullet/arrow/emoji/number
+			return [(t, bool(t) and any(c.isascii() and c.isalpha() for c in t) and not isNonLegacySymbolOrEmoji(t) and not _NUM_TOKEN.match(t.strip(_STRIP)) and not _URLISH.search(t)) for t, _ in scored]
 		return [(t, False) for t, _ in scored]
 	if context and not hasDeva:
 		wholeLine = legacy >= english and not any(
@@ -209,23 +219,27 @@ def decide(text, encoding="preeti", context=False):
 		wholeLine = False
 	result = []
 	for t, sc in scored:
+		core = _core(t)
 		if not t or t.isspace() or any("\u0900" <= c <= "\u097f" for c in t):
 			result.append((t, False))
-		elif any(c in _BULLETS_ARROWS for c in t):
+		elif isNonLegacySymbolOrEmoji(t) or isNonLegacySymbolOrEmoji(core):
+			result.append((t, False))
+		elif _NUM_TOKEN.match(core) or _NUM_TOKEN.match(t):
 			result.append((t, False))
 		elif wholeLine:
 			# keep words that clearly read as English/romanised ("roshan", "Office") inside a legacy line
-			core = _core(t)
 			sig = _KRUTI_SIGNATURE if encoding == "krutidev" else _PREETI_SIGNATURE
+			# short dictionary words are often Preeti too (eft भात, ag बन): inside a legacy line
+			# only longer English words, or words that score clearly English, are kept
 			englishLooking = (
-				(isEnglishWord(core) or (sc is not None and sc <= -10.0))
+				((sc is not None and sc <= ENGLISH_THRESHOLD * 4) or (isEnglishWord(core) and len(core) >= 5))
 				and len(core) >= 3
 				and not sig.search(core)
 			)
 			hasLetters = any(c.isascii() and c.isalpha() for c in t)
 			result.append((t, not _URLISH.search(t) and not englishLooking and (hasLetters or not t.replace(".", "").isdigit())))
 		else:
-			isBulletPrefix = len(core) <= 2 and t[-1:] in "_).-/" and any(c.isalpha() for c in core) and legacy > 0
+			isBulletPrefix = len(core) == 1 and core.islower() and t[-1:] in "_).-/" and legacy > 0
 			result.append((t, bool(
 				isBulletPrefix
 				or (sc is not None and (
@@ -294,10 +308,10 @@ def forceDecide(text, protectEnglish=True):
 		if _PREETI_LIST_TOKEN.match(t):
 			out.append((t, True))
 			continue
-		if _NUM_TOKEN.match(t) or _NUM_TOKEN.match(core):
+		if isNonLegacySymbolOrEmoji(t) or isNonLegacySymbolOrEmoji(core) or t in _STANDALONE_BULLET or core in _STANDALONE_BULLET:
 			out.append((t, False))
 			continue
-		if t in _STANDALONE_BULLET or core in _STANDALONE_BULLET:
+		if _NUM_TOKEN.match(core) or _NUM_TOKEN.match(t):
 			out.append((t, False))
 			continue
 		keep = _URLISH.search(t) or (protectEnglish and core.lower() in COMMON_ENGLISH and len(core) > 2)

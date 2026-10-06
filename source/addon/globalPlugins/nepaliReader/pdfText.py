@@ -33,7 +33,7 @@ NUKTA = "़"
 REPH = "र्"
 DEP_SIGNS = set("ऺऻािीुूृॄॅॆेैॉॊोौॎॏॕॖॗॢॣऀँंः़")
 INDEPENDENT = set(chr(c) for c in range(0x0904, 0x0915)) | set("ॠॡॲॳॴॵॶॷ")
-INDEX_VERSION = 15
+INDEX_VERSION = 16
 INFER = True
 
 
@@ -150,15 +150,22 @@ _NOTMARK = re.compile("[^\u0900-\u0903\u093a-\u094f\u0951-\u0957\u0962\u0963]")
 
 
 def keyOf(s):
+	"""The letters of a text without spaces/joiners. It keeps the characters as they are,
+	because legacy-font words are converted from it ('¿' रू and '‘' are different Preeti keys)."""
 	if not s:
 		return ""
-	# Normalize typographical variants between PDF font stream and viewer extraction:
-	# Preeti short u (ु) glyph questiondown (\xbf, ¿) -> ASCII apostrophe (')
-	# Curly quotes and typographical dashes:
-	s = s.replace("\xbf", "'").replace("\u2018", "'").replace("\u2019", "'")
-	s = s.replace("\u201c", '"').replace("\u201d", '"')
-	s = s.replace("\u2013", "-").replace("\u2014", "-")
 	return _DROP.sub("", s)
+
+
+# Viewers differ in how they report some glyphs (Brave/PDFium give ' for ¿, straight quotes for
+# curly ones, - for dashes). B and F are searched with these folded, one character for one, so
+# positions stay the same; the stored keys and the conversion keep the original characters.
+_NORM = str.maketrans({"\xbf": "'", "\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"',
+	"\u2013": "-", "\u2014": "-"})
+
+
+def matchKey(s):
+	return keyOf(s).translate(_NORM)
 
 
 # ---------------------------------------------------------------- fonts
@@ -624,12 +631,14 @@ class Word:
 
 
 def _isSpace(font, code, span=None):
-	if span is not None:
-		return not span[1].strip() if span[1] else False
+	if span is not None and span[1] and any(c.isprintable() and not c.isspace() for c in span[1]):
+		return False
+	if span is not None and span[1]:
+		return True  # ActualText of spaces or control characters only (some producers write "\x03")
 	tr = font.truth.get(code)
-	if tr:
+	if tr and tr.strip() and tr.isprintable():
 		# the glyph's real letters win: Word often maps letters like ज/ह to a space in its text table
-		return tr.isspace()
+		return False
 	t = font.text(code)
 	if t:
 		return not t.strip()
@@ -676,13 +685,17 @@ def _words(glyphs, page):
 			lineV = v
 			endU = u
 			pend = None
+		elif blank and adv <= 0.05 * size:
+			# a space glyph that does not move the pen (InDesign draws runs of them) is no break;
+			# a real gap after it is still found by the distance test
+			pass
 		elif blank:
 			# decide at the next glyph: a "space" that the next letter is drawn over is an
 			# invisible joiner (Word puts ZWJ/ZWNJ as a space glyph), not a word break
 			if pend is None:
 				pend = (u, adv)
 		elif pend is not None:
-			if u >= pend[0] + 0.5 * pend[1] or pend[1] <= 0.05 * size or is_bullet or prev_is_bullet:
+			if u >= pend[0] + 0.5 * pend[1] or is_bullet or prev_is_bullet:
 				if cur.glyphs:
 					words.append(cur)
 					cur = Word((page, False))
@@ -790,7 +803,7 @@ class DocIndex:
 			if fixed is not None and fixed != shown:
 				self.fixedWords += 1
 			self.words.append((fixed, amap, enc, key))
-			B.append(key)
+			B.append(key.translate(_NORM))
 			pos += len(key)
 		self.B = "".join(B)
 		self._buildF()
@@ -803,7 +816,7 @@ class DocIndex:
 		for fixed, amap, enc, key in self.words:
 			fk = keyOf(fixed) if fixed is not None else key
 			fStarts.append(pos)
-			F.append(fk)
+			F.append(fk.translate(_NORM))
 			pos += len(fk)
 		self.F = "".join(F)
 		self.fStarts = fStarts
@@ -1002,7 +1015,7 @@ class DocIndex:
 	def lookup(self, text):
 		"""Real text for what the viewer gave: list of (piece, certain) or None if unknown here.
 		Pieces are words; uncertain pieces are the viewer's own text (to be repaired by the caller)."""
-		key = keyOf(text)
+		key = matchKey(text)
 		if not key:
 			return None
 		cache = self.__dict__.setdefault("_lookupCache", {})
@@ -1014,7 +1027,7 @@ class DocIndex:
 			dd = self._dropRepeats(text)
 			if dd != text:
 				text = dd
-				key = keyOf(text)
+				key = matchKey(text)
 		clean = cleanGluedTokens(text)
 		if clean != text:
 			res = self._tokens(clean)
@@ -1023,7 +1036,7 @@ class DocIndex:
 			if res is None and isDeva(text):
 				clean_shuf = devanagariRepair.cleanShuffled(text)
 				if clean_shuf != text:
-					ckey = keyOf(clean_shuf)
+					ckey = matchKey(clean_shuf)
 					if ckey:
 						res = self._lookup(clean_shuf, ckey)
 		if len(cache) > 3000:
@@ -1047,7 +1060,7 @@ class DocIndex:
 				a = toks[i:i + L]
 				if a != toks[i + L:i + 2 * L]:
 					continue
-				one = keyOf("".join(a))
+				one = matchKey("".join(a))
 				if len(one) < 3 or (L == 1 and len(one) < 4):
 					continue
 				if B.find(one + one) < 0 and B.find(one) >= 0:
@@ -1121,8 +1134,15 @@ class DocIndex:
 				first[k] = j
 			if lo <= j < hi:
 				own.append(k)
+		if hi - lo == 1:
+			if enc:
+				conv = legacyFonts.convert(key[lo], enc)
+				return (conv or key[lo], True)
+			if lo < len(fixed):
+				return (fixed[lo], True)
+			return (key[lo], True)
 		if not own:
-			# nothing starts here (a single sign during character navigation): say its akshar
+			# nothing starts here: say its akshar
 			sel = amap[lo:hi]
 			return ("".join(aks[min(sel):max(sel) + 1]), True)
 		return ("".join(aks[min(own):max(own) + 1]), True)
@@ -1143,7 +1163,7 @@ class DocIndex:
 	def spanAt(self, lineText, offset, length):
 		"""Real text for `length` characters at `offset` of the viewer's line (character / word
 		navigation): list of (piece, certain) or None."""
-		key = keyOf(lineText)
+		key = matchKey(lineText)
 		if not key:
 			return None
 		p = self._find(key)
@@ -1157,7 +1177,7 @@ class DocIndex:
 
 	def charAt(self, lineText, offset):
 		"""The syllable of the real text at character `offset` of the viewer's line (or None)."""
-		key = keyOf(lineText)
+		key = matchKey(lineText)
 		pre = keyOf(lineText[:offset])
 		here = keyOf(lineText[offset:offset + 1])
 		if not key or not here:
@@ -1179,9 +1199,9 @@ class DocIndex:
 			for fixed, amap, enc, key in self.words:
 				if fixed is None:
 					continue
-				self._byKey.setdefault(key, fixed)
-				self._byBag.setdefault("".join(sorted(key)), fixed)
-				fk = keyOf(fixed)
+				self._byKey.setdefault(key.translate(_NORM), fixed)
+				self._byBag.setdefault("".join(sorted(key.translate(_NORM))), fixed)
+				fk = matchKey(fixed)
 				if fk:
 					self._byKey.setdefault(fk, fixed)
 					self._byBag.setdefault("".join(sorted(fk)), fixed)
@@ -1197,20 +1217,20 @@ class DocIndex:
 		rawToks = [t for t in re.split(r"\s+", text) if t]
 		toks = []
 		for t in rawToks:
-			k = keyOf(t)
+			k = matchKey(t)
 			if not k or k in self._byKey or self._byBag.get("".join(sorted(k))) is not None:
 				toks.append(t)
 				continue
 			split = False
 			for j in range(len(t) - 1, 3, -1):
-				if keyOf(t[:j]) in self._byKey:
+				if matchKey(t[:j]) in self._byKey:
 					toks.append(t[:j])
 					toks.append(t[j:])
 					split = True
 					break
 			if not split:
 				for j in range(1, len(t) - 3):
-					if keyOf(t[j:]) in self._byKey:
+					if matchKey(t[j:]) in self._byKey:
 						toks.append(t[:j])
 						toks.append(t[j:])
 						split = True
@@ -1225,7 +1245,7 @@ class DocIndex:
 			for span in (1, 2, 3):
 				if i + span > len(toks):
 					break
-				k = keyOf("".join(toks[i:i + span]))
+				k = matchKey("".join(toks[i:i + span]))
 				if not k:
 					continue
 				f = self._byKey.get(k) or self._byBag.get("".join(sorted(k)))

@@ -83,8 +83,8 @@ PREETI_MAP = {
 	"<": "?", ">": "श्र", "?": "रु",
 	# extended (Alt / Windows-1252) characters
 	"„": "ध्र", "…": "‘", "ˆ": "फ्", "‰": "झ्", "‹": "ङ्घ",
-	"‘": "ॅ", "•": "•", "˜": "ऽ", "›": "द्र", "\xa1": "ज्ञ्",
-	"\xa2": "द्घ", "\xa3": "घ्", "\xa4": "झ्", "\xa5": "्र", "\xa7": "ट्ट", "\xa9": "र",
+	"‘": "ॅ", "“": "ँ", "Œ": "त्त्", "•": "•", "˜": "ऽ", "›": "द्र", "\xa1": "ज्ञ्",
+	"\xa2": "द्घ", "\xa3": "घ्", "\xa4": "झ्", "\xa5": "र्‍", "\xa7": "ट्ट", "\xa9": "र",
 	"\xaa": "ङ", "\xab": "्र", "\xb0": "ङ्ढ", "\xb1": "+", "\xb4": "झ", "\xb6": "ठ्ठ",
 	"\xb7": "ङ्ग", "·": "ङ्ग",
 	"\xbf": "रू", "\xc5": "हृ", "\xc6": "”", "\xcb": "ङ्ग", "\xcc": "न्न", "\xcd": "ङ्क",
@@ -297,7 +297,7 @@ def preetiFamilyToUnicode(text, font="preeti", _table=None):
 		if m_num and m_num.group(2) != "5":
 			# (a lone "5" is the very common verb छ, not a number)
 			lead, mid, trail = m_num.group(1), m_num.group(2), m_num.group(3)
-			result.append(lead + mid + trail)
+			result.append(lead + (mid.translate(_DIGIT_MAP) if font == "himali" else mid) + trail)
 			continue
 		# Parenthesized Devanagari: preserve parentheses
 		m = re.match(r"^([\(\[\{])([^\(\)\[\]\{\}]+)([\)\]\}])$", word)
@@ -481,6 +481,7 @@ def encodingForFontName(fontName):
 
 
 _DATE_DANDA = re.compile("(?<=[०-९])।(?=[०-९])")
+_LONE_CANDRA = re.compile("(?<![\u0900-\u097f])ॅ")
 # a visarga after a virama, or before a dash, or before "(" is the colon typed with the same key
 _COLON = re.compile("(?<=्)ः|ः(?=\\s*[–—\\-(])|^ः$")
 
@@ -488,8 +489,12 @@ _COLON = re.compile("(?<=्)ः|ः(?=\\s*[–—\\-(])|^ः$")
 def convert(text, encoding="preeti"):
 	if encoding == "krutidev":
 		return krutiDevToUnicode(text)
-	# a "." typed between digits draws a danda in Preeti, but it is a date/number separator
-	out = _DATE_DANDA.sub(".", preetiFamilyToUnicode(text, encoding))
+	# (a "." between digits draws a danda in Preeti and is kept as the danda the page shows)
+	out = preetiFamilyToUnicode(text, encoding)
+	if "ॅ" in out:
+		# "‘" draws ॅ in Preeti but a quote in many Preeti-layout fonts (Nagarik ...): a sign
+		# with no letter before it is the quote
+		out = _LONE_CANDRA.sub("‘", out)
 	if "ः" in out:
 		out = _COLON.sub(":", out)
 	return out

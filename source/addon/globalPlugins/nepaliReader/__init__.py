@@ -175,13 +175,27 @@ class _DocState:
 		self.afterWords = 0
 		self.warned = False
 		self.unicodeWords = 0  # real Unicode Devanagari words seen in this window
+		self.totalWords = 0    # total words observed in this window
 		self.swaps = []        # this document's own letter swaps, learned from its whole text
 		self.learning = False
 
 	@property
 	def isUnicodeDocument(self):
-		"""A window showing real Unicode Nepali/Hindi: its English letters are English, not Preeti."""
+		"""A window showing real Unicode Nepali/Hindi: its English letters are English, not Preeti.
+		If >= 20% of observed words are Unicode Devanagari (with at least 5 words), or >= 15 words:
+		the document is a confirmed native Unicode document."""
+		if self.unicodeWords >= 5 and (self.unicodeWords / max(1, self.totalWords) >= 0.20):
+			return True
 		return self.unicodeWords >= 15
+
+	def recordWords(self, text):
+		if not text:
+			return
+		ws = text.split()
+		if not ws:
+			return
+		self.totalWords += len(ws)
+		self.unicodeWords += sum(1 for w in ws if devanagariRepair.hasDevanagari(w))
 
 	def observe(self, text):
 		if self.decided:
@@ -216,9 +230,10 @@ class _DocState:
 class _ConvertingTextInfo:
 	"""Wraps a TextInfo for getTextInfoSpeech: same object, but getTextWithFields returns converted text."""
 
-	def __init__(self, info, plugin):
+	def __init__(self, info, plugin, unit=None):
 		self.__dict__["_nrInfo"] = info
 		self.__dict__["_nrPlugin"] = plugin
+		self.__dict__["_nrUnit"] = unit
 
 	def __getattr__(self, name):
 		return getattr(self.__dict__["_nrInfo"], name)
@@ -239,12 +254,12 @@ class _ConvertingTextInfo:
 	def getTextWithFields(self, formatConfig=None):
 		if not isOn():
 			return self.__dict__["_nrInfo"].getTextWithFields(formatConfig)
-		return self.__dict__["_nrPlugin"]._convertFields(self.__dict__["_nrInfo"], formatConfig)
+		return self.__dict__["_nrPlugin"]._convertFields(self.__dict__["_nrInfo"], formatConfig, unit=self.__dict__.get("_nrUnit"))
 
 	def copy(self):
 		if not isOn():
 			return self.__dict__["_nrInfo"].copy()
-		return _ConvertingTextInfo(self.__dict__["_nrInfo"].copy(), self.__dict__["_nrPlugin"])
+		return _ConvertingTextInfo(self.__dict__["_nrInfo"].copy(), self.__dict__["_nrPlugin"], unit=self.__dict__.get("_nrUnit"))
 
 	def setEndPoint(self, other, which):
 		return self.__dict__["_nrInfo"].setEndPoint(_unwrap(other), which)
@@ -385,10 +400,6 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			self._patchCopyAndSelection()
 		except Exception:
 			log.error("Nepali Reader: could not hook copying", exc_info=True)
-		try:
-			self._registerSpeechFilter()
-		except Exception:
-			log.error("Nepali Reader: could not register speech filter", exc_info=True)
 		NVDASettingsDialog.categoryClasses.append(NepaliReaderSettingsPanel)
 		self._menu = None
 		try:
@@ -587,8 +598,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			c = conf()
 			if not isOn():
 				return orig(_unwrap(info), *args, **kwargs)
+			unit = kwargs.get("unit") or (args[2] if len(args) > 2 else None)
 			if c["mode"] != "off" or c["repairUnicode"] or c["switchLanguage"]:
-				info = _ConvertingTextInfo(_unwrap(info), plugin)
+				info = _ConvertingTextInfo(_unwrap(info), plugin, unit=unit)
 			return orig(info, *args, **kwargs)
 
 		self._origGetTextInfoSpeech = orig
@@ -716,13 +728,18 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		def copyToClipboard(info, notify=False):
 			try:
 				if isOn():
+					raw = _unwrap(info).text or ""
+					# In a non-PDF window, if text is already native Devanagari, preserve it!
+					if devanagariRepair.hasDevanagari(raw) and not plugin._isPdfWindow(info.obj):
+						return origCopy(_unwrap(info), notify)
 					text = plugin._plainText(info)
 					if diag.wanted():
 						try:
-							diag.write("copy: %r -> %r" % ((_unwrap(info).text or "")[:60], (text or "")[:60]))
+							diag.write("copy: %r -> %r" % (raw[:60], (text or "")[:60]))
 						except Exception:
 							pass
-					if text:
+					# Only override clipboard if text was ACTUALLY converted and changed!
+					if text and text != raw:
 						return api.copyToClip(textInfos.convertToCrlf(text), notify)
 			except Exception:
 				log.debugWarning("Nepali Reader: copy failed", exc_info=True)
@@ -741,18 +758,20 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 						info = mgr.makeTextInfo(textInfos.POSITION_SELECTION)
 						if not info.isCollapsed:
 							raw = info.text or ""
+							if devanagariRepair.hasDevanagari(raw) and not plugin._isPdfWindow(mgr):
+								return origCursorCopy(mgr, gesture)
 							new = plugin._plainText(info)
 							if not new or new == raw:
 								c = conf()
 								ctxEnc = plugin._inContext()
 								defaultEnc = ctxEnc or c["encoding"]
-								if c["mode"] != "off":
+								if c["mode"] != "off" and not plugin._docState().isUnicodeDocument:
 									isPdf = plugin._isPdfWindow(mgr)
 									conv = detector.convertMixed(raw, lambda t: legacyFonts.convert(t, defaultEnc) or t, encoding=defaultEnc, context=bool(ctxEnc or isPdf))
 									if conv and conv != raw:
 										new = conv
-								if c["repairUnicode"] and devanagariRepair.hasDevanagari(new):
-									new = devanagariRepair.repair(new, broken=True if plugin._isBrokenDoc() else None)
+								if c["repairUnicode"] and new and devanagariRepair.hasDevanagari(new) and plugin._isPdfWindow(mgr) and plugin._isBrokenDoc():
+									new = devanagariRepair.repair(new, broken=True)
 							if new and new != raw:
 								api.copyToClip(textInfos.convertToCrlf(new), notify=True)
 								return
@@ -818,24 +837,22 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 						if tInfo is not None and not tInfo.isCollapsed:
 							raw = tInfo.text or ""
 							if raw:
+								if devanagariRepair.hasDevanagari(raw) and not plugin._isPdfWindow(tInfo.obj):
+									continue
 								conv = plugin._plainText(tInfo)
 								if not conv or conv == raw:
 									c = conf()
 									ctxEnc = plugin._inContext()
 									defaultEnc = ctxEnc or c["encoding"]
-									if c["mode"] != "off":
+									if c["mode"] != "off" and not plugin._docState().isUnicodeDocument:
 										isPdf = plugin._isPdfWindow(tInfo.obj)
 										inCtx = bool(ctxEnc or isPdf)
-										if len(raw) <= 2 and not any(ch.isdigit() for ch in raw) and any(ch in "!@#$%^&*()+=~`_{}[]\\|/<>?;'-" for ch in raw):
-											c_tok = legacyFonts.convert(raw, defaultEnc)
-											if c_tok and c_tok != raw:
-												conv = c_tok
-										if not conv or conv == raw:
+										if inCtx:
 											c_mixed = detector.convertMixed(raw, lambda t: legacyFonts.convert(t, defaultEnc) or t, encoding=defaultEnc, context=inCtx)
 											if c_mixed and c_mixed != raw:
 												conv = c_mixed
-									if c["repairUnicode"] and devanagariRepair.hasDevanagari(conv):
-										conv = devanagariRepair.repair(conv, broken=True if plugin._isBrokenDoc() else None)
+									if c["repairUnicode"] and conv and devanagariRepair.hasDevanagari(conv) and plugin._isPdfWindow(tInfo.obj) and plugin._isBrokenDoc():
+										conv = devanagariRepair.repair(conv, broken=True)
 								if conv and conv != raw:
 									from speech.commands import LangChangeCommand
 									seq = [LangChangeCommand("ne"), conv, LangChangeCommand(None)]
@@ -846,24 +863,22 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 						if tInfo is not None and not tInfo.isCollapsed:
 							raw = tInfo.text or ""
 							if raw:
+								if devanagariRepair.hasDevanagari(raw) and not plugin._isPdfWindow(tInfo.obj):
+									continue
 								conv = plugin._plainText(tInfo)
 								if not conv or conv == raw:
 									c = conf()
 									ctxEnc = plugin._inContext()
 									defaultEnc = ctxEnc or c["encoding"]
-									if c["mode"] != "off":
+									if c["mode"] != "off" and not plugin._docState().isUnicodeDocument:
 										isPdf = plugin._isPdfWindow(tInfo.obj)
 										inCtx = bool(ctxEnc or isPdf)
-										if len(raw) <= 2 and not any(ch.isdigit() for ch in raw) and any(ch in "!@#$%^&*()+=~`_{}[]\\|/<>?;'-" for ch in raw):
-											c_tok = legacyFonts.convert(raw, defaultEnc)
-											if c_tok and c_tok != raw:
-												conv = c_tok
-										if not conv or conv == raw:
+										if inCtx:
 											c_mixed = detector.convertMixed(raw, lambda t: legacyFonts.convert(t, defaultEnc) or t, encoding=defaultEnc, context=inCtx)
 											if c_mixed and c_mixed != raw:
 												conv = c_mixed
-									if c["repairUnicode"] and devanagariRepair.hasDevanagari(conv):
-										conv = devanagariRepair.repair(conv, broken=True if plugin._isBrokenDoc() else None)
+									if c["repairUnicode"] and conv and devanagariRepair.hasDevanagari(conv) and plugin._isPdfWindow(tInfo.obj) and plugin._isBrokenDoc():
+										conv = devanagariRepair.repair(conv, broken=True)
 								if conv and conv != raw:
 									from speech.commands import LangChangeCommand
 									seq = [LangChangeCommand("ne"), conv, LangChangeCommand(None)]
@@ -1269,12 +1284,12 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 	# conversion of one TextInfo's fields
 	# ------------------------------------------------------------------
 
-	def _convertFields(self, info, formatConfig):
+	def _convertFields(self, info, formatConfig, unit=None):
 		c = conf()
 		if not isOn():
 			return info.getTextWithFields(formatConfig)
 		if diag.wanted():
-			fields = self._convertFieldsInner(info, formatConfig, c)
+			fields = self._convertFieldsInner(info, formatConfig, c, unit=unit)
 			try:
 				before = info.text
 			except Exception:
@@ -1285,9 +1300,21 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				_appName(info.obj), self._isPdfWindow(info.obj), st.status if st else None,
 				c["mode"], self._ready, (before or "")[:70], after[:70]))
 			return fields
-		return self._convertFieldsInner(info, formatConfig, c)
+		return self._convertFieldsInner(info, formatConfig, c, unit=unit)
 
-	def _convertFieldsInner(self, info, formatConfig, c):
+	def _convertFieldsInner(self, info, formatConfig, c, unit=None):
+		try:
+			rawText = info.text or ""
+			if rawText:
+				self._docState().recordWords(rawText)
+		except Exception:
+			rawText = ""
+
+		# If unit is UNIT_CHARACTER and the text already contains native Devanagari in non-PDF:
+		# Return fields directly without wrapping or modifying, allowing NVDA single-character spelling!
+		if unit == textInfos.UNIT_CHARACTER and rawText and devanagariRepair.hasDevanagari(rawText) and not self._isPdfWindow(info.obj):
+			return info.getTextWithFields(formatConfig)
+
 		wantFont = c["useFontNames"] and c["mode"] != "off"
 		fc = formatConfig
 		if wantFont:
@@ -1295,7 +1322,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			fc["reportFontName"] = True
 		fields = info.getTextWithFields(fc)
 		try:
-			return self._convertFieldList(info, fields, c)
+			return self._convertFieldList(info, fields, c, unit=unit)
 		except Exception:
 			log.error("Nepali Reader: conversion failed", exc_info=True)
 			diag.exception("conversion failed")
@@ -1375,7 +1402,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		st = self._docs.get_(self._foregroundKey())
 		return bool(st and st.broken)
 
-	def _convertFieldList(self, info, fields, c):
+	def _convertFieldList(self, info, fields, c, unit=None):
 		mode = c["mode"]
 		repair = c["repairUnicode"]
 		fields = self._mergeRuns(fields)
@@ -1402,7 +1429,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 							conv = legacyFonts.convert(val, curEnc)
 							if conv and conv != val:
 								item.field[attr] = conv
-						elif detector.looksLegacy(val, "preeti"):
+						elif self._isPdfWindow(info.obj) and detector.looksLegacy(val, "preeti"):
 							conv = detector.convertMixed(val, legacyFonts.preetiFamilyToUnicode)
 							if conv and conv != val:
 								item.field[attr] = conv
@@ -1453,7 +1480,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 						rebuilt[i] = False
 				runs = [r for r in runs if r[0] not in rebuilt]
 				if rebuilt and not runs:
-					return self._withLanguage(out, rebuilt, c)
+					return self._withLanguage(out, rebuilt, c, unit=unit)
 		if repair and self._isPdfWindow(info.obj) and not self._isWebNonPdf(info.obj):
 			# only PDF text layers are damaged; Unicode Nepali on web pages and in documents is
 			# correct and must never be "repaired" (it turned भनसुन into निसान on news sites)
@@ -1476,11 +1503,12 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 						changed = True
 		if mode == "off":
 			if rebuilt or (c["switchLanguage"] and any(devanagariRepair.hasDevanagari(x) for x in out if isinstance(x, str))):
-				return self._withLanguage(out, rebuilt, c)
+				return self._withLanguage(out, rebuilt, c, unit=unit)
 			return out if changed else fields
 		# 2. decide which runs are legacy text and with which encoding
 		convert = {}  # index -> (encoding, protectEnglish)
 		unknown = []
+		symRuns = []
 		anyKnownFont = False
 		inPdf = self._isPdfWindow(info.obj)
 		ctxEnc = self._inContext()
@@ -1500,11 +1528,11 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				continue
 			elif not any(ch.isascii() and ch.isalpha() for ch in text):
 				# numbers/symbols: if in confirmed legacy context, convert!
-				if ctxEnc and any(ch in "!@#$%^&*()+=~`_{}[]\\|/<>?0123456789." for ch in text):
-					useEnc = ctxEnc
-					conv = legacyFonts.convert(text, useEnc)
-					if conv and conv != text:
-						convert[i] = (useEnc, False)
+				# numbers/symbols alone: they are Preeti only when the text next to them is Preeti
+				# (decided below), never next to Unicode Nepali or English: "(राजनीतिक)" keeps "("
+				isUniDoc = self._docState().isUnicodeDocument
+				if not isUniDoc and ctxEnc and any(ch in "!@#$%^&*()+=~`_{}[]\\|/<>?0123456789." for ch in text):
+					symRuns.append((i, text, ctxEnc))
 				continue
 			else:
 				# no font, or an ordinary font (Calibri, Arial...): Preeti text is often left in
@@ -1519,9 +1547,21 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			else:
 				# Web non-PDF: convert only if strongly legacy
 				self._decideUnknown(info, unknown, convert, c, allowVisual=False, isUnicodeDoc=True)
+		if symRuns:
+			order = [r[0] for r in runs]
+			texts = {r[0]: r[1] for r in runs}
+			for i, text, useEnc in symRuns:
+				k = order.index(i)
+				near = [order[j] for j in (k - 1, k + 1) if 0 <= j < len(order)]
+				if not near or any(devanagariRepair.hasDevanagari(texts[j]) for j in near):
+					continue
+				if all(j in convert for j in near):
+					conv = legacyFonts.convert(text, useEnc)
+					if conv and conv != text:
+						convert[i] = (useEnc, False)
 		if not convert:
 			if rebuilt or (c["switchLanguage"] and any(devanagariRepair.hasDevanagari(x) for x in out if isinstance(x, str))):
-				return self._withLanguage(out, rebuilt, c)
+				return self._withLanguage(out, rebuilt, c, unit=unit)
 			return out if changed else fields
 		# 3. convert, marking the language so the voice can switch
 		result = []
@@ -1540,18 +1580,14 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 					newText = detector.convertTokens(convert[i][2], lambda t: legacyFonts.convert(t, enc) or t)
 				else:
 					newText = self._convertRun(item, enc, protect)
-				if newText != item and 0 < len(item.strip()) <= 3 and " " not in item.strip():
-					# moving by character: say the whole syllable (कि, र्मा), not half of it
-					ak = self._legacyAkshar(info, item, enc)
-					if ak:
-						newText = ak
 				if newText != item:
 					count += len(newText.split())
 					usedEnc = enc
 					if switchLang:
 						result.append(self._formatWithLanguage(lastFormat, legacyFonts.languageForEncoding(enc)))
 						result.append(newText)
-						result.append(self._formatWithLanguage(lastFormat, None, restore=True))
+						if unit != textInfos.UNIT_CHARACTER:
+							result.append(self._formatWithLanguage(lastFormat, None, restore=True))
 					else:
 						result.append(newText)
 					continue
@@ -1560,14 +1596,15 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				if not curLang.startswith(("ne", "hi")):
 					result.append(self._formatWithLanguage(lastFormat, "ne"))
 					result.append(item)
-					result.append(self._formatWithLanguage(lastFormat, None, restore=True))
+					if unit != textInfos.UNIT_CHARACTER:
+						result.append(self._formatWithLanguage(lastFormat, None, restore=True))
 					continue
 			result.append(item)
 		if usedEnc and c["mode"] == "auto" and count >= 2:
 			self._setContext(usedEnc)
 		return result
 
-	def _withLanguage(self, out, rebuilt, c):
+	def _withLanguage(self, out, rebuilt, c, unit=None):
 		"""Mark text containing Devanagari (including rebuilt PDF text) as Nepali so synthesizers speak text and numbers."""
 		if not c["switchLanguage"]:
 			return out
@@ -1583,7 +1620,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				if not curLang.startswith(("ne", "hi")):
 					result.append(self._formatWithLanguage(lastFormat, "ne"))
 					result.append(item)
-					result.append(self._formatWithLanguage(lastFormat, None, restore=True))
+					if unit != textInfos.UNIT_CHARACTER:
+						result.append(self._formatWithLanguage(lastFormat, None, restore=True))
 					continue
 			result.append(item)
 		return result
@@ -1625,7 +1663,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		verdict = None
 		allEnglish = all(detector.isEnglishWord(detector._core(w)) for w in joined.split() if detector._core(w))
 		if allEnglish:
-			return
+			# English-looking words ("eft", "ag") are still Preeti when the screen shows Devanagari
+			if not (allowVisual and c["visualCheck"] and words <= 3
+					and self._visualVerdict(info, joined) == visualScript.DEVANAGARI):
+				return
 		if isUnicodeDoc and (legacyWords < 2 and legacyWords * 2 < words):
 			hasStrong = any(f and (detector.wordScore(t, used) >= detector.MIXED_WORD or detector._strongAlone(t, detector.wordScore(t, used), used)) for t, f in decisions if not t.isspace())
 			if not hasStrong:
@@ -1690,7 +1731,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		if autoKruti and not any(f for _, f in decisions):
 			other = "krutidev" if encoding != "krutidev" else "preeti"
 			alt = detector.decide(text, other, context=False)
-			if any(f for _, f in alt):
+			# switch only when the other layout really reads better ("/fd ag" is Preeti राम बन)
+			if any(f for _, f in alt) and self._guessEncoding(text, encoding, True) == other:
 				decisions, used = alt, other
 		result = (used, decisions)
 		self._cache.put(key, result)
@@ -1734,18 +1776,26 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				info = None
 		if info is not None and not info.isCollapsed:
 			raw = info.text or ""
+			# In normal applications (Word, Notepad, Chrome), if text already contains native Devanagari:
+			# preserve original selection and let the app / browse-mode copy natively!
+			if devanagariRepair.hasDevanagari(raw) and not self._isPdfWindow(src):
+				if ti is not None and not getattr(ti, "passThrough", True) and hasattr(ti, "script_copyToClipboard"):
+					ti.script_copyToClipboard(gesture)
+				else:
+					gesture.send()
+				return
 			new = self._plainText(info)
 			if not new or new == raw:
 				c = conf()
 				ctxEnc = self._inContext()
 				defaultEnc = ctxEnc or c["encoding"]
-				if c["mode"] != "off":
+				if c["mode"] != "off" and not self._docState().isUnicodeDocument:
 					isPdf = self._isPdfWindow(src)
 					conv = detector.convertMixed(raw, lambda t: legacyFonts.convert(t, defaultEnc) or t, encoding=defaultEnc, context=bool(ctxEnc or isPdf))
 					if conv and conv != raw:
 						new = conv
-				if c["repairUnicode"] and devanagariRepair.hasDevanagari(new):
-					new = devanagariRepair.repair(new, broken=True if self._isBrokenDoc() else None)
+				if c["repairUnicode"] and new and devanagariRepair.hasDevanagari(new) and self._isPdfWindow(src) and self._isBrokenDoc():
+					new = devanagariRepair.repair(new, broken=True)
 			if new and new != raw:
 				api.copyToClip(textInfos.convertToCrlf(new), notify=True)
 				return
@@ -1770,6 +1820,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			if info.isCollapsed:
 				return
 			raw = info.text or ""
+			if devanagariRepair.hasDevanagari(raw) and not self._isPdfWindow(src):
+				return
 			new = self._plainText(info)
 			if not new or new == raw:
 				return

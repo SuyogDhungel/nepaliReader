@@ -137,13 +137,8 @@ def cleanShuffled(text):
 	"""Fixes viewer / PDFium artifacts: leaked syllables, OCR misrecognitions, and fake-bold repeats."""
 	if not _DEVANAGARI.search(text):
 		return text
-	# 0. Deduplicate consecutive identical words / numbers
-	words = text.split()
-	deduped = []
-	for w in words:
-		if not deduped or w != deduped[-1]:
-			deduped.append(w)
-	text = " ".join(deduped)
+	# (repeated words are NOT removed here: "जय जय", "बिस्तारै बिस्तारै" are real; text a PDF
+	#  draws twice is removed by the PDF engine, which knows what the document contains)
 
 	# 1. OCR confusions from Preeti glyphs
 	# Preeti quotes æ and Æ recognized as ऋ and म्: ऋ...म् -> “...”
@@ -164,15 +159,15 @@ def cleanShuffled(text):
 		for k, v in _preeti_keys:
 			s = s.replace(k, v)
 		return s
-	text = re.sub(r'(?:द्द|द्ध|ज्ञ|छ|ट|ठ|ड|ढ|घ)\)(?:द्द|द्ध|ज्ञ|छ|ट|ठ|ड|ढ|घ|\)|\d|।|\.|\-)+', _rep_preeti_num, text)
-	text = re.sub(r'(^|\s)(ज्ञ|द्द|द्ध|छ|ट|ठ|ड|ढ|घ)\.', lambda m: m.group(1) + _pk_dict[m.group(2)] + '.', text)
-	text = re.sub(r'\((ज्ञ|द्द|द्ध|छ|ट|ठ|ड|ढ|घ)\)', lambda m: '(' + _pk_dict[m.group(1)] + ')', text)
+	# a year typed with unshifted keys always starts "2 0" = द्द) ("हुनेछ)।" must stay)
+	text = re.sub(r'(?<![\u0900-\u097f])द्द\)(?:द्द|द्ध|ज्ञ|छ|ट|ठ|ड|ढ|घ|\)|।|\.|\-)+', _rep_preeti_num, text)
+	# list numbers typed unshifted: only ज्ञ. द्द. द्ध. (घ. छ. ट. ठ. and (घ) (छ) are real clause letters)
+	text = re.sub(r'(^|\s)(ज्ञ|द्द|द्ध)\.', lambda m: m.group(1) + _pk_dict[m.group(2)] + '.', text)
+	text = re.sub(r'\((ज्ञ|द्द|द्ध)\)', lambda m: '(' + _pk_dict[m.group(1)] + ')', text)
 
 	_DEVA_BOUND_L = r'(?<![\u0900-\u097f])'
 	_DEVA_BOUND_R = r'(?![\u0900-\u097f])'
 
-	# Fake-bold leading single-letter echoes before word: 'प पयोग' -> 'पयोग'
-	text = re.sub(_DEVA_BOUND_L + r'([\u0904-\u0939])\s+(\1[\u0900-\u097f]+)' + _DEVA_BOUND_R, r'\2', text)
 
 	# Preeti digit 5 typo for verb 'छ' at end of sentences (e.g. बनाईबक्सेको ५ । -> बनाईबक्सेको छ ।)
 	text = re.sub(r'([क-ह][\u0900-\u097f]*(?:ेको|एको|ने|दा|छैन))\s+५\s*([।\.])', r'\1 छ \2', text)
@@ -185,16 +180,6 @@ def cleanShuffled(text):
 	text = re.sub(_DEVA_BOUND_L + r'निकरुञ्ज' + _DEVA_BOUND_R, 'निकुञ्ज', text)
 	text = re.sub(_DEVA_BOUND_L + r'वन्यजन्तरु' + _DEVA_BOUND_R, 'वन्यजन्तु', text)
 	text = re.sub(_DEVA_BOUND_L + r'सरुविधा' + _DEVA_BOUND_R, 'सुविधा', text)
-
-	# Trailing line-wrap / spacing artifacts (e.g. "नियन्त्रण   रा", "उचित व्य"):
-	text = re.sub(r'\s{2,}[\u0900-\u097f]{1,2}$', '', text)
-	if neLexicon.isLoaded():
-		def fix_trailing_orphan(m):
-			w = m.group(1)
-			if not neLexicon.isWord(w):
-				return ""
-			return m.group(0)
-		text = re.sub(r'\s+([\u0900-\u097f]{1,3})$', fix_trailing_orphan, text)
 
 	# 2. Restore dropped characters (e.g. unmapped Preeti ¿ -> रु / र) using the dictionary
 	if neLexicon.isLoaded():
@@ -209,50 +194,9 @@ def cleanShuffled(text):
 			return m.group(0)
 		text = re.sub(_DEVA_BOUND_L + r'([\u0900-\u097f]{1,4})\s+([\u0900-\u097f]{2,8})' + _DEVA_BOUND_R, check_dropped_gap, text)
 
-	# 2. Leaked trailing syllables before words: 'ना प्रस्तावना' -> 'प्रस्तावना', 'द परिच्छेद' -> 'परिच्छेद'
-	def fix_leak(m):
-		pre, word = m.group(1), m.group(2)
-		if word.endswith(pre) and len(word) > len(pre):
-			return word
-		return m.group(0)
-	text = re.sub(f'({_DEVA_LETTERS}{{1,3}})\\s+({_DEVA_LETTERS}{{3,}})', fix_leak, text)
-
-	# Leaked glued syllable at start of word: 'षापरिभाषा' -> 'परिभाषा'
-	def fix_glued_leak(m):
-		w = m.group(0)
-		for L in (2, 3):
-			if L < len(w):
-				pre = w[:L]
-				rest = w[L:]
-				if rest.endswith(pre) and any(c in "\u093e\u093f\u0940\u0941\u0942\u0947\u0948\u094b\u094c" for c in pre):
-					return rest
-		return w
-	text = re.sub(f'{_DEVA_LETTERS}{{4,}}', fix_glued_leak, text)
-
-	# 3. Glued repeated word: 'परिभाषापरिभाषा' -> 'परिभाषा'
-	def fix_glued_rep(m):
-		w = m.group(0)
-		half = len(w) // 2
-		if len(w) >= 6 and len(w) % 2 == 0 and w[:half] == w[half:]:
-			return w[:half]
-		return w
-	text = re.sub(f'{_DEVA_LETTERS}{{6,}}', fix_glued_rep, text)
-
 	# Repeated punctuation: '––' -> '–'
 	text = re.sub(r'([–—\-])\1+', r'\1', text)
 
-	# 4. Repeated phrases: 'A B C A B C' -> 'A B C'
-	ws = text.split()
-	n = len(ws)
-	for k in range(n // 2, 1, -1):
-		if ws[:k] == ws[k:2*k]:
-			rem = ws[2*k:]
-			if len(rem) <= 1:
-				text = ' '.join(ws[:k])
-				break
-			else:
-				text = ' '.join(ws[:k] + rem)
-				break
 	return text.strip()
 
 
