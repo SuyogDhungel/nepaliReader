@@ -150,6 +150,14 @@ _NOTMARK = re.compile("[^\u0900-\u0903\u093a-\u094f\u0951-\u0957\u0962\u0963]")
 
 
 def keyOf(s):
+	if not s:
+		return ""
+	# Normalize typographical variants between PDF font stream and viewer extraction:
+	# Preeti short u (ु) glyph questiondown (\xbf, ¿) -> ASCII apostrophe (')
+	# Curly quotes and typographical dashes:
+	s = s.replace("\xbf", "'").replace("\u2018", "'").replace("\u2019", "'")
+	s = s.replace("\u201c", '"').replace("\u201d", '"')
+	s = s.replace("\u2013", "-").replace("\u2014", "-")
 	return _DROP.sub("", s)
 
 

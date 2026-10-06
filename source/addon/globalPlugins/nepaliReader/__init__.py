@@ -511,7 +511,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		toolsMenu = gui.mainFrame.sysTrayIcon.toolsMenu
 		menu = wx.Menu()
 		# Translators: menu item that turns the add-on on or off
-		self._onOffItem = menu.AppendCheckItem(wx.ID_ANY, _("&Nepali mode (NVDA+Ctrl+Shift+Space)"))
+		self._onOffItem = menu.AppendCheckItem(wx.ID_ANY, _("&Nepali mode (NVDA+Alt+N / NVDA+Ctrl+Shift+Space)"))
 		self._onOffItem.Check(isOn())
 		gui.mainFrame.sysTrayIcon.Bind(wx.EVT_MENU, self._onMenuToggle, self._onOffItem)
 		# Translators: menu item
@@ -670,15 +670,31 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				continue
 			text = item
 			# If it looks like legacy text (e.g. repeated table headers, cell labels, selection)
-			if mode != "off" and detector.looksLegacy(text, defaultEnc, context=bool(ctxEnc)):
-				conv = detector.convertMixed(text, lambda t: legacyFonts.convert(t, defaultEnc) or t, encoding=defaultEnc, context=bool(ctxEnc))
-				if conv != text:
-					text = conv
-					if switchLang and LangChangeCommand:
-						out.append(LangChangeCommand("ne"))
-						out.append(text)
-						out.append(LangChangeCommand(None))
-						continue
+			try:
+				fg = api.getForegroundObject()
+				isPdf = self._isPdfWindow(fg)
+			except Exception:
+				isPdf = False
+			inCtx = bool(ctxEnc or isPdf)
+			if mode != "off":
+				if len(text.strip()) <= 3 and any(ch in "!@#$%^&*()+=~`_{}[]\\|/<>?0123456789.;'-" for ch in text):
+					conv_sym = legacyFonts.convert(text, defaultEnc)
+					if conv_sym and conv_sym != text:
+						text = conv_sym
+						if switchLang and LangChangeCommand:
+							out.append(LangChangeCommand("ne"))
+							out.append(text)
+							out.append(LangChangeCommand(None))
+							continue
+				if detector.looksLegacy(text, defaultEnc, context=inCtx):
+					conv = detector.convertMixed(text, lambda t: legacyFonts.convert(t, defaultEnc) or t, encoding=defaultEnc, context=inCtx)
+					if conv != text:
+						text = conv
+						if switchLang and LangChangeCommand:
+							out.append(LangChangeCommand("ne"))
+							out.append(text)
+							out.append(LangChangeCommand(None))
+							continue
 			if repair and devanagariRepair.hasDevanagari(text):
 				if devanagariRepair.isBroken(text):
 					text = devanagariRepair.repair(text, broken=True)
@@ -716,28 +732,109 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
 		textInfos.TextInfo.copyToClipboard = copyToClipboard
 		self._patched2.append((textInfos.TextInfo, "copyToClipboard", origCopy, copyToClipboard))
+
+		try:
+			from cursorManager import CursorManager
+			origCursorCopy = CursorManager.script_copyToClipboard
+
+			def cursorCopyToClipboard(mgr, gesture):
+				if isOn():
+					try:
+						info = mgr.makeTextInfo(textInfos.POSITION_SELECTION)
+						if not info.isCollapsed:
+							raw = info.text or ""
+							new = plugin._plainText(info)
+							if not new or new == raw:
+								c = conf()
+								ctxEnc = plugin._inContext()
+								defaultEnc = ctxEnc or c["encoding"]
+								if c["mode"] != "off":
+									isPdf = plugin._isPdfWindow(mgr)
+									conv = detector.convertMixed(raw, lambda t: legacyFonts.convert(t, defaultEnc) or t, encoding=defaultEnc, context=bool(ctxEnc or isPdf))
+									if conv and conv != raw:
+										new = conv
+								if c["repairUnicode"] and devanagariRepair.hasDevanagari(new):
+									new = devanagariRepair.repair(new, broken=True if plugin._isBrokenDoc() else None)
+							if new and new != raw:
+								api.copyToClip(textInfos.convertToCrlf(new), notify=True)
+								return
+					except Exception:
+						log.debugWarning("Nepali Reader: cursor copy failed", exc_info=True)
+				return origCursorCopy(mgr, gesture)
+
+			CursorManager.script_copyToClipboard = cursorCopyToClipboard
+			self._patched2.append((CursorManager, "script_copyToClipboard", origCursorCopy, cursorCopyToClipboard))
+		except Exception:
+			log.debugWarning("Nepali Reader: could not hook CursorManager copy", exc_info=True)
+
 		try:
 			import speech
 			import speech.speech as speechModule
 			origSel = speechModule.speakSelectionChange
 
 			def speakSelectionChange(oldInfo, newInfo, *args, **kwargs):
-				if isOn():
-					try:
-						oldInfo = _PlainTextInfo(_unwrap(oldInfo), plugin)
-						newInfo = _PlainTextInfo(_unwrap(newInfo), plugin)
-					except Exception:
-						pass
-				else:
-					oldInfo = _unwrap(oldInfo)
-					newInfo = _unwrap(newInfo)
-				return origSel(oldInfo, newInfo, *args, **kwargs)
+				if not isOn():
+					return origSel(_unwrap(oldInfo), _unwrap(newInfo), *args, **kwargs)
+				try:
+					rawOld = _unwrap(oldInfo)
+					rawNew = _unwrap(newInfo)
+					startToStart = rawNew.compareEndPoints(rawOld, "startToStart")
+					endToEnd = rawNew.compareEndPoints(rawOld, "endToEnd")
+					tempInfo = None
+					isUnselect = False
+					if endToEnd > 0:
+						tempInfo = rawOld.copy()
+						tempInfo.setEndPoint(rawOld, "endToStart")
+						tempInfo.setEndPoint(rawNew, "endToEnd")
+					elif startToStart < 0:
+						tempInfo = rawNew.copy()
+						tempInfo.setEndPoint(rawOld, "startToEnd")
+					elif endToEnd < 0:
+						isUnselect = True
+						tempInfo = rawNew.copy()
+						tempInfo.setEndPoint(rawOld, "endToEnd")
+					elif startToStart > 0:
+						isUnselect = True
+						tempInfo = rawOld.copy()
+						tempInfo.setEndPoint(rawNew, "startToEnd")
+
+					if tempInfo is not None and not tempInfo.isCollapsed:
+						raw = tempInfo.text or ""
+						if raw:
+							conv = plugin._plainText(tempInfo)
+							if not conv or conv == raw:
+								c = conf()
+								ctxEnc = plugin._inContext()
+								defaultEnc = ctxEnc or c["encoding"]
+								if c["mode"] != "off":
+									isPdf = plugin._isPdfWindow(tempInfo.obj)
+									inCtx = bool(ctxEnc or isPdf)
+									if len(raw) <= 2 and any(ch in "!@#$%^&*()+=~`_{}[]\\|/<>?0123456789.;'-" for ch in raw):
+										c_tok = legacyFonts.convert(raw, defaultEnc)
+										if c_tok and c_tok != raw:
+											conv = c_tok
+									if not conv or conv == raw:
+										c_mixed = detector.convertMixed(raw, lambda t: legacyFonts.convert(t, defaultEnc) or t, encoding=defaultEnc, context=inCtx)
+										if c_mixed and c_mixed != raw:
+											conv = c_mixed
+								if c["repairUnicode"] and devanagariRepair.hasDevanagari(conv):
+									conv = devanagariRepair.repair(conv, broken=True if plugin._isBrokenDoc() else None)
+							if conv and conv != raw:
+								from speech.commands import LangChangeCommand
+								seq = [LangChangeCommand("ne"), conv, LangChangeCommand(None)]
+								if isUnselect:
+									speechModule.speakSelectionMessage(_("%s unselected"), seq)
+								else:
+									speechModule.speakTextSelected(seq)
+								return
+				except Exception:
+					log.debugWarning("Nepali Reader: speakSelectionChange hook error", exc_info=True)
+				return origSel(_unwrap(oldInfo), _unwrap(newInfo), *args, **kwargs)
 
 			speechModule.speakSelectionChange = speakSelectionChange
 			self._patched2.append((speechModule, "speakSelectionChange", origSel, speakSelectionChange))
-			if getattr(speech, "speakSelectionChange", None) is origSel:
-				speech.speakSelectionChange = speakSelectionChange
-				self._patched2.append((speech, "speakSelectionChange", origSel, speakSelectionChange))
+			speech.speakSelectionChange = speakSelectionChange
+			self._patched2.append((speech, "speakSelectionChange", origSel, speakSelectionChange))
 		except Exception:
 			log.debugWarning("Nepali Reader: could not hook selection speech", exc_info=True)
 
@@ -1016,31 +1113,37 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 					cached = self._isPdfViewerObj(obj)
 				if not cached:
 					cached = bool(pdfLocate.findFromTitle(rawTitle, getattr(fg, "processID", None)))
-				self._pdfTabs.put(key, cached)
+				if cached or len(title) > 6:
+					self._pdfTabs.put(key, cached)
 			return cached
 		except Exception:
 			return False
 
 	@staticmethod
 	def _isPdfViewerObj(obj):
-		"""Detects if an object is inside Chrome/Edge PDF viewer from UI cues."""
+		"""Detects if an object is inside Chrome/Edge/Brave PDF viewer from UI cues."""
 		try:
 			o = getattr(obj, "rootNVDAObject", None) or obj
 			seen = 0
-			while o is not None and seen < 15:
+			while o is not None and seen < 20:
 				seen += 1
 				name = (getattr(o, "name", None) or "").lower()
 				val = (getattr(o, "value", None) or "").lower()
-				if any(marker in name or marker in val for marker in (
+				desc = (getattr(o, "description", None) or "").lower()
+				if any(marker in name or marker in val or marker in desc for marker in (
 					"pdf is inaccessible", "add text annotations", "save to google drive",
-					"application/pdf", "finished loading pdf"
+					"application/pdf", "finished loading pdf", "rotate counterclockwise",
+					"fit to page", "fit to width", "zoom in", "zoom out"
 				)):
 					return True
 				try:
 					ia = getattr(o, "IAccessibleObject", None)
 					if ia:
 						accName = (ia.accName(getattr(o, "IAccessibleChildID", 0)) or "").lower()
-						if any(marker in accName for marker in ("pdf is inaccessible", "add text annotations", "finished loading pdf")):
+						if any(marker in accName for marker in (
+							"pdf is inaccessible", "add text annotations", "finished loading pdf",
+							"rotate counterclockwise", "fit to page"
+						)):
 							return True
 				except Exception:
 					pass
@@ -1557,7 +1660,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		# Translators: input help for a command
 		description=_("Turns Nepali mode on or off (reading Preeti, Kruti Dev and damaged Nepali PDFs correctly)"),
 		category=CATEGORY,
-		gesture="kb:NVDA+control+shift+space",
+		gestures=["kb:NVDA+control+shift+space", "kb:NVDA+alt+n"],
 	)
 	def script_toggleNepaliMode(self, gesture):
 		on = self._toggleEnabled()
@@ -1575,18 +1678,38 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		if not isOn():
 			gesture.send()
 			return
-		try:
-			focus = api.getFocusObject()
-			ti = getattr(focus, "treeInterceptor", None)
-			if ti is not None and not getattr(ti, "passThrough", True) and hasattr(ti, "script_copyToClipboard"):
-				ti.script_copyToClipboard(gesture)  # browse mode: NVDA copies, through our copy hook
+		focus = api.getFocusObject()
+		ti = getattr(focus, "treeInterceptor", None) if focus else None
+		src = ti if (ti is not None and not getattr(ti, "passThrough", True)) else focus
+		info = None
+		if src is not None:
+			try:
+				info = src.makeTextInfo(textInfos.POSITION_SELECTION)
+			except Exception:
+				info = None
+		if info is not None and not info.isCollapsed:
+			raw = info.text or ""
+			new = self._plainText(info)
+			if not new or new == raw:
+				c = conf()
+				ctxEnc = self._inContext()
+				defaultEnc = ctxEnc or c["encoding"]
+				if c["mode"] != "off":
+					isPdf = self._isPdfWindow(src)
+					conv = detector.convertMixed(raw, lambda t: legacyFonts.convert(t, defaultEnc) or t, encoding=defaultEnc, context=bool(ctxEnc or isPdf))
+					if conv and conv != raw:
+						new = conv
+				if c["repairUnicode"] and devanagariRepair.hasDevanagari(new):
+					new = devanagariRepair.repair(new, broken=True if self._isBrokenDoc() else None)
+			if new and new != raw:
+				api.copyToClip(textInfos.convertToCrlf(new), notify=True)
 				return
-		except Exception:
-			log.debugWarning("Nepali Reader: copy", exc_info=True)
-			focus = None
-		gesture.send()
-		if focus is not None:
-			wx.CallLater(300, self._fixClipboard, focus)
+		if ti is not None and not getattr(ti, "passThrough", True) and hasattr(ti, "script_copyToClipboard"):
+			ti.script_copyToClipboard(gesture)
+		else:
+			gesture.send()
+			if focus is not None:
+				wx.CallLater(300, self._fixClipboard, focus)
 
 	def _fixClipboard(self, focus):
 		"""After the application copied a selection of Preeti / damaged text, put the real text on

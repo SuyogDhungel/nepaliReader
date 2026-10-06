@@ -241,7 +241,7 @@ def _findRecentPdfByTitle(title):
 	if not title:
 		return None
 	clean = re.sub(
-		r"\s*-\s*(Google Chrome|Microsoft\s*Edge|Mozilla Firefox|Chrome|Edge|Firefox|Adobe Acrobat|Acrobat Reader|Adobe|SumatraPDF|Foxit).*$",
+		r"\s*-\s*(Google Chrome|Microsoft\s*Edge|Mozilla Firefox|Chrome|Edge|Firefox|Brave|Opera|Vivaldi|Adobe Acrobat|Acrobat Reader|Adobe|SumatraPDF|Foxit).*$",
 		"", title, flags=re.I
 	).strip()
 	if not clean or len(clean) < 3:
