@@ -181,9 +181,20 @@ def cleanShuffled(text):
 	text = re.sub(_DEVA_BOUND_L + r'महव' + _DEVA_BOUND_R, 'महत्त्व', text)
 	text = re.sub(_DEVA_BOUND_L + r'महवको' + _DEVA_BOUND_R, 'महत्त्वको', text)
 	text = re.sub(_DEVA_BOUND_L + r'महवराख्ने' + _DEVA_BOUND_R, 'महत्त्व राख्ने', text)
+	text = re.sub(_DEVA_BOUND_L + r'महवपूर्ण' + _DEVA_BOUND_R, 'महत्त्वपूर्ण', text)
 	text = re.sub(_DEVA_BOUND_L + r'निकरुञ्ज' + _DEVA_BOUND_R, 'निकुञ्ज', text)
 	text = re.sub(_DEVA_BOUND_L + r'वन्यजन्तरु' + _DEVA_BOUND_R, 'वन्यजन्तु', text)
 	text = re.sub(_DEVA_BOUND_L + r'सरुविधा' + _DEVA_BOUND_R, 'सुविधा', text)
+
+	# Trailing line-wrap / spacing artifacts (e.g. "नियन्त्रण   रा", "उचित व्य"):
+	text = re.sub(r'\s{2,}[\u0900-\u097f]{1,2}$', '', text)
+	if neLexicon.isLoaded():
+		def fix_trailing_orphan(m):
+			w = m.group(1)
+			if not neLexicon.isWord(w):
+				return ""
+			return m.group(0)
+		text = re.sub(r'\s+([\u0900-\u097f]{1,3})$', fix_trailing_orphan, text)
 
 	# 2. Restore dropped characters (e.g. unmapped Preeti ¿ -> रु / र) using the dictionary
 	if neLexicon.isLoaded():

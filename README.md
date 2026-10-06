@@ -1,10 +1,13 @@
 # Nepali Reader for NVDA
 
-[![Download Add-on](https://img.shields.io/badge/Download-nepaliReader--1.1.1.nvda--addon-brightgreen?style=for-the-badge&logo=nvda)](https://github.com/SuyogDhungel/nepaliReader/releases/download/v1.1.1/nepaliReader-1.1.1.nvda-addon)
+[![Download Add-on](https://img.shields.io/badge/Download-nepaliReader--1.1.2.nvda--addon-brightgreen?style=for-the-badge&logo=nvda)](https://github.com/SuyogDhungel/nepaliReader/releases/download/v1.1.2/nepaliReader-1.1.2.nvda-addon)
 [![License: GPL v2](https://img.shields.io/badge/License-GPL%20v2-blue.svg)](LICENSE)
 [![NVDA Compatibility](https://img.shields.io/badge/NVDA-2024.1%20to%202026.2-purple.svg)](https://www.nvaccess.org/)
 
 **Nepali Reader** is a free, open-source NVDA screen reader add-on created to solve the long-standing Devanagari reading issues faced by blind and visually impaired computer users in Nepal.
+
+> [!TIP]
+> **Recommendation**: Keep Nepali Mode OFF (`NVDA + Alt + N`) when working in English documents, browsing English websites, or programming. Toggle it ON when reading Nepali documents, gazettes, or PDFs. This ensures English abbreviations and symbols are pronounced normally while Nepali documents read cleanly.
 
 ---
 
@@ -23,8 +26,8 @@ Screen reader users in Nepal regularly encounter two major barriers when reading
 ## 📥 How to Download and Install
 
 1. Download the add-on file:
-   👉 [**Click here to download nepaliReader-1.0.0.nvda-addon**](https://github.com/SuyogDhungel/nepaliReader/releases/download/v1.0.0/nepaliReader-1.0.0.nvda-addon)
-2. Once downloaded, open your **Downloads** folder and press **Enter** on `nepaliReader-1.0.0.nvda-addon`.
+   👉 [**Click here to download nepaliReader-1.1.2.nvda-addon**](https://github.com/SuyogDhungel/nepaliReader/releases/download/v1.1.2/nepaliReader-1.1.2.nvda-addon)
+2. Once downloaded, open your **Downloads** folder and press **Enter** on `nepaliReader-1.1.2.nvda-addon`.
 3. NVDA will ask: *"Are you sure you want to install this add-on?"* — Press **Yes** (`Alt + Y`).
 4. When prompted to restart NVDA, select **Yes**.
 5. That is all! Nepali Reader activates automatically upon startup.
@@ -61,12 +64,12 @@ You can control all features directly through the NVDA menu using your keyboard:
 
 | Shortcut | What It Does |
 |---|---|
-| **`NVDA + Ctrl + Shift + Space`** | **Toggle Nepali Mode**: Quickly turns reading conversion on or off. NVDA will announce *"Nepali mode on"* or *"Nepali mode off"*. |
+| **`NVDA + Alt + N`** *(or `NVDA + Ctrl + Shift + Space`)* | **Toggle Nepali Mode**: Quickly turns reading conversion on or off. NVDA will announce *"Nepali mode on"* or *"Nepali mode off"*. `NVDA + Alt + N` is recommended for laptop users. |
 | **`Ctrl + C`** | **Smart Copy**: While Nepali mode is active, copying selected text automatically places clean, standard Unicode Devanagari onto your clipboard (ready to paste into Word, Facebook, or messaging apps). |
 | **`NVDA + Alt + U`** | **Convert and Read**: Converts whatever text is currently selected (or on the clipboard) to Unicode and speaks it aloud. |
 | **`NVDA + Alt + P`** | **Legacy Font Mode**: Cycles font conversion between *Automatic* (default), *Always Convert*, and *Off*. |
 | **`NVDA + Alt + Shift + P`** | **Default Font Family**: Switches the default legacy font between Preeti, Kantipur, Sagarmatha, Himali, PCS, and Kruti Dev. |
-| **`NVDA + Alt + O`** | **Offline OCR**: Performs optical character recognition on scanned PDFs or images in Nepali, Hindi, and English. Use arrow keys to review the text and `Escape` to close. |
+| **`NVDA + Alt + O`** | **Offline OCR**: Optical character recognition for scanned PDFs or images in Nepali, Hindi, and English. Use arrow keys to review the text and `Escape` to close. |
 
 ---
 
@@ -110,6 +113,13 @@ Yes, **Nepali Reader also supports Hindi**:
 ---
 
 ## 📜 Changelog
+
+### Version 1.1.2 (Current Stable Release)
+* **Selective Delta Announcements**: Fixed selection speech announcement so ONLY newly selected/unselected characters, words, or lines are spoken instead of repeating the entire selection from top to bottom.
+* **Typo Repairs & Normalization**: Added automatic correction for Preeti typewriter typos (`dxj` -> `महत्त्व`, `महवको` -> `महत्त्वको`, `महवराख्ने` -> `महत्त्व राख्ने`).
+* **Line-Wrap Artifact Removal**: Removed trailing multi-space artifacts and orphan hyphenated syllables at PDF line breaks.
+* **Laptop Rollover Fix**: Full support for `NVDA + Alt + N` as a conflict-free toggle gesture for laptop keyboard layouts.
+* **NVDA Store Compatibility**: Fully validated for stable NVDA 2024.1 through 2026.2.
 
 ### Version 1.0.0 (Official Initial Release)
 * Universal automatic conversion for Preeti, Kantipur, Sagarmatha, Fontasy Himali, PCS Nepali, and Kruti Dev.

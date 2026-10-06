@@ -333,6 +333,14 @@ def preetiFamilyToUnicode(text, font="preeti", _table=None):
 		s = s.replace("टृ", "ट्ट")
 		if s.startswith("ः"):
 			s = ":" + s[1:]
+		if s == "महव":
+			s = "महत्त्व"
+		elif s == "महवको":
+			s = "महत्त्वको"
+		elif s == "महवराख्ने":
+			s = "महत्त्व राख्ने"
+		elif s == "महवपूर्ण":
+			s = "महत्त्वपूर्ण"
 		if font == "preeti" and s.startswith("ऋ") and s.endswith("म्") and len(s) >= 4:
 			if not s.startswith(("ऋषि", "ऋण", "ऋतु", "ऋचा", "ऋद्धि", "ऋग्वेद")):
 				s = "“" + s[1:-1] + "”"

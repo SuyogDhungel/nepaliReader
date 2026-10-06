@@ -772,64 +772,111 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			import speech.speech as speechModule
 			origSel = speechModule.speakSelectionChange
 
-			def speakSelectionChange(oldInfo, newInfo, *args, **kwargs):
+			def speakSelectionChange(oldInfo, newInfo, speakSelected=True, speakUnselected=True, generalize=False, priority=None, *args, **kwargs):
 				if not isOn():
-					return origSel(_unwrap(oldInfo), _unwrap(newInfo), *args, **kwargs)
+					return origSel(_unwrap(oldInfo), _unwrap(newInfo), speakSelected, speakUnselected, generalize, priority, *args, **kwargs)
 				try:
 					rawOld = _unwrap(oldInfo)
 					rawNew = _unwrap(newInfo)
+					if rawNew.isCollapsed and rawOld.isCollapsed:
+						return
 					startToStart = rawNew.compareEndPoints(rawOld, "startToStart")
+					startToEnd = rawNew.compareEndPoints(rawOld, "startToEnd")
+					endToStart = rawNew.compareEndPoints(rawOld, "endToStart")
 					endToEnd = rawNew.compareEndPoints(rawOld, "endToEnd")
-					tempInfo = None
-					isUnselect = False
-					if endToEnd > 0:
-						tempInfo = rawOld.copy()
-						tempInfo.setEndPoint(rawOld, "endToStart")
-						tempInfo.setEndPoint(rawNew, "endToEnd")
-					elif startToStart < 0:
-						tempInfo = rawNew.copy()
-						tempInfo.setEndPoint(rawOld, "startToEnd")
-					elif endToEnd < 0:
-						isUnselect = True
-						tempInfo = rawNew.copy()
-						tempInfo.setEndPoint(rawOld, "endToEnd")
-					elif startToStart > 0:
-						isUnselect = True
-						tempInfo = rawOld.copy()
-						tempInfo.setEndPoint(rawNew, "startToEnd")
+					selectedList = []
+					unselectedList = []
 
-					if tempInfo is not None and not tempInfo.isCollapsed:
-						raw = tempInfo.text or ""
-						if raw:
-							conv = plugin._plainText(tempInfo)
-							if not conv or conv == raw:
-								c = conf()
-								ctxEnc = plugin._inContext()
-								defaultEnc = ctxEnc or c["encoding"]
-								if c["mode"] != "off":
-									isPdf = plugin._isPdfWindow(tempInfo.obj)
-									inCtx = bool(ctxEnc or isPdf)
-									if len(raw) <= 2 and any(ch in "!@#$%^&*()+=~`_{}[]\\|/<>?0123456789.;'-" for ch in raw):
-										c_tok = legacyFonts.convert(raw, defaultEnc)
-										if c_tok and c_tok != raw:
-											conv = c_tok
-									if not conv or conv == raw:
-										c_mixed = detector.convertMixed(raw, lambda t: legacyFonts.convert(t, defaultEnc) or t, encoding=defaultEnc, context=inCtx)
-										if c_mixed and c_mixed != raw:
-											conv = c_mixed
-								if c["repairUnicode"] and devanagariRepair.hasDevanagari(conv):
-									conv = devanagariRepair.repair(conv, broken=True if plugin._isBrokenDoc() else None)
-							if conv and conv != raw:
-								from speech.commands import LangChangeCommand
-								seq = [LangChangeCommand("ne"), conv, LangChangeCommand(None)]
-								if isUnselect:
-									speechModule.speakSelectionMessage(_("%s unselected"), seq)
-								else:
-									speechModule.speakTextSelected(seq)
-								return
+					if speakSelected and rawOld.isCollapsed:
+						selectedList.append(rawNew.copy())
+					elif speakUnselected and rawNew.isCollapsed:
+						unselectedList.append(rawOld.copy())
+					else:
+						if startToEnd > 0 or endToStart < 0:
+							if speakSelected and not rawNew.isCollapsed:
+								selectedList.append(rawNew.copy())
+							if speakUnselected and not rawOld.isCollapsed:
+								unselectedList.append(rawOld.copy())
+						else:
+							if speakSelected and startToStart < 0 and not rawNew.isCollapsed:
+								tempInfo = rawNew.copy()
+								tempInfo.setEndPoint(rawOld, "endToStart")
+								selectedList.append(tempInfo)
+							if speakSelected and endToEnd > 0 and not rawNew.isCollapsed:
+								tempInfo = rawNew.copy()
+								tempInfo.setEndPoint(rawOld, "startToEnd")
+								selectedList.append(tempInfo)
+							if speakUnselected and startToStart > 0 and not rawOld.isCollapsed:
+								tempInfo = rawOld.copy()
+								tempInfo.setEndPoint(rawNew, "endToStart")
+								unselectedList.append(tempInfo)
+							if speakUnselected and endToEnd < 0 and not rawOld.isCollapsed:
+								tempInfo = rawOld.copy()
+								tempInfo.setEndPoint(rawNew, "startToEnd")
+								unselectedList.append(tempInfo)
+
+					hasSpoken = False
+					for tInfo in selectedList:
+						if tInfo is not None and not tInfo.isCollapsed:
+							raw = tInfo.text or ""
+							if raw:
+								conv = plugin._plainText(tInfo)
+								if not conv or conv == raw:
+									c = conf()
+									ctxEnc = plugin._inContext()
+									defaultEnc = ctxEnc or c["encoding"]
+									if c["mode"] != "off":
+										isPdf = plugin._isPdfWindow(tInfo.obj)
+										inCtx = bool(ctxEnc or isPdf)
+										if len(raw) <= 2 and any(ch in "!@#$%^&*()+=~`_{}[]\\|/<>?0123456789.;'-" for ch in raw):
+											c_tok = legacyFonts.convert(raw, defaultEnc)
+											if c_tok and c_tok != raw:
+												conv = c_tok
+										if not conv or conv == raw:
+											c_mixed = detector.convertMixed(raw, lambda t: legacyFonts.convert(t, defaultEnc) or t, encoding=defaultEnc, context=inCtx)
+											if c_mixed and c_mixed != raw:
+												conv = c_mixed
+									if c["repairUnicode"] and devanagariRepair.hasDevanagari(conv):
+										conv = devanagariRepair.repair(conv, broken=True if plugin._isBrokenDoc() else None)
+								if conv and conv != raw:
+									from speech.commands import LangChangeCommand
+									seq = [LangChangeCommand("ne"), conv, LangChangeCommand(None)]
+									speechModule.speakTextSelected(seq, priority=priority)
+									hasSpoken = True
+
+					for tInfo in unselectedList:
+						if tInfo is not None and not tInfo.isCollapsed:
+							raw = tInfo.text or ""
+							if raw:
+								conv = plugin._plainText(tInfo)
+								if not conv or conv == raw:
+									c = conf()
+									ctxEnc = plugin._inContext()
+									defaultEnc = ctxEnc or c["encoding"]
+									if c["mode"] != "off":
+										isPdf = plugin._isPdfWindow(tInfo.obj)
+										inCtx = bool(ctxEnc or isPdf)
+										if len(raw) <= 2 and any(ch in "!@#$%^&*()+=~`_{}[]\\|/<>?0123456789.;'-" for ch in raw):
+											c_tok = legacyFonts.convert(raw, defaultEnc)
+											if c_tok and c_tok != raw:
+												conv = c_tok
+										if not conv or conv == raw:
+											c_mixed = detector.convertMixed(raw, lambda t: legacyFonts.convert(t, defaultEnc) or t, encoding=defaultEnc, context=inCtx)
+											if c_mixed and c_mixed != raw:
+												conv = c_mixed
+									if c["repairUnicode"] and devanagariRepair.hasDevanagari(conv):
+										conv = devanagariRepair.repair(conv, broken=True if plugin._isBrokenDoc() else None)
+								if conv and conv != raw:
+									from speech.commands import LangChangeCommand
+									seq = [LangChangeCommand("ne"), conv, LangChangeCommand(None)]
+									speechModule.speakSelectionMessage(_("%s unselected"), seq, priority=priority)
+									hasSpoken = True
+
+					if hasSpoken:
+						return
 				except Exception:
 					log.debugWarning("Nepali Reader: speakSelectionChange hook error", exc_info=True)
-				return origSel(_unwrap(oldInfo), _unwrap(newInfo), *args, **kwargs)
+				return origSel(_unwrap(oldInfo), _unwrap(newInfo), speakSelected, speakUnselected, generalize, priority, *args, **kwargs)
 
 			speechModule.speakSelectionChange = speakSelectionChange
 			self._patched2.append((speechModule, "speakSelectionChange", origSel, speakSelectionChange))
