@@ -299,13 +299,37 @@ def preetiFamilyToUnicode(text, font="preeti", _table=None):
 			lead, mid, trail = m_num.group(1), m_num.group(2), m_num.group(3)
 			result.append(lead + (mid.translate(_DIGIT_MAP) if font == "himali" else mid) + trail)
 			continue
-		# Parenthesized Devanagari: preserve parentheses
-		m = re.match(r"^([\(\[\{])([^\(\)\[\]\{\}]+)([\)\]\}])$", word)
-		if m:
-			lead, mid, trail = m.group(1), m.group(2), m.group(3)
-			if any("\u0900" <= c <= "\u097f" for c in mid):
-				result.append(lead + preetiFamilyToUnicode(mid, font, _table) + trail)
-				continue
+		# In Preeti typing / OCR, 9 and 0 at word boundaries enclosing letters/words
+		# represent unshifted bracket keys ( ) rather than consonants ढ and ण्.
+		# E.g. 9s0 -> (s) -> (क), 9v0 -> (v) -> (ख), 9lzIff0 -> (lzIff) -> (शिक्षा)
+		m90 = re.match(r"^9([^0-9\s]+)0$", word)
+		if m90:
+			word = "(" + m90.group(1) + ")"
+
+		# Preserve brackets around words, clauses, and numbers:
+		# In Preeti layout, '(' is Shift+9 (mapped to digit ९) and ')' is Shift+0 (mapped to digit ०).
+		# When '(' or ')' wrap a word, clause, or single letters/numbers (e.g. (s) -> (क), (lzIff) -> (शिक्षा), (!)->(१)),
+		# they are parentheses, not digits. They are digits only in pure multi-digit Preeti numbers (e.g. @)@( = २०२९, @) = २०).
+		lead_b = ""
+		trail_b = ""
+		if len(word) >= 2 and word[0] in "([{" and word[-1] in ")]}":
+			lead_b = word[0]
+			trail_b = word[-1]
+			word = word[1:-1]
+		else:
+			if word.startswith(("(", "[", "{")):
+				if len(word) == 1 or word[1] not in "!@#$%^&*()":
+					lead_b = word[0]
+					word = word[1:]
+			if word.endswith((")", "]", "}")):
+				if len(word) == 1 or word[-2] not in "!@#$%^&*()":
+					trail_b = word[-1]
+					word = word[:-1]
+
+		if not word:
+			result.append(lead_b + trail_b)
+			continue
+
 		# If word already has Devanagari characters: preserve boundary punctuation
 		if any("\u0900" <= c <= "\u097f" for c in word):
 			lead = len(word) - len(word.lstrip(".,;:!?()[]{}\"'“”‘’•–—…"))
@@ -314,10 +338,10 @@ def preetiFamilyToUnicode(text, font="preeti", _table=None):
 			rp = word[len(word) - trail:] if trail else ""
 			core = word[lead:len(word) - trail] if trail else word[lead:]
 			if not any(c.isascii() and c.isalpha() for c in core):
-				result.append(word)
+				result.append(lead_b + word + trail_b)
 				continue
 			if lp or rp:
-				result.append(lp + preetiFamilyToUnicode(core, font, _table) + rp)
+				result.append(lead_b + lp + preetiFamilyToUnicode(core, font, _table) + rp + trail_b)
 				continue
 			# mixed letters with nothing to strip: convert it as one word below
 		s = "".join(table.get(ch, ch) for ch in word)
@@ -344,7 +368,7 @@ def preetiFamilyToUnicode(text, font="preeti", _table=None):
 		if font == "preeti" and s.startswith("ऋ") and s.endswith("म्") and len(s) >= 4:
 			if not s.startswith(("ऋषि", "ऋण", "ऋतु", "ऋचा", "ऋद्धि", "ऋग्वेद")):
 				s = "“" + s[1:-1] + "”"
-		result.append(s)
+		result.append(lead_b + s + trail_b)
 	return unicodedata.normalize("NFC", "".join(result))
 
 

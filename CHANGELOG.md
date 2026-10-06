@@ -9,6 +9,7 @@ All notable changes to the **Nepali Reader** NVDA add-on are documented here.
 - **Native Unicode Selection & Copying**: Copying (`Ctrl+C`, `Ctrl+A`) and selection navigation (`Shift+Arrows`, `Ctrl+Shift+Arrows`) in standard applications (Word, Notepad, Chrome) now preserves native Devanagari text and clipboard formats without unwanted conversion or corruption.
 - **Universal Script & Symbol Protection**: Full protection for Arabic decimals and numbers (`8848.86`, `8516`, `100%`), math symbols, emojis, bullets (`•`, `*`, `-`), and stars (`★`) across all detection paths.
 - **Document Language Dominance (>=20% Rule)**: If >=20% of observed words in a document are Unicode Devanagari, the document context is locked to Unicode, preventing English text, numbers, or symbols from ever being falsely identified as Preeti unless explicitly tagged with a legacy font name.
+- **Preeti Clause Brackets & 9/0 Key Resolution**: Parenthesized words and legal clauses (e.g. `(s)` -> `(क)`, `(v)` -> `(ख)`, `(lzIff)` -> `(शिक्षा)`, `(!)` -> `(१)`, `9s0` -> `(क)`) accurately preserve outer parentheses instead of turning into digits `९...०` or `ढकण्`, while genuine multi-digit Preeti numbers (e.g. `@)@(` -> `२०२९`, `@)` -> `२०`, `*(` -> `८९`) remain numbers.
 - **Startup Guidance & Toggle Reminders**: Clear user notifications on startup and on mode toggle (`NVDA+Alt+N`) advising users to keep Nepali mode OFF during English typing or system navigation and ON when reading Nepali documents.
 
 ## [1.1.3] - 2026-10-06 (Stable Release)

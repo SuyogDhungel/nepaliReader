@@ -239,7 +239,7 @@ def decide(text, encoding="preeti", context=False):
 			hasLetters = any(c.isascii() and c.isalpha() for c in t)
 			result.append((t, not _URLISH.search(t) and not englishLooking and (hasLetters or not t.replace(".", "").isdigit())))
 		else:
-			isBulletPrefix = len(core) == 1 and core.islower() and t[-1:] in "_).-/" and legacy > 0
+			isBulletPrefix = (bool(re.match(r"^9[a-zA-Z]+0$", t)) or bool(_PREETI_LIST_TOKEN.match(t)) or (len(core) == 1 and core.islower() and (t[-1:] in "_).-/" or t[:1] in "([") and legacy > 0))
 			result.append((t, bool(
 				isBulletPrefix
 				or (sc is not None and (
@@ -290,7 +290,7 @@ paragraph|page|end of document|top|bottom|bold|italic|underline|not bold|not ita
 
 
 _NUM_TOKEN = re.compile(r"^[\$€₹#№]?\d+(?:[.,/:\-]\d+)*[%°]?$")
-_PREETI_LIST_TOKEN = re.compile(r"^[svu3ª][_\-]$")
+_PREETI_LIST_TOKEN = re.compile(r"^(?:[svu3ª][_\-]|[\(\[]?[svu3ª][\)\]./\-_]|9[svu3ª]0)$")
 _STANDALONE_BULLET = frozenset("•●○■▪◦✓★→←–—…*+-#~※♦►")
 
 
