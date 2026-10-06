@@ -214,7 +214,7 @@ def _fixSignOrder(s):
 	return s
 
 
-BULLETS = set("•●○■▪◦✓★→←–—…")
+BULLETS = set("•●○■▪◦✓★→←–—…*+-#~※♦►")
 _DIGIT_MAP = str.maketrans("0123456789", "०१२३४५६७८९")
 
 
@@ -278,7 +278,7 @@ def preetiFamilyToUnicode(text, font="preeti", _table=None):
 			result.append(word)
 			continue
 		# Standalone bullet / symbol: preserve without conversion
-		if word in BULLETS or (len(word) == 1 and word in "•●○■▪◦✓★→←–—…"):
+		if word in BULLETS or (len(word) == 1 and word in "•●○■▪◦✓★→←–—…*+-#~※♦►"):
 			result.append(word)
 			continue
 		if font == "preeti":
@@ -297,7 +297,7 @@ def preetiFamilyToUnicode(text, font="preeti", _table=None):
 		if m_num and m_num.group(2) != "5":
 			# (a lone "5" is the very common verb छ, not a number)
 			lead, mid, trail = m_num.group(1), m_num.group(2), m_num.group(3)
-			result.append(lead + mid.translate(_DIGIT_MAP) + trail)
+			result.append(lead + mid + trail)
 			continue
 		# Parenthesized Devanagari: preserve parentheses
 		m = re.match(r"^([\(\[\{])([^\(\)\[\]\{\}]+)([\)\]\}])$", word)

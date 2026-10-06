@@ -69,7 +69,6 @@ You can control all features directly through the NVDA menu using your keyboard:
 | **`NVDA + Alt + U`** | **Convert and Read**: Converts whatever text is currently selected (or on the clipboard) to Unicode and speaks it aloud. |
 | **`NVDA + Alt + P`** | **Legacy Font Mode**: Cycles font conversion between *Automatic* (default), *Always Convert*, and *Off*. |
 | **`NVDA + Alt + Shift + P`** | **Default Font Family**: Switches the default legacy font between Preeti, Kantipur, Sagarmatha, Himali, PCS, and Kruti Dev. |
-| **`NVDA + Alt + O`** | **Offline OCR**: Optical character recognition for scanned PDFs or images in Nepali, Hindi, and English. Use arrow keys to review the text and `Escape` to close. |
 
 ---
 
@@ -83,7 +82,6 @@ If any shortcut conflicts with another add-on or if you prefer different keys, y
 4. You will see a list of actions:
    * *Toggle Nepali mode*
    * *Convert the selected text or the clipboard to Unicode*
-   * *OCR the current object in Nepali, Hindi and English*
    * *Legacy font reading: automatic, always convert, off*
    * *Default legacy font family*
 5. Select the action you wish to change.

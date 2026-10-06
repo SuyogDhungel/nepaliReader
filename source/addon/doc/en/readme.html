@@ -18,7 +18,6 @@
 <li><b>NVDA+Alt+P</b>: legacy font reading: automatic (default), always convert, off.</li>
 <li><b>NVDA+Alt+Shift+P</b>: default legacy font (Preeti, Kantipur, Sagarmatha, Himali, PCS Nepali, Kruti Dev).</li>
 <li><b>NVDA+Alt+U</b>: convert the selected text (or the clipboard) to Unicode, copy it, and read it.</li>
-<li><b>NVDA+Alt+O</b>: offline OCR of the current object (for example a PDF page) in Nepali, Hindi and English. Use arrow keys to read the result, Escape to close.</li>
 <li>None of these keys clash with NVDA 2026.2. If NVDA, another add-on or you have already given one of these keys to something else, Nepali Reader leaves that key alone; assign it a free key under NVDA menu, Preferences, Input gestures, Nepali Reader.</li>
 </ul>
 <p>All keys can be changed in NVDA menu, Preferences, Input gestures, Nepali Reader.</p>
@@ -55,14 +54,12 @@
 <li>When a document's text is damaged, the add-on reads the whole document once, in the background, and learns that document's own letter pattern: each PDF made with Word stores its own wrong letters, sometimes like a code (ि stored as ग, ष्ट्र or च; ग, ध and ख stored as ि; व stored as र्). A stored piece may have several meanings; each word is decoded to the meaning that is a dictionary word. When it has learned the pattern it says "learned this document's letter pattern". Words that are already real words are never changed.</li>
 <li>Place names of Nepal (districts, municipalities, rural municipalities) and common bulletin words are included, so they can be checked too.</li>
 <li>The add-on decides per document whether its text is damaged: a fault that never occurs in correct text, or a trial repair that turns many unknown words into real words. Correct documents are left alone.</li>
-<li>Names and new words that are not in the dictionary cannot always be repaired. If a document still reads badly after repair, the add-on says so once: press NVDA+Alt+O to read the page with OCR. OCR reads the page image, so it works with any PDF, including scanned ones.</li>
+<li>Names and new words that are not in the dictionary cannot always be repaired.</li>
 </ul>
-<h2>OCR engine</h2>
-<p>The Nepali, Hindi and English OCR data is included. The Tesseract engine itself must be installed once: download the Windows installer from the Tesseract project (UB Mannheim build, <code>https://github.com/UB-Mannheim/tesseract/wiki</code>) and install it with default options. The add-on finds it automatically in Program Files; otherwise set its path in NVDA settings, Nepali Reader.</p>
 <h2>Voice</h2>
 <p>Converted text is marked as Nepali (or Hindi for Kruti Dev) so NVDA can switch voice. Use a synthesizer with a Nepali voice, for example eSpeak NG (built in) or the Hear2Read add-on, and keep "Automatic language switching" on in NVDA's voice settings.</p>
 <h2>Author</h2>
 <p>Suyog Dhungel (&lt;dhungelsuyog13@gmail.com&gt;). Project repository: <a href="https://github.com/SuyogDhungel/nepaliReader">https://github.com/SuyogDhungel/nepaliReader</a>.</p>
 <h2>Credits</h2>
-<p>Kruti Dev rules ported from kru2uni / krutidev-unicode (ISC). Preeti family tables cross-checked with npttf2utf. English word list: Webster's Second International (public domain). Nepali word list: Nepali Hunspell dictionary, Madan Puraskar Pustakalaya (LGPL 2.1). Detector statistics derived from wordfreq. OCR data: tesseract-ocr/tessdata_best and tessdata_fast (Apache 2.0).</p>
+<p>Kruti Dev rules ported from kru2uni / krutidev-unicode (ISC). Preeti family tables cross-checked with npttf2utf. English word list: Webster's Second International (public domain). Nepali word list: Nepali Hunspell dictionary, Madan Puraskar Pustakalaya (LGPL 2.1). Detector statistics derived from wordfreq.</p>
 </body></html>

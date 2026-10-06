@@ -275,10 +275,14 @@ paragraph|page|end of document|top|bottom|bold|italic|underline|not bold|not ita
 """.replace("\n", "").split("|") if p.strip())
 
 
+_NUM_TOKEN = re.compile(r"^[\$€₹#№]?\d+(?:[.,/:\-]\d+)*[%°]?$")
+_PREETI_LIST_TOKEN = re.compile(r"^[svu3ª][_\-]$")
+_STANDALONE_BULLET = frozenset("•●○■▪◦✓★→←–—…*+-#~※♦►")
+
+
 def forceDecide(text, protectEnglish=True):
-	"""Everything is legacy except URLs/e-mails and (if protectEnglish) words NVDA itself speaks.
-	With protectEnglish=False (the font is known to be legacy), only URLs and an utterance that is
-	exactly an NVDA control word are kept."""
+	"""Everything is legacy except URLs/e-mails, English numbers, standalone bullets/symbols,
+	and (if protectEnglish) words NVDA itself speaks."""
 	if not protectEnglish and text.strip().lower() in NVDA_PHRASES:
 		return [(text, False)]
 	out = []
@@ -287,6 +291,15 @@ def forceDecide(text, protectEnglish=True):
 			out.append((t, False))
 			continue
 		core = _core(t)
+		if _PREETI_LIST_TOKEN.match(t):
+			out.append((t, True))
+			continue
+		if _NUM_TOKEN.match(t) or _NUM_TOKEN.match(core):
+			out.append((t, False))
+			continue
+		if t in _STANDALONE_BULLET or core in _STANDALONE_BULLET:
+			out.append((t, False))
+			continue
 		keep = _URLISH.search(t) or (protectEnglish and core.lower() in COMMON_ENGLISH and len(core) > 2)
 		out.append((t, not keep))
 	return out

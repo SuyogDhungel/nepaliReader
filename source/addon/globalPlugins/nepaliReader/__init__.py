@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 # Nepali Reader for NVDA
 # Reads Preeti / Kantipur / Sagarmatha / Himali / PCS Nepali and Kruti Dev (Hindi)
-# legacy-font text as Devanagari, repairs jumbled Devanagari from PDFs, and provides
-# offline Nepali/Hindi/English OCR with Tesseract. Licensed under the GNU GPL v2 or later.
+# legacy-font text as Devanagari, and repairs jumbled Devanagari from PDFs.
+# Licensed under the GNU GPL v2 or later.
 #
 # Only DOCUMENT TEXT is touched: the add-on wraps NVDA's getTextInfoSpeech, which is what
 # speaks text under the caret / review cursor, say all and browse mode. Menus, dialogs,
@@ -36,7 +36,6 @@ from . import glyphRefs
 from . import legacyFonts
 from . import neLexicon
 from . import pdfText
-from . import tesseractOcr
 from . import visualScript
 from . import diag
 
@@ -55,8 +54,6 @@ CONF_SPEC = {
 	"visualCheck": "boolean(default=True)",
 	"webFontOnly": "boolean(default=True)",
 	"lastOnMode": "option('auto', 'always', default='auto')",
-	"tesseractPath": "string(default='')",
-	"ocrLanguages": "string(default='nep+hin+eng')",
 }
 config.conf.spec[CONF_SECTION] = CONF_SPEC
 
@@ -210,19 +207,10 @@ class _DocState:
 			self.decided = True
 
 	def afterRepair(self, fixed):
-		"""If even the repaired text has few real words, suggest OCR once."""
-		if self.warned:
-			return
+		"""Tracks repair statistics for the document."""
 		k, n = devanagariRepair.wordStats(fixed)
 		self.afterKnown += k
 		self.afterWords += n
-		if self.afterWords >= 80 and self.afterKnown < 0.6 * self.afterWords:
-			self.warned = True
-			# Translators: said once when a document's text cannot be repaired well
-			wx.CallLater(800, ui.message, _(
-				"The text in this document is damaged. For the most accurate reading, "
-				"press NVDA+Alt+O to read the page with OCR."
-			))
 
 
 class _ConvertingTextInfo:
@@ -677,7 +665,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				isPdf = False
 			inCtx = bool(ctxEnc or isPdf)
 			if mode != "off":
-				if len(text.strip()) <= 3 and any(ch in "!@#$%^&*()+=~`_{}[]\\|/<>?0123456789.;'-" for ch in text):
+				if len(text.strip()) <= 3 and not any(ch.isdigit() for ch in text) and any(ch in "!@#$%^&*()+=~`_{}[]\\|/<>?;'-" for ch in text):
 					conv_sym = legacyFonts.convert(text, defaultEnc)
 					if conv_sym and conv_sym != text:
 						text = conv_sym
@@ -828,7 +816,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 									if c["mode"] != "off":
 										isPdf = plugin._isPdfWindow(tInfo.obj)
 										inCtx = bool(ctxEnc or isPdf)
-										if len(raw) <= 2 and any(ch in "!@#$%^&*()+=~`_{}[]\\|/<>?0123456789.;'-" for ch in raw):
+										if len(raw) <= 2 and not any(ch.isdigit() for ch in raw) and any(ch in "!@#$%^&*()+=~`_{}[]\\|/<>?;'-" for ch in raw):
 											c_tok = legacyFonts.convert(raw, defaultEnc)
 											if c_tok and c_tok != raw:
 												conv = c_tok
@@ -856,7 +844,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 									if c["mode"] != "off":
 										isPdf = plugin._isPdfWindow(tInfo.obj)
 										inCtx = bool(ctxEnc or isPdf)
-										if len(raw) <= 2 and any(ch in "!@#$%^&*()+=~`_{}[]\\|/<>?0123456789.;'-" for ch in raw):
+										if len(raw) <= 2 and not any(ch.isdigit() for ch in raw) and any(ch in "!@#$%^&*()+=~`_{}[]\\|/<>?;'-" for ch in raw):
 											c_tok = legacyFonts.convert(raw, defaultEnc)
 											if c_tok and c_tok != raw:
 												conv = c_tok
@@ -1859,30 +1847,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		api.copyToClip(result)
 		ui.message(result)
 
-	@script(
-		# Translators: input help for a command
-		description=_("Recognizes the navigator object (for example a PDF page) with offline Nepali, Hindi and English OCR"),
-		category=CATEGORY,
-		gesture="kb:NVDA+alt+o",
-	)
-	def script_ocr(self, gesture):
-		exe = tesseractOcr.findTesseract(conf()["tesseractPath"])
-		if not exe:
-			# Translators: reported when the OCR engine is missing
-			ui.message(_(
-				"Tesseract OCR engine not found. Install Tesseract for Windows, "
-				"or set its path in NVDA settings, Nepali Reader."
-			))
-			return
-		try:
-			from contentRecog import recogUi
-			if self._recognizerClass is None:
-				self._recognizerClass = tesseractOcr.makeRecognizerClass()
-			recogUi.recognizeNavigatorObject(self._recognizerClass(exe, conf()["ocrLanguages"] or "nep+hin+eng"))
-		except Exception:
-			log.error("Nepali Reader: OCR failed to start", exc_info=True)
-			# Translators: reported when OCR fails
-			ui.message(_("OCR failed"))
+
 
 
 class NepaliReaderSettingsPanel(SettingsPanel):
@@ -1922,12 +1887,6 @@ class NepaliReaderSettingsPanel(SettingsPanel):
 		# Translators: settings label
 		self.webCheck = helper.addItem(wx.CheckBox(self, label=_("On web pages and chat apps, convert only text whose font is Preeti, Kruti Dev or similar")))
 		self.webCheck.SetValue(c["webFontOnly"])
-		# Translators: settings label
-		self.tessPath = helper.addLabeledControl(_("Tesseract OCR program (leave empty to find it automatically):"), wx.TextCtrl)
-		self.tessPath.SetValue(c["tesseractPath"])
-		# Translators: settings label
-		self.ocrLangs = helper.addLabeledControl(_("OCR languages:"), wx.TextCtrl)
-		self.ocrLangs.SetValue(c["ocrLanguages"])
 
 	def onSave(self):
 		c = conf()
@@ -1943,6 +1902,4 @@ class NepaliReaderSettingsPanel(SettingsPanel):
 		c["switchLanguage"] = self.langCheck.GetValue()
 		c["visualCheck"] = self.visualCheck.GetValue()
 		c["webFontOnly"] = self.webCheck.GetValue()
-		c["tesseractPath"] = self.tessPath.GetValue().strip().strip('"')
-		c["ocrLanguages"] = self.ocrLangs.GetValue().strip() or "nep+hin+eng"
 		_menuSync[0]()
