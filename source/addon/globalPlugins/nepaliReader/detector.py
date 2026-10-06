@@ -92,6 +92,12 @@ _SUFFIXES = ("'s", "s'", "ies", "es", "s", "ed", "ing", "ly", "er", "est")
 
 
 def isEnglishWord(word):
+	global _ENGLISH_DICT
+	if not _ENGLISH_DICT:
+		try:
+			loadDictionary()
+		except Exception:
+			pass
 	w = word.lower()
 	if w in COMMON_ENGLISH or w in _ENGLISH_DICT:
 		return True
@@ -181,7 +187,8 @@ def decide(text, encoding="preeti", context=False):
 		if sc >= WORD_THRESHOLD:
 			legacy += 1
 		elif sc <= ENGLISH_THRESHOLD:
-			english += 1
+			if isEnglishWord(core) or (len(core) >= 3 and sc <= -3.0):
+				english += 1
 	total = legacy + english
 	_BULLETS_ARROWS = frozenset(_BULLET_SYMS)
 	if total == 0:
@@ -210,14 +217,21 @@ def decide(text, encoding="preeti", context=False):
 			# keep words that clearly read as English/romanised ("roshan", "Office") inside a legacy line
 			core = _core(t)
 			sig = _KRUTI_SIGNATURE if encoding == "krutidev" else _PREETI_SIGNATURE
-			englishLooking = sc is not None and sc <= ENGLISH_THRESHOLD * 4 and len(core) >= 3 and not sig.search(core)
+			englishLooking = (
+				(isEnglishWord(core) or (sc is not None and sc <= -10.0))
+				and len(core) >= 3
+				and not sig.search(core)
+			)
 			hasLetters = any(c.isascii() and c.isalpha() for c in t)
 			result.append((t, not _URLISH.search(t) and not englishLooking and (hasLetters or not t.replace(".", "").isdigit())))
 		else:
-			result.append((t, sc is not None and (
-				(legacy > english and _strongAlone(t, sc, encoding))
-				or (sc >= MIXED_WORD and len(_core(t)) >= 3 and not isEnglishWord(_core(t))
-					and encoding != "krutidev" and _PREETI_SIGNATURE.search(_core(t))))))
+			isBulletPrefix = len(core) <= 2 and t[-1:] in "_).-/" and any(c.isalpha() for c in core) and legacy > 0
+			result.append((t, bool(
+				isBulletPrefix
+				or (sc is not None and (
+					(legacy > english and _strongAlone(t, sc, encoding))
+					or (sc >= MIXED_WORD and len(_core(t)) >= 3 and not isEnglishWord(_core(t))
+						and encoding != "krutidev" and _PREETI_SIGNATURE.search(_core(t))))))))
 	return result
 
 

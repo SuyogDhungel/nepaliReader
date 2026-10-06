@@ -397,6 +397,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			self._patchCopyAndSelection()
 		except Exception:
 			log.error("Nepali Reader: could not hook copying", exc_info=True)
+		try:
+			self._registerSpeechFilter()
+		except Exception:
+			log.error("Nepali Reader: could not register speech filter", exc_info=True)
 		NVDASettingsDialog.categoryClasses.append(NepaliReaderSettingsPanel)
 		self._menu = None
 		try:
@@ -620,6 +624,73 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			except Exception:
 				pass
 		self._patched2 = []
+		if getattr(self, "_speechFilterRegistered", False):
+			try:
+				import speech
+				speech.filter_speechSequence.unregister(self._filterSpeechSequence)
+			except Exception:
+				pass
+			self._speechFilterRegistered = False
+
+	def _registerSpeechFilter(self):
+		self._speechFilterRegistered = False
+		try:
+			import speech
+			if hasattr(speech, "filter_speechSequence") and hasattr(speech.filter_speechSequence, "register"):
+				speech.filter_speechSequence.register(self._filterSpeechSequence)
+				self._speechFilterRegistered = True
+		except Exception:
+			log.debugWarning("Nepali Reader: could not register speechSequence filter", exc_info=True)
+
+	def _filterSpeechSequence(self, speechSequence):
+		"""Ensures repeated table headers, cell navigation headers, object names,
+		and selection announcements are converted and spoken with proper language tagging."""
+		if not isOn():
+			return speechSequence
+		c = conf()
+		if c["mode"] == "off" and not c["repairUnicode"] and not c["switchLanguage"]:
+			return speechSequence
+		mode = c["mode"]
+		repair = c["repairUnicode"]
+		switchLang = c["switchLanguage"]
+		ctxEnc = self._inContext()
+		defaultEnc = ctxEnc or c["encoding"]
+		out = []
+		try:
+			from speech.commands import LangChangeCommand
+		except ImportError:
+			LangChangeCommand = None
+
+		for item in speechSequence:
+			if not isinstance(item, str):
+				out.append(item)
+				continue
+			if not item or item.isspace():
+				out.append(item)
+				continue
+			text = item
+			# If it looks like legacy text (e.g. repeated table headers, cell labels, selection)
+			if mode != "off" and detector.looksLegacy(text, defaultEnc, context=bool(ctxEnc)):
+				conv = detector.convertMixed(text, lambda t: legacyFonts.convert(t, defaultEnc) or t, encoding=defaultEnc, context=bool(ctxEnc))
+				if conv != text:
+					text = conv
+					if switchLang and LangChangeCommand:
+						out.append(LangChangeCommand("ne"))
+						out.append(text)
+						out.append(LangChangeCommand(None))
+						continue
+			if repair and devanagariRepair.hasDevanagari(text):
+				if devanagariRepair.isBroken(text):
+					text = devanagariRepair.repair(text, broken=True)
+			if switchLang and LangChangeCommand and devanagariRepair.hasDevanagari(text):
+				prevIsLang = bool(out and isinstance(out[-1], LangChangeCommand) and getattr(out[-1], "lang", "") == "ne")
+				if not prevIsLang:
+					out.append(LangChangeCommand("ne"))
+					out.append(text)
+					out.append(LangChangeCommand(None))
+					continue
+			out.append(text)
+		return out
 
 	def _patchCopyAndSelection(self):
 		"""Copying (browse mode Ctrl+C, NVDA's review copy) and speaking a selection
@@ -1175,6 +1246,18 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				curEnc = legacyFonts.encodingForFontName(name) if name else None
 				lower = (name or "").lower()
 				unicodeFont = bool(name) and any(f in lower for f in UNICODE_DEVANAGARI_FONTS)
+			elif isinstance(item, textInfos.FieldCommand) and item.command == "controlStart" and item.field:
+				for attr in ("table-rowheadertext", "table-columnheadertext", "name", "description"):
+					val = item.field.get(attr)
+					if isinstance(val, str) and val:
+						if curEnc:
+							conv = legacyFonts.convert(val, curEnc)
+							if conv and conv != val:
+								item.field[attr] = conv
+						elif detector.looksLegacy(val, "preeti"):
+							conv = detector.convertMixed(val, legacyFonts.preetiFamilyToUnicode)
+							if conv and conv != val:
+								item.field[attr] = conv
 		if not runs:
 			return fields
 		out = list(fields)
@@ -1269,7 +1352,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				continue
 			elif not any(ch.isascii() and ch.isalpha() for ch in text):
 				# numbers/symbols: if in confirmed legacy context, convert!
-				if ctxEnc and any(ch in "!@#$%^&*()+=~`_{}[]\\|/<>?" for ch in text):
+				if ctxEnc and any(ch in "!@#$%^&*()+=~`_{}[]\\|/<>?0123456789." for ch in text):
 					useEnc = ctxEnc
 					conv = legacyFonts.convert(text, useEnc)
 					if conv and conv != text:

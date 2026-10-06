@@ -290,10 +290,10 @@ def preetiFamilyToUnicode(text, font="preeti", _table=None):
 			if word == "M":
 				result.append(":")
 				continue
-		# Standalone digits (e.g. page numbers, list numbers, percentages):
+		# Standalone digits (e.g. page numbers, list numbers, percentages, decimals):
 		# in Preeti family layouts, unshifted digit keys give consonants/conjuncts (1=ज्ञ, 2=द्द);
 		# standalone digit strings in documents are never words, always numbers.
-		m_num = re.match(r"^([.,;:!?\(\)\[\]\{\}\-\–—/\\%]*)([0-9]+)([.,;:!?\(\)\[\]\{\}\-\–—/\\%]*)$", word)
+		m_num = re.match(r"^([+\$€₹.,;:!?\(\)\[\]\{\}\-\–—/\\%]*)([0-9]+(?:[.,/:\-][0-9]+)*)([%.,;:!?\(\)\[\]\{\}\-\–—/\\%]*)$", word)
 		if m_num and m_num.group(2) != "5":
 			# (a lone "5" is the very common verb छ, not a number)
 			lead, mid, trail = m_num.group(1), m_num.group(2), m_num.group(3)
@@ -453,6 +453,7 @@ _FONT_NAME_PATTERNS = [
 	(re.compile(r"sagarmatha", re.I), "sagarmatha"),
 	(re.compile(r"himal", re.I), "himali"),
 	(re.compile(r"pcs\s*nepali", re.I), "pcs"),
+	(re.compile(r"sumod|acharya|kanchan|everest|annapurna|jagadamba|rupa|shangrila", re.I), "preeti"),
 	(re.compile(r"kruti\s*dev|krutidev|k010|kruti", re.I), "krutidev"),
 ]
 

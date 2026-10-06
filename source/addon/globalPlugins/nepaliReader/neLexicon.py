@@ -64,8 +64,16 @@ def isWord(word):
 	"""True if `word` is a Nepali word form known to the dictionary."""
 	if not word:
 		return False
+	if not _loaded:
+		try:
+			load()
+		except Exception:
+			pass
 	if word in _STEMS or word in _EXTRA or word in _NAMES or word in _COMMON_NEPALI:
 		return True
+	if "हरु" in word:
+		if isWord(word.replace("हरु", "हरू")):
+			return True
 	for e in _NAME_ENDINGS:
 		if word.endswith(e) and (word[: -len(e)] in _NAMES or word[: -len(e)] in _COMMON_NEPALI):
 			return True
