@@ -1,8 +1,8 @@
 # Nepali Reader for NVDA
 
-[![Download Add-on](https://img.shields.io/badge/Download-nepaliReader--1.0.0.nvda--addon-brightgreen?style=for-the-badge&logo=nvda)](https://github.com/SuyogDhungel/nepaliReader/releases/download/v1.0.0/nepaliReader-1.0.0.nvda-addon)
+[![Download Add-on](https://img.shields.io/badge/Download-nepaliReader--1.1.1.nvda--addon-brightgreen?style=for-the-badge&logo=nvda)](https://github.com/SuyogDhungel/nepaliReader/releases/download/v1.1.1/nepaliReader-1.1.1.nvda-addon)
 [![License: GPL v2](https://img.shields.io/badge/License-GPL%20v2-blue.svg)](LICENSE)
-[![NVDA Compatibility](https://img.shields.io/badge/NVDA-2024.1%20to%202026.3-purple.svg)](https://www.nvaccess.org/)
+[![NVDA Compatibility](https://img.shields.io/badge/NVDA-2024.1%20to%202026.2-purple.svg)](https://www.nvaccess.org/)
 
 **Nepali Reader** is a free, open-source NVDA screen reader add-on created to solve the long-standing Devanagari reading issues faced by blind and visually impaired computer users in Nepal.
 
