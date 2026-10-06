@@ -399,8 +399,18 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			# after every add-on has loaded, give up any key another command already uses
 			wx.CallAfter(self._avoidGestureClashes)
 			wx.CallLater(3000, self._checkHooks)
+			wx.CallLater(3500, self._startupReminder)
 		except Exception:
 			log.debugWarning("Nepali Reader: gesture check failed", exc_info=True)
+
+	def _startupReminder(self):
+		if isOn():
+			# Translators: reminder spoken on NVDA startup
+			ui.message(_(
+				"Nepali Reader active. "
+				"Recommendation: Keep Nepali mode off (NVDA+Alt+N) when typing in English or navigating system menus, "
+				"and turn it on when reading Nepali documents or PDFs."
+			))
 
 	def _checkHooks(self):
 		try:
@@ -1701,7 +1711,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		on = self._toggleEnabled()
 		tones.beep(880 if on else 330, 50)
 		# Translators: announced when Nepali mode is switched on or off
-		ui.message(_("Nepali mode on") if on else _("Nepali mode off"))
+		ui.message(_("Nepali mode on. Turn off with NVDA+Alt+N for English typing or menus.") if on else _("Nepali mode off"))
 
 	@script(
 		# Translators: input help for a command
@@ -1858,8 +1868,13 @@ class NepaliReaderSettingsPanel(SettingsPanel):
 		c = conf()
 		helper = guiHelper.BoxSizerHelper(self, sizer=settingsSizer)
 		# Translators: settings label
-		self.enabledCheck = helper.addItem(wx.CheckBox(self, label=_("Nepali mode (NVDA+Ctrl+Shift+Space)")))
+		self.enabledCheck = helper.addItem(wx.CheckBox(self, label=_("Nepali mode (NVDA+Alt+N or NVDA+Ctrl+Shift+Space)")))
 		self.enabledCheck.SetValue(isOn())
+		# Translators: guidance note in settings dialog
+		helper.addItem(wx.StaticText(self, label=_(
+			"Recommendation: Keep Nepali mode disabled (NVDA+Alt+N) when working in English documents, "
+			"programming, or navigating system menus. Enable it when reading Nepali text or PDFs."
+		)))
 		# Translators: settings label
 		self.pdfCheck = helper.addItem(wx.CheckBox(self, label=_("For PDFs, read the PDF file itself to get the exact Nepali text")))
 		self.pdfCheck.SetValue(c["pdfFile"])

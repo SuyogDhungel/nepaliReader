@@ -2,6 +2,20 @@
 
 All notable changes to the **Nepali Reader** NVDA add-on are documented here.
 
+## [1.1.3] - 2026-10-06 (Stable Release)
+
+### Added
+- **Startup & Toggle Guidance**: Automatic announcement and settings panel tip recommending users keep Nepali mode OFF (`NVDA + Alt + N`) during English typing, programming, or menu navigation, and toggle it ON when reading Nepali text or PDFs.
+- **Smart English Number & Symbol Protection**: Numbers like `8848.86`, `8516`, and standalone bullets (`*`, `•`, `-`) are protected from being misidentified as Preeti keys.
+- **Ultra-Lightweight Distribution**: Completely removed user-facing OCR and heavy Tesseract data, shrinking package size from 27 MB to 2.99 MB.
+
+## [1.1.2] - 2026-10-06
+
+### Fixed
+- **Selective Delta Announcements**: Fixed text selection so `Shift + Arrows` speaks only the newly selected/unselected delta chunk rather than repeating the entire selection from top to bottom.
+- **Preeti Typewriter Typo Repairs**: Automatic restoration of `dxj` -> `महत्त्व`, `महवको` -> `महत्त्वको`.
+- **Publisher Name**: Updated official publisher name to `Suyog Dhungel`.
+
 ## [1.0.0] - 2026-10-05 (Official Initial Release)
 
 ### Added

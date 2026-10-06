@@ -26,8 +26,8 @@ Screen reader users in Nepal regularly encounter two major barriers when reading
 ## 📥 How to Download and Install
 
 1. Download the add-on file:
-   👉 [**Click here to download nepaliReader-1.1.2.nvda-addon**](https://github.com/SuyogDhungel/nepaliReader/releases/download/v1.1.2/nepaliReader-1.1.2.nvda-addon)
-2. Once downloaded, open your **Downloads** folder and press **Enter** on `nepaliReader-1.1.2.nvda-addon`.
+   👉 [**Click here to download nepaliReader-1.1.3.nvda-addon**](https://github.com/SuyogDhungel/nepaliReader/releases/download/v1.1.3/nepaliReader-1.1.3.nvda-addon)
+2. Once downloaded, open your **Downloads** folder and press **Enter** on `nepaliReader-1.1.3.nvda-addon`.
 3. NVDA will ask: *"Are you sure you want to install this add-on?"* — Press **Yes** (`Alt + Y`).
 4. When prompted to restart NVDA, select **Yes**.
 5. That is all! Nepali Reader activates automatically upon startup.
