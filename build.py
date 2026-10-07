@@ -50,6 +50,10 @@ def build_source():
 	print(f"Building {out_name}...")
 
 	with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as z:
+		for fn in ("build.py", "CHANGELOG.md", "README.md", "LICENSE", ".gitignore"):
+			fp = os.path.join(ROOT_DIR, fn)
+			if os.path.isfile(fp):
+				z.write(fp, fn)
 		for root, dirs, files in os.walk(source_dir):
 			if "__pycache__" in root:
 				continue
@@ -57,7 +61,7 @@ def build_source():
 				if f.endswith(".pyc"):
 					continue
 				full_path = os.path.join(root, f)
-				rel_path = os.path.relpath(full_path, source_dir)
+				rel_path = os.path.relpath(full_path, ROOT_DIR)
 				z.write(full_path, rel_path)
 
 	size_mb = os.path.getsize(out_path) / (1024 * 1024)
