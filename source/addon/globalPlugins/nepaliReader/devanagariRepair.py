@@ -231,9 +231,13 @@ def cleanShuffled(text):
 	# (repeated words are NOT removed here: "जय जय", "बिस्तारै बिस्तारै" are real; text a PDF
 	#  draws twice is removed by the PDF engine, which knows what the document contains)
 
-	# Fix misconverted closing parenthesis after clause letters before digit fixing: (क० -> (क), (ख० -> (ख), (ङ१० -> (ङ१)
-	text = re.sub(r'\(([\u0915-\u0939\u0958-\u095f](?:[०-९\u0966-\u096f]+)?)०', r'(\1)', text)
-	text = re.sub(r'(^|\s)([\u0915-\u0939\u0958-\u095f](?:[०-९\u0966-\u096f]+)?)०(?=\s|[“"\'‘])', r'\1(\2)', text)
+	# Fix misconverted closing parenthesis after clause letters before digit fixing:
+	# Both Shift+9 and Shift+0 used for ( ... ) in Preeti: ९क० -> (क)
+	text = re.sub(r'(^|\s)९([\u0915-\u0939\u0958-\u095f](?:[०-९\u0966-\u096f]+)?)०(?=\s|[“"\'‘।॥,.;:!?\-]|$)', r'\1(\2)', text)
+	# (क० -> (क), [क० -> [क], {क० -> {क}
+	text = re.sub(r'([(\[{])([\u0915-\u0939\u0958-\u095f](?:[०-९\u0966-\u096f]+)?)०',
+		lambda m: m.group(1) + m.group(2) + (')' if m.group(1) == '(' else ']' if m.group(1) == '[' else '}'), text)
+	text = re.sub(r'(^|\s)([\u0915-\u0939\u0958-\u095f](?:[०-९\u0966-\u096f]+)?)०(?=\s|[“"\'‘])', r'\1\2)', text)
 
 	# 1. First compose any decomposed vowel signs and normalize glued Preeti digits / trailing reph
 	text = composeMatras(text)
@@ -328,9 +332,6 @@ def cleanShuffled(text):
 	text = re.sub(r'(?<=[\u0900-\u097f]\s)%', '५', text)
 	# Preeti M used for colon after Devanagari (प्रस्तावना M -> प्रस्तावना :)
 	text = re.sub(r'(?<=[\u0900-\u097f])\s*M(?=\s|[।॥,.;:!?()\[\]{}"\'\-\–\—]|$)', ' :', text)
-	# Fix misconverted closing parenthesis after clause letters: (क० -> (क), (ख० -> (ख), (ङ१० -> (ङ१)
-	text = re.sub(r'\(([\u0915-\u0939\u0958-\u095f](?:[०-९\u0966-\u096f]+)?)०', r'(\1)', text)
-	text = re.sub(r'(^|\s)([\u0915-\u0939\u0958-\u095f](?:[०-९\u0966-\u096f]+)?)०(?=\s|[“"\'‘])', r'\1(\2)', text)
 
 	for _idx, _orig in enumerate(_bracket_saved):
 		text = text.replace("\ue000%d\ue001" % _idx, _orig)
@@ -358,9 +359,21 @@ def cleanForCharNav(text):
 		return text
 	_DEVA_BOUND_L = r'(?<![\u0900-\u097f])'
 	_DEVA_BOUND_R = r'(?![\u0900-\u097f])'
-	# Fix misconverted closing parenthesis after clause letters before digit fixing: (क० -> (क), (ख० -> (ख), (ङ१० -> (ङ१)
-	text = re.sub(r'\(([\u0915-\u0939\u0958-\u095f](?:[०-९\u0966-\u096f]+)?)०', r'(\1)', text)
-	text = re.sub(r'(^|\s)([\u0915-\u0939\u0958-\u095f](?:[०-९\u0966-\u096f]+)?)०(?=\s|[“"\'‘])', r'\1(\2)', text)
+	# Fix misconverted closing parenthesis after clause letters before digit fixing:
+	# Both Shift+9 and Shift+0 used for ( ... ) in Preeti: ९क० -> (क)
+	text = re.sub(r'(^|\s)९([\u0915-\u0939\u0958-\u095f](?:[०-९\u0966-\u096f]+)?)०(?=\s|[“"\'‘।॥,.;:!?\-]|$)', r'\1(\2)', text)
+	# (क० -> (क), [क० -> [क], {क० -> {क}
+	text = re.sub(r'([(\[{])([\u0915-\u0939\u0958-\u095f](?:[०-९\u0966-\u096f]+)?)०',
+		lambda m: m.group(1) + m.group(2) + (')' if m.group(1) == '(' else ']' if m.group(1) == '[' else '}'), text)
+	text = re.sub(r'(^|\s)([\u0915-\u0939\u0958-\u095f](?:[०-९\u0966-\u096f]+)?)०(?=\s|[“"\'‘])', r'\1\2)', text)
+
+	_bracket_saved = []
+	def _save_bracket(m):
+		_bracket_saved.append(m.group(0))
+		return "\ue000%d\ue001" % (len(_bracket_saved) - 1)
+	text = re.sub(r'(?<![' + _CONS + r'\u093e-\u094c\u0901-\u0903\u094d])\[[^\[\]\r\n]{1,60}\](?![' + _CONS + r'])', _save_bracket, text)
+	text = re.sub(r'(?<![' + _CONS + r'\u093e-\u094c\u0901-\u0903\u094d])\{[^\{\}\r\n]{1,60}\}(?![' + _CONS + r'])', _save_bracket, text)
+
 	text = composeMatras(text)
 	text = fixGluedDigits(text)
 	text = fixTrailingReph(text)
@@ -381,9 +394,9 @@ def cleanForCharNav(text):
 	# Preeti % and M after Devanagari (श्री % -> श्री ५, प्रस्तावना M -> प्रस्तावना :):
 	text = re.sub(r'(?<=[\u0900-\u097f]\s)%', '५', text)
 	text = re.sub(r'(?<=[\u0900-\u097f])\s*M(?=\s|[।॥,.;:!?()\[\]{}"\'\-\–\—]|$)', ' :', text)
-	# Fix misconverted closing parenthesis after clause letters: (क० -> (क), (ख० -> (ख), (ङ१० -> (ङ१)
-	text = re.sub(r'\(([\u0915-\u0939\u0958-\u095f](?:[०-९\u0966-\u096f]+)?)०', r'(\1)', text)
-	text = re.sub(r'(^|\s)([\u0915-\u0939\u0958-\u095f](?:[०-९\u0966-\u096f]+)?)०(?=\s|[“"\'‘])', r'\1(\2)', text)
+
+	for _idx, _orig in enumerate(_bracket_saved):
+		text = text.replace("\ue000%d\ue001" % _idx, _orig)
 	text = re.sub(r'व्रम', 'क्रम', text)
 	text = re.sub(r'व्रिया', 'क्रिया', text)
 	text = re.sub(r'व्रे', 'क्रे', text)
