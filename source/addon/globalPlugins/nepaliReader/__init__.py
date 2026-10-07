@@ -598,7 +598,17 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			c = conf()
 			if not isOn():
 				return orig(_unwrap(info), *args, **kwargs)
-			unit = kwargs.get("unit") or (args[2] if len(args) > 2 else None)
+			unit = kwargs.get("unit")
+			if unit is None:
+				for a in args:
+					if isinstance(a, str) and a.startswith("unit_"):
+						unit = a
+						break
+					elif hasattr(textInfos, "UNIT_CHARACTER") and a in (
+						textInfos.UNIT_CHARACTER, textInfos.UNIT_WORD, textInfos.UNIT_LINE, textInfos.UNIT_PARAGRAPH
+					):
+						unit = a
+						break
 			if c["mode"] != "off" or c["repairUnicode"] or c["switchLanguage"]:
 				info = _ConvertingTextInfo(_unwrap(info), plugin, unit=unit)
 			return orig(info, *args, **kwargs)
@@ -709,6 +719,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				if devanagariRepair.isBroken(text):
 					text = devanagariRepair.repair(text, broken=True)
 			if switchLang and LangChangeCommand and devanagariRepair.hasDevanagari(text):
+				if len(text) == 1 or any(type(x).__name__ == "CharacterModeCommand" for x in speechSequence):
+					out.append(text)
+					continue
 				prevIsLang = bool(out and isinstance(out[-1], LangChangeCommand) and getattr(out[-1], "lang", "") == "ne")
 				if not prevIsLang:
 					out.append(LangChangeCommand("ne"))
@@ -729,8 +742,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			try:
 				if isOn():
 					raw = _unwrap(info).text or ""
-					# In a non-PDF window, if text is already native Devanagari, preserve it!
-					if devanagariRepair.hasDevanagari(raw) and not plugin._isPdfWindow(info.obj):
+					# In any window (including PDFs), if text is already native Devanagari and not a broken PDF layer, preserve it!
+					if devanagariRepair.hasDevanagari(raw) and not (plugin._isPdfWindow(info.obj) and plugin._isBrokenDoc()):
 						return origCopy(_unwrap(info), notify)
 					text = plugin._plainText(info)
 					if diag.wanted():
@@ -758,7 +771,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 						info = mgr.makeTextInfo(textInfos.POSITION_SELECTION)
 						if not info.isCollapsed:
 							raw = info.text or ""
-							if devanagariRepair.hasDevanagari(raw) and not plugin._isPdfWindow(mgr):
+							if devanagariRepair.hasDevanagari(raw) and not (plugin._isPdfWindow(mgr) and plugin._isBrokenDoc()):
 								return origCursorCopy(mgr, gesture)
 							new = plugin._plainText(info)
 							if not new or new == raw:
@@ -837,7 +850,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 						if tInfo is not None and not tInfo.isCollapsed:
 							raw = tInfo.text or ""
 							if raw:
-								if devanagariRepair.hasDevanagari(raw) and not plugin._isPdfWindow(tInfo.obj):
+								if devanagariRepair.hasDevanagari(raw) and not (plugin._isPdfWindow(tInfo.obj) and plugin._isBrokenDoc()):
 									continue
 								conv = plugin._plainText(tInfo)
 								if not conv or conv == raw:
@@ -863,7 +876,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 						if tInfo is not None and not tInfo.isCollapsed:
 							raw = tInfo.text or ""
 							if raw:
-								if devanagariRepair.hasDevanagari(raw) and not plugin._isPdfWindow(tInfo.obj):
+								if devanagariRepair.hasDevanagari(raw) and not (plugin._isPdfWindow(tInfo.obj) and plugin._isBrokenDoc()):
 									continue
 								conv = plugin._plainText(tInfo)
 								if not conv or conv == raw:
@@ -1310,9 +1323,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		except Exception:
 			rawText = ""
 
-		# If unit is UNIT_CHARACTER and the text already contains native Devanagari in non-PDF:
+		# If unit is UNIT_CHARACTER and the text already contains native Devanagari:
 		# Return fields directly without wrapping or modifying, allowing NVDA single-character spelling!
-		if unit == textInfos.UNIT_CHARACTER and rawText and devanagariRepair.hasDevanagari(rawText) and not self._isPdfWindow(info.obj):
+		if unit == textInfos.UNIT_CHARACTER and rawText and devanagariRepair.hasDevanagari(rawText):
 			return info.getTextWithFields(formatConfig)
 
 		wantFont = c["useFontNames"] and c["mode"] != "off"
@@ -1584,20 +1597,24 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 					count += len(newText.split())
 					usedEnc = enc
 					if switchLang:
-						result.append(self._formatWithLanguage(lastFormat, legacyFonts.languageForEncoding(enc)))
-						result.append(newText)
-						if unit != textInfos.UNIT_CHARACTER:
+						if unit == textInfos.UNIT_CHARACTER:
+							result.append(newText)
+						else:
+							result.append(self._formatWithLanguage(lastFormat, legacyFonts.languageForEncoding(enc)))
+							result.append(newText)
 							result.append(self._formatWithLanguage(lastFormat, None, restore=True))
 					else:
 						result.append(newText)
 					continue
 			if switchLang and isinstance(item, str) and (rebuilt.get(i) or devanagariRepair.hasDevanagari(item)):
+				if unit == textInfos.UNIT_CHARACTER:
+					result.append(item)
+					continue
 				curLang = (lastFormat.get("language") or "").lower() if lastFormat else ""
 				if not curLang.startswith(("ne", "hi")):
 					result.append(self._formatWithLanguage(lastFormat, "ne"))
 					result.append(item)
-					if unit != textInfos.UNIT_CHARACTER:
-						result.append(self._formatWithLanguage(lastFormat, None, restore=True))
+					result.append(self._formatWithLanguage(lastFormat, None, restore=True))
 					continue
 			result.append(item)
 		if usedEnc and c["mode"] == "auto" and count >= 2:
@@ -1616,12 +1633,14 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				result.append(item)
 				continue
 			if isinstance(item, str) and (rebuilt.get(i) or devanagariRepair.hasDevanagari(item)):
+				if unit == textInfos.UNIT_CHARACTER:
+					result.append(item)
+					continue
 				curLang = (lastFormat.get("language") or "").lower() if lastFormat else ""
 				if not curLang.startswith(("ne", "hi")):
 					result.append(self._formatWithLanguage(lastFormat, "ne"))
 					result.append(item)
-					if unit != textInfos.UNIT_CHARACTER:
-						result.append(self._formatWithLanguage(lastFormat, None, restore=True))
+					result.append(self._formatWithLanguage(lastFormat, None, restore=True))
 					continue
 			result.append(item)
 		return result
@@ -1776,9 +1795,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				info = None
 		if info is not None and not info.isCollapsed:
 			raw = info.text or ""
-			# In normal applications (Word, Notepad, Chrome), if text already contains native Devanagari:
+			# In normal applications (Word, Notepad, Chrome) and unbroken PDFs, if text already contains native Devanagari:
 			# preserve original selection and let the app / browse-mode copy natively!
-			if devanagariRepair.hasDevanagari(raw) and not self._isPdfWindow(src):
+			if devanagariRepair.hasDevanagari(raw) and not (self._isPdfWindow(src) and self._isBrokenDoc()):
 				if ti is not None and not getattr(ti, "passThrough", True) and hasattr(ti, "script_copyToClipboard"):
 					ti.script_copyToClipboard(gesture)
 				else:
@@ -1820,7 +1839,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			if info.isCollapsed:
 				return
 			raw = info.text or ""
-			if devanagariRepair.hasDevanagari(raw) and not self._isPdfWindow(src):
+			if devanagariRepair.hasDevanagari(raw) and not (self._isPdfWindow(src) and self._isBrokenDoc()):
 				return
 			new = self._plainText(info)
 			if not new or new == raw:

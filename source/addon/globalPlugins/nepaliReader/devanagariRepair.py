@@ -72,11 +72,14 @@ def lowWordRate(text, minWords=60, rate=0.5):
 	return n >= minWords and k < rate * n
 
 
+_HYBRID_BROKEN = re.compile(r"ा[\]\}]|[" + _CONS + r"](?:\u094d[" + _CONS + r"])?[\]\}]|[" + _CONS + r"][\u00ac¬]|पाठ्यव्रम|कार्यव्रम")
+
+
 def isBroken(text):
 	"""Fault marks that never occur in correct text: doubled vowel signs, replacement characters,
 	stray virama, symbols standing for ि. (A low share of real words is judged by the caller over
 	a whole document, see wordStats.)"""
-	return bool(_DOUBLED.search(text)) or bool(_GLUED_I.search(text))
+	return bool(_DOUBLED.search(text)) or bool(_GLUED_I.search(text)) or bool(_HYBRID_BROKEN.search(text))
 
 
 def repairGain(text):
@@ -193,6 +196,37 @@ def cleanShuffled(text):
 					return cand
 			return m.group(0)
 		text = re.sub(_DEVA_BOUND_L + r'([\u0900-\u097f]{1,4})\s+([\u0900-\u097f]{2,8})' + _DEVA_BOUND_R, check_dropped_gap, text)
+
+	# Hybrid PDF / legacy font residue repairs:
+	# Protect balanced brackets [ ... ] and { ... }
+	_bracket_saved = []
+	def _save_bracket(m):
+		_bracket_saved.append(m.group(0))
+		return " __B%d__ " % (len(_bracket_saved) - 1)
+	text = re.sub(r'\[[^\[\]\r\n]{1,60}\]', _save_bracket, text)
+	text = re.sub(r'\{[^\{\}\r\n]{1,60}\}', _save_bracket, text)
+
+	# aa-matra + ] -> o-matra (रहेका] -> रहेको, ज्ञानका] -> ज्ञानको)
+	text = re.sub(r'ा\]', 'ो', text)
+	# aa-matra + } -> au-matra
+	text = re.sub(r'ा\}', 'ौ', text)
+	# Consonant/conjunct + ] -> e-matra (शिक्षाल] -> शिक्षाले, पाइन] -> पाइने, रहन] -> रहने)
+	text = re.sub(r'(?:(?<=[' + _CONS + r'])|(?<=[' + _CONS + r']\u094d[' + _CONS + r']))\]', 'े', text)
+	# Consonant/conjunct + } -> ai-matra (पुर} -> पुरै, कुन} -> कुनै, यस्त} -> यस्तै)
+	text = re.sub(r'(?:(?<=[' + _CONS + r'])|(?<=[' + _CONS + r']\u094d[' + _CONS + r']))\}', 'ै', text)
+	# ¬ (Alt+0172 / 0xac) used as u-matra (स¬झाव -> सुझाव)
+	text = re.sub(r'(?<=[' + _CONS + r'])[\u00ac¬]', 'ु', text)
+
+	for _idx, _orig in enumerate(_bracket_saved):
+		text = text.replace(" __B%d__ " % _idx, _orig)
+
+	# Common legacy font glyph/OCR mistakes: व्रम -> क्रम
+	text = re.sub(r'पाठ्यव्रम', 'पाठ्यक्रम', text)
+	text = re.sub(r'कार्यव्रम', 'कार्यक्रम', text)
+	text = re.sub(r'व्रियाकलाप', 'क्रियाकलाप', text)
+	text = re.sub(r'प्रव्रिया', 'प्रक्रिया', text)
+	text = re.sub(r'माइव्रोसफ्ट', 'माइक्रोसफ्ट', text)
+	text = re.sub(r'(?<![\u0900-\u097f])व्रम(?=[\s।\.,]|$)', 'क्रम', text)
 
 	# Repeated punctuation: '––' -> '–'
 	text = re.sub(r'([–—\-])\1+', r'\1', text)

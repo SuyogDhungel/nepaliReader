@@ -85,7 +85,7 @@ PREETI_MAP = {
 	"„": "ध्र", "…": "‘", "ˆ": "फ्", "‰": "झ्", "‹": "ङ्घ",
 	"‘": "ॅ", "“": "ँ", "Œ": "त्त्", "•": "•", "˜": "ऽ", "›": "द्र", "\xa1": "ज्ञ्",
 	"\xa2": "द्घ", "\xa3": "घ्", "\xa4": "झ्", "\xa5": "र्‍", "\xa7": "ट्ट", "\xa9": "र",
-	"\xaa": "ङ", "\xab": "्र", "\xb0": "ङ्ढ", "\xb1": "+", "\xb4": "झ", "\xb6": "ठ्ठ",
+	"\xaa": "ङ", "\xab": "्र", "\xac": "ु", "\xb0": "ङ्ढ", "\xb1": "+", "\xb4": "झ", "\xb6": "ठ्ठ",
 	"\xb7": "ङ्ग", "·": "ङ्ग",
 	"\xbf": "रू", "\xc5": "हृ", "\xc6": "”", "\xcb": "ङ्ग", "\xcc": "न्न", "\xcd": "ङ्क",
 	"\xce": "ङ्ख", "\xd2": "\xa8", "\xd6": "=", "\xd7": "\xd7", "\xd8": "्य", "\xd9": ";",
@@ -152,8 +152,8 @@ def _applyModifier(s):
 		j = i - 1
 		while j >= 0 and out[j] in SIGNS:
 			j -= 1
-		# त्र / त्त + m  ->  क्र / क्त
-		if j >= 2 and out[j - 1] == HALANT and out[j - 2] == "त" and out[j] in ("र", "त"):
+		# त्र / त्त / व्र + m  ->  क्र / क्त
+		if j >= 2 and out[j - 1] == HALANT and out[j - 2] in ("त", "व") and out[j] in ("र", "त"):
 			out[j - 2] = "क"
 			continue
 		k = j
@@ -277,8 +277,8 @@ def preetiFamilyToUnicode(text, font="preeti", _table=None):
 		if not word or word.isspace():
 			result.append(word)
 			continue
-		# Standalone bullet / symbol: preserve without conversion
-		if word in BULLETS or (len(word) == 1 and word in "•●○■▪◦✓★→←–—…*+-#~※♦►"):
+		# Standalone bullet / symbol / emoji: preserve without conversion
+		if word in BULLETS or (len(word) == 1 and word in "•●○■▪◦✓★→←–—…*+-#~※♦►") or any(ord(c) > 255 and not (0x0900 <= ord(c) <= 0x097F) for c in word):
 			result.append(word)
 			continue
 		if font == "preeti":
@@ -306,25 +306,25 @@ def preetiFamilyToUnicode(text, font="preeti", _table=None):
 		if m90:
 			word = "(" + m90.group(1) + ")"
 
-		# Preserve brackets around words, clauses, and numbers:
+		# Preserve parentheses around words, clauses, and numbers:
 		# In Preeti layout, '(' is Shift+9 (mapped to digit ९) and ')' is Shift+0 (mapped to digit ०).
 		# When '(' or ')' wrap a word, clause, or single letters/numbers (e.g. (s) -> (क), (lzIff) -> (शिक्षा), (!)->(१)),
 		# they are parentheses, not digits. They are digits only in pure multi-digit Preeti numbers (e.g. @)@( = २०२९, @) = २०).
+		# NOTE: '[' ']' '{' '}' are Preeti letters/matras (e.g. ] is e-kar / o-kar, } is ai-kar, [ is ri-kar, { is reph);
+		# they MUST NOT be stripped as punctuation!
 		lead_b = ""
 		trail_b = ""
-		if len(word) >= 2 and word[0] in "([{" and word[-1] in ")]}":
-			lead_b = word[0]
-			trail_b = word[-1]
+		if len(word) >= 2 and word[0] == "(" and word[-1] == ")":
+			lead_b = "("
+			trail_b = ")"
 			word = word[1:-1]
 		else:
-			if word.startswith(("(", "[", "{")):
-				if len(word) == 1 or word[1] not in "!@#$%^&*()":
-					lead_b = word[0]
-					word = word[1:]
-			if word.endswith((")", "]", "}")):
-				if len(word) == 1 or word[-2] not in "!@#$%^&*()":
-					trail_b = word[-1]
-					word = word[:-1]
+			if word.startswith("(") and (len(word) == 1 or word[1] not in "!@#$%^&*()"):
+				lead_b = "("
+				word = word[1:]
+			if word.endswith(")") and (len(word) == 1 or word[-2] not in "!@#$%^&*()"):
+				trail_b = ")"
+				word = word[:-1]
 
 		if not word:
 			result.append(lead_b + trail_b)
@@ -485,7 +485,7 @@ _FONT_NAME_PATTERNS = [
 	(re.compile(r"sagarmatha", re.I), "sagarmatha"),
 	(re.compile(r"himal", re.I), "himali"),
 	(re.compile(r"pcs\s*nepali", re.I), "pcs"),
-	(re.compile(r"sumod|acharya|kanchan|everest|annapurna|jagadamba|rupa|shangrila", re.I), "preeti"),
+	(re.compile(r"\bsun\b|sumod|acharya|kanchan|everest|annapurna|jagadamba|rupa|shangrila", re.I), "preeti"),
 	(re.compile(r"kruti\s*dev|krutidev|k010|kruti", re.I), "krutidev"),
 ]
 
