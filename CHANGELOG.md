@@ -10,10 +10,14 @@ All notable changes to the **Nepali Reader** NVDA add-on are documented here.
 - **Word Document Proofing Language Override**: Overrides Microsoft Word's default `hi-IN` language tagging on Devanagari paragraphs whenever the vocabulary is identified as Nepali, ensuring MultiLang and NVDA switch to the Nepali voice rather than Hindi.
 
 ### Fixed
-- **Preeti Bracket Matra Parsing**: Fixed Preeti keyboard typography where `]` (e-kar / o-kar), `}` (ai-kar / au-kar), `[` (ri-kar), and `{` (reph) were stripped as punctuation brackets, eliminating corrupted words like `रहेका] छ` -> `रहेको छ`, `शिक्षाल]` -> `शिक्षाले`, `यसका] पुर}` -> `यसको पुरै`, `कुन}` -> `कुनै`, `पाइन]` -> `पाइने`, `पहिला]` -> `पहिलो`, `हाम्रा]` -> `हाम्रो`.
+- **PDF Browser & Viewer Hybrid Devanagari Repair**: Fixed an issue where PDF viewers (Chrome, Edge, Acrobat) exposed legacy font names on already-extracted Devanagari text, which previously caused Devanagari repair to be bypassed. Now eliminates legacy residue across all viewers: `रहेका] छ` -> `रहेको छ`, `केन्द्रका]` -> `केन्द्रको`, `यसका] पुर}` -> `यसको पुरै`, `कुन}` -> `कुनै`, `पाइन]` -> `पाइने`, `पहिला]` -> `पहिलो`, `हाम्रा]` -> `हाम्रो`, `शिक्षाल]` -> `शिक्षाले`.
+- **Nepal ko Sambidhan & Genitive 'को' Resolution**: Corrected genitive vibhakti postposition `को` across titles and clauses (e.g. `नेपालको संविधान`), preventing mispronunciation as "ka" caused by unparsed `ा]` matra residue.
+- **Preeti/Himali `क्र` Modifier Conjuncts**: Extended glyph modifier resolution for `व` + `्र` (`व्रम` -> `क्रम`, `व्रिया` -> `क्रिया`, `व्रे` -> `क्रे`, `व्रा` -> `क्रा`, `व्री` -> `क्री`), restoring `पाठ्यव्रम` -> `पाठ्यक्रम`, `कार्यव्रम` -> `कार्यक्रम`, `उपव्रम` -> `उपक्रम`, `प्रव्रिया` -> `प्रक्रिया`, `व्रियाकलाप` -> `क्रियाकलाप`.
+- **Preeti Vowel & Alphabet Completeness**: Added `("एै", "ऐ")`, `("अो", "ओ")`, `("अौ", "औ")` compositions, rakar conjunct deduplication, and refined number regex so words like `3/` correctly convert to `घर`.
+- **PDF Index Exact Key Alignment**: Optimized `DocIndex.lookup` to prioritize clean keys before fuzzy matching, guaranteeing exact sentence reconstruction from underlying PDF text streams without bleeding boundary words.
 - **Himali Downward U-kar (`\xac` / `¬`)**: Added missing `\xac` Alt+0172 character to `PREETI_MAP`, fixing words like `स¬झावहरू` -> `सुझावहरू`.
-- **Preeti/Himali `क्र` Modifier Conjuncts**: Extended glyph modifier resolution for `व` + `्र` + modifier `m`, restoring `पाठ्यव्रम` -> `पाठ्यक्रम`, `कार्यव्रम` -> `कार्यक्रम`, `व्रियाकलाप` -> `क्रियाकलाप`, `प्रव्रिया` -> `प्रक्रिया`.
 - **Number Preservation in MultiLang**: Prevented MultiLang from dropping Devanagari numerals (`०-९`) and numbers attached to Nepali clauses into English speech.
+
 
 ## [1.1.4] - 2026-10-06 (Stable Release)
 

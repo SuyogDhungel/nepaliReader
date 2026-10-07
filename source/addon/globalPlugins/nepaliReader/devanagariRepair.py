@@ -72,7 +72,7 @@ def lowWordRate(text, minWords=60, rate=0.5):
 	return n >= minWords and k < rate * n
 
 
-_HYBRID_BROKEN = re.compile(r"ा[\]\}]|[" + _CONS + r"](?:\u094d[" + _CONS + r"])?[\]\}]|[" + _CONS + r"][\u00ac¬]|पाठ्यव्रम|कार्यव्रम")
+_HYBRID_BROKEN = re.compile(r"ा[\u200b\u200c\u200d\ufeff\s]*[\]\}]|[" + _CONS + r"](?:\u094d[" + _CONS + r"])?[\u200b\u200c\u200d\ufeff\s]*[\]\}]|[" + _CONS + r"]\[|[" + _CONS + r"][\u00ac¬]|व्रम|व्रिया|व्रे|व्रा")
 
 
 def isBroken(text):
@@ -197,23 +197,28 @@ def cleanShuffled(text):
 			return m.group(0)
 		text = re.sub(_DEVA_BOUND_L + r'([\u0900-\u097f]{1,4})\s+([\u0900-\u097f]{2,8})' + _DEVA_BOUND_R, check_dropped_gap, text)
 
+	# Nepal ko Sambidhan (never 'Nepal ka Sambidhan' in Nepali)
+	text = re.sub(r'नेपाल\s+का\s+संविधान', 'नेपालको संविधान', text)
+
 	# Hybrid PDF / legacy font residue repairs:
-	# Protect balanced brackets [ ... ] and { ... }
+	# Protect balanced brackets [ ... ] and { ... } ONLY when NOT attached to a Devanagari consonant/matra
 	_bracket_saved = []
 	def _save_bracket(m):
 		_bracket_saved.append(m.group(0))
 		return " __B%d__ " % (len(_bracket_saved) - 1)
-	text = re.sub(r'\[[^\[\]\r\n]{1,60}\]', _save_bracket, text)
-	text = re.sub(r'\{[^\{\}\r\n]{1,60}\}', _save_bracket, text)
+	text = re.sub(r'(?<![' + _CONS + r'\u093e-\u094c\u0901-\u0903\u094d])\[[^\[\]\r\n]{1,60}\](?![' + _CONS + r'])', _save_bracket, text)
+	text = re.sub(r'(?<![' + _CONS + r'\u093e-\u094c\u0901-\u0903\u094d])\{[^\{\}\r\n]{1,60}\}(?![' + _CONS + r'])', _save_bracket, text)
 
-	# aa-matra + ] -> o-matra (रहेका] -> रहेको, ज्ञानका] -> ज्ञानको)
-	text = re.sub(r'ा\]', 'ो', text)
+	# aa-matra + ] -> o-matra (रहेका] -> रहेको, ज्ञानका] -> ज्ञानको, केन्द्रका] -> केन्द्रको, यसका] -> यसको, नेपालका] -> नेपालको)
+	text = re.sub(r'ा[\u200b\u200c\u200d\ufeff\s]*\]', 'ो', text)
 	# aa-matra + } -> au-matra
-	text = re.sub(r'ा\}', 'ौ', text)
-	# Consonant/conjunct + ] -> e-matra (शिक्षाल] -> शिक्षाले, पाइन] -> पाइने, रहन] -> रहने)
-	text = re.sub(r'(?:(?<=[' + _CONS + r'])|(?<=[' + _CONS + r']\u094d[' + _CONS + r']))\]', 'े', text)
+	text = re.sub(r'ा[\u200b\u200c\u200d\ufeff\s]*\}', 'ौ', text)
+	# Consonant/conjunct + ] -> e-matra (शिक्षाल] -> शिक्षाले, पाइन] -> पाइने, रहन] -> रहने, क] -> के)
+	text = re.sub(r'(?:(?<=[' + _CONS + r'])|(?<=[' + _CONS + r']\u094d[' + _CONS + r']))[\u200b\u200c\u200d\ufeff\s]*\]', 'े', text)
 	# Consonant/conjunct + } -> ai-matra (पुर} -> पुरै, कुन} -> कुनै, यस्त} -> यस्तै)
-	text = re.sub(r'(?:(?<=[' + _CONS + r'])|(?<=[' + _CONS + r']\u094d[' + _CONS + r']))\}', 'ै', text)
+	text = re.sub(r'(?:(?<=[' + _CONS + r'])|(?<=[' + _CONS + r']\u094d[' + _CONS + r']))[\u200b\u200c\u200d\ufeff\s]*\}', 'ै', text)
+	# Consonant/conjunct + [ -> ri-matra (क[ -> कृ, प[ -> पृ, म[ -> मृ)
+	text = re.sub(r'(?:(?<=[' + _CONS + r'])|(?<=[' + _CONS + r']\u094d[' + _CONS + r']))\[', 'ृ', text)
 	# ¬ (Alt+0172 / 0xac) used as u-matra (स¬झाव -> सुझाव)
 	text = re.sub(r'(?<=[' + _CONS + r'])[\u00ac¬]', 'ु', text)
 
@@ -221,17 +226,18 @@ def cleanShuffled(text):
 		text = text.replace(" __B%d__ " % _idx, _orig)
 
 	# Common legacy font glyph/OCR mistakes: व्रम -> क्रम
-	text = re.sub(r'पाठ्यव्रम', 'पाठ्यक्रम', text)
-	text = re.sub(r'कार्यव्रम', 'कार्यक्रम', text)
-	text = re.sub(r'व्रियाकलाप', 'क्रियाकलाप', text)
-	text = re.sub(r'प्रव्रिया', 'प्रक्रिया', text)
+	text = re.sub(r'व्रम', 'क्रम', text)
+	text = re.sub(r'व्रिया', 'क्रिया', text)
+	text = re.sub(r'व्रे', 'क्रे', text)
+	text = re.sub(r'व्रा', 'क्रा', text)
+	text = re.sub(r'व्री', 'क्री', text)
 	text = re.sub(r'माइव्रोसफ्ट', 'माइक्रोसफ्ट', text)
-	text = re.sub(r'(?<![\u0900-\u097f])व्रम(?=[\s।\.,]|$)', 'क्रम', text)
 
 	# Repeated punctuation: '––' -> '–'
 	text = re.sub(r'([–—\-])\1+', r'\1', text)
 
 	return text.strip()
+
 
 
 def repair(text, broken=None):

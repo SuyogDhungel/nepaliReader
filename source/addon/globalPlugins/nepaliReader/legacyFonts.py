@@ -134,9 +134,11 @@ _MOD_SKIPPABLE = SIGNS | {HALANT, "र", "य"}
 
 _COMPOSE = [
 	("ेा", "ाे"), ("ैा", "ाै"),  # े+ा / ै+ा typed in either order
-	("अाे", "ओ"), ("अाै", "औ"), ("अा", "आ"), ("एे", "ऐ"),
+	("अाे", "ओ"), ("अाै", "औ"), ("अा", "आ"), ("एे", "ऐ"), ("एै", "ऐ"),
+	("अो", "ओ"), ("अौ", "औ"),
 	("ाे", "ो"), ("ाै", "ौ"),
 ]
+
 _DEDUP = re.compile("([ँंेैुूाी])\\1+")
 
 
@@ -293,7 +295,9 @@ def preetiFamilyToUnicode(text, font="preeti", _table=None):
 		# Standalone digits (e.g. page numbers, list numbers, percentages, decimals):
 		# in Preeti family layouts, unshifted digit keys give consonants/conjuncts (1=ज्ञ, 2=द्द);
 		# standalone digit strings in documents are never words, always numbers.
-		m_num = re.match(r"^([+\$€₹.,;:!?\(\)\[\]\{\}\-\–—/\\%]*)([0-9]+(?:[.,/:\-][0-9]+)*)([%.,;:!?\(\)\[\]\{\}\-\–—/\\%]*)$", word)
+		# Note: trailing '/' '\' '[' ']' '{' '}' are Preeti characters/matras (e.g. 3/ is घर);
+		# they must not be stripped as punctuation.
+		m_num = re.match(r"^([+\$€₹.,;:!?\(\)\-\–—%]*)([0-9]+(?:[.,/:\-][0-9]+)*)([%.,;:!?\(\)\-\–—%]*)$", word)
 		if m_num and m_num.group(2) != "5":
 			# (a lone "5" is the very common verb छ, not a number)
 			lead, mid, trail = m_num.group(1), m_num.group(2), m_num.group(3)
@@ -330,8 +334,15 @@ def preetiFamilyToUnicode(text, font="preeti", _table=None):
 			result.append(lead_b + trail_b)
 			continue
 
-		# If word already has Devanagari characters: preserve boundary punctuation
+		# If word already has Devanagari characters: clean any hybrid legacy residue
 		if any("\u0900" <= c <= "\u097f" for c in word):
+			try:
+				from . import devanagariRepair
+				cleaned = devanagariRepair.cleanShuffled(word)
+				if cleaned != word:
+					word = cleaned
+			except Exception:
+				pass
 			lead = len(word) - len(word.lstrip(".,;:!?()[]{}\"'“”‘’•–—…"))
 			trail = len(word) - len(word.rstrip(".,;:!?()[]{}\"'“”‘’•–—…"))
 			lp = word[:lead]
@@ -353,6 +364,9 @@ def preetiFamilyToUnicode(text, font="preeti", _table=None):
 		s = _fixSignOrder(s)
 		for a, b in _COMPOSE:
 			s = s.replace(a, b)
+		s = re.sub(r'(\u094d\u0930)+', r'\1', s)
+
+
 		s = _DEDUP.sub(r"\1", s)
 		s = s.replace("टृ", "ट्ट")
 		if s.startswith("ः"):

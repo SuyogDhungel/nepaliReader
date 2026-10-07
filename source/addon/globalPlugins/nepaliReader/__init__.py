@@ -721,9 +721,11 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 							out.append(text)
 							out.append(LangChangeCommand(None))
 							continue
-			if repair and devanagariRepair.hasDevanagari(text):
-				if devanagariRepair.isBroken(text):
+			if devanagariRepair.hasDevanagari(text):
+				text = devanagariRepair.cleanShuffled(text)
+				if repair and devanagariRepair.isBroken(text):
 					text = devanagariRepair.repair(text, broken=True)
+
 			if switchLang and LangChangeCommand and devanagariRepair.hasDevanagari(text):
 				if len(text) == 1 or any(type(x).__name__ == "CharacterModeCommand" for x in speechSequence):
 					out.append(text)
@@ -1080,9 +1082,11 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 					if cand and (devanagariRepair.hasDevanagari(cand) and (neLexicon.isWord(cand.strip(".,:;!?()")) or detector.wordScore(piece, "preeti") >= 3.0)):
 						piece = cand
 			out.append(piece)
-		lead = text[: len(text) - len(text.lstrip())]
-		trail = text[len(text.rstrip()):]
-		return lead + " ".join(out) + trail
+		result_text = lead + " ".join(out) + trail
+		if devanagariRepair.hasDevanagari(result_text):
+			result_text = devanagariRepair.cleanShuffled(result_text)
+		return result_text
+
 
 	def _legacyAkshar(self, info, text, enc):
 		"""The syllable a Preeti / Kruti Dev character belongs to, from the word around it."""
@@ -1508,7 +1512,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			st = self._docState()
 			devanagariRepair.setDocumentSwaps(st.swaps, (id(st), len(st.swaps)))
 			for k, (i, text, known, enc) in enumerate(runs):
-				if enc is None and devanagariRepair.hasDevanagari(text):
+				if devanagariRepair.hasDevanagari(text):
 					st.unicodeWords += sum(1 for w in text.split() if devanagariRepair.hasDevanagari(w))
 					st.observe(text)
 					fixed = devanagariRepair.repair(text, broken=True if st.broken else None)
@@ -1520,8 +1524,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 							wx.CallAfter(self._learnDocument, info.obj, st)
 					if fixed != text:
 						out[i] = fixed
-						runs[k] = (i, fixed, known, enc)
+						runs[k] = (i, fixed, known, None)
 						changed = True
+
 		if mode == "off":
 			if rebuilt or (c["switchLanguage"] and any(devanagariRepair.hasDevanagari(x) for x in out if isinstance(x, str))):
 				return self._withLanguage(out, rebuilt, c, unit=unit)
@@ -1676,8 +1681,11 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			return text
 		decisions = detector.forceDecide(core, protectEnglish=protectEnglish)
 		newText = lead + detector.convertTokens(decisions, lambda s: legacyFonts.convert(s, encoding) or s) + trail
+		if devanagariRepair.hasDevanagari(newText):
+			newText = devanagariRepair.cleanShuffled(newText)
 		self._cache.put(key, newText)
 		return newText
+
 
 	def _decideUnknown(self, info, unknown, convert, c, allowVisual=True, isUnicodeDoc=False):
 		"""Runs with no font information (most PDFs): detector, window context and the screen check."""

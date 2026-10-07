@@ -1032,13 +1032,22 @@ class DocIndex:
 		if clean != text:
 			res = self._tokens(clean)
 		else:
-			res = self._lookup(text, key)
-			if res is None and isDeva(text):
+			res = None
+			if isDeva(text):
 				clean_shuf = devanagariRepair.cleanShuffled(text)
 				if clean_shuf != text:
 					ckey = matchKey(clean_shuf)
 					if ckey:
 						res = self._lookup(clean_shuf, ckey)
+			if res is None:
+				res = self._lookup(text, key)
+				if res is None and isDeva(text):
+					clean_shuf = devanagariRepair.cleanShuffled(text)
+					if clean_shuf != text:
+						ckey = matchKey(clean_shuf)
+						if ckey:
+							res = self._lookup(clean_shuf, ckey)
+
 		if len(cache) > 3000:
 			cache.clear()
 		cache[text] = (res, self._hint)
