@@ -72,7 +72,15 @@ def lowWordRate(text, minWords=60, rate=0.5):
 	return n >= minWords and k < rate * n
 
 
-_HYBRID_BROKEN = re.compile(r"ा[\u200b\u200c\u200d\ufeff\s]*[\]\}]|[" + _CONS + r"](?:\u094d[" + _CONS + r"])?[\u200b\u200c\u200d\ufeff\s]*[\]\}]|[" + _CONS + r"]\[|[" + _CONS + r"][\u00ac¬]|व्रम|व्रिया|व्रे|व्रा")
+_HYBRID_BROKEN = re.compile(
+	r"ा[\u200b\u200c\u200d\ufeff\s]*[\]\}]|[" + _CONS + r"](?:\u094d[" + _CONS + r"])?[\u200b\u200c\u200d\ufeff\s]*[\]\}]|"
+	r"[" + _CONS + r"]\[|[" + _CONS + r"][\u00ac¬]|"
+	r"\u093e[\u200b\u200c\u200d\ufeff]*[\u0947\u0948]|"
+	r"(?:[\u0904-\u0939\u0958-\u095f\u093e-\u094d])[0-9\u0966-\u096f](?![0-9\u0966-\u096f])|"
+	r"(?<![0-9\u0966-\u096f])[0-9\u0966-\u096f](?=[\u0904-\u0939\u0958-\u095f\u093e-\u094d])|"
+	r"(?<!\u0930\u094d)[" + _CONS + r"](?:[\u093e-\u094c\u0901-\u0903])?\u0930\u094d(?=\s|[।॥,.;:!?()\[\]{}\"\'\-\–\—]|$)|"
+	r"व्रम|व्रिया|व्रे|व्रा"
+)
 
 
 def isBroken(text):
@@ -134,6 +142,66 @@ def wordRate(text):
 
 _BOUNDARY = r'(?=\s|[।॥,.;:!?()\[\]{}"\'\-\–\—]|$)'
 _DEVA_LETTERS = r'[\u0904-\u0939\u0958-\u095f\u093e-\u094d]'
+_GLUED_DIGIT_MAP = {
+	'1': 'ज्ञ', '१': 'ज्ञ',
+	'2': 'द्द', '२': 'द्द',
+	'3': 'घ',  '३': 'घ',
+	'4': 'द्ध', '४': 'द्ध',
+	'5': 'छ',  '५': 'छ',
+	'6': 'ट',  '६': 'ट',
+	'7': 'ठ',  '७': 'ठ',
+	'8': 'ड',  '८': 'ड',
+	'9': 'ढ',  '९': 'ढ',
+	'0': 'ण',  '०': 'ण',
+}
+_GLUED_DIGITS = r'[0-9\u0966-\u096f]'
+
+def fixGluedDigits(text):
+	"""Fix Preeti digit keys mistakenly embedded inside Devanagari words without spaces."""
+	text = re.sub(
+		r'(' + _DEVA_LETTERS + r')(' + _GLUED_DIGITS + r')(?!' + _GLUED_DIGITS + r')',
+		lambda m: m.group(1) + _GLUED_DIGIT_MAP.get(m.group(2), m.group(2)),
+		text
+	)
+	text = re.sub(
+		r'(?<!' + _GLUED_DIGITS + r')(' + _GLUED_DIGITS + r')(' + _DEVA_LETTERS + r')',
+		lambda m: _GLUED_DIGIT_MAP.get(m.group(1), m.group(1)) + m.group(2),
+		text
+	)
+	return text
+
+_BOUNDARY_OR_SFX = r'(?=\s|[।॥,.;:!?()\[\]{}"\'\-\–\—]|$|का|को|की|मा|ले|लाई|बाट|देखि|हरू|सँग)'
+_PAT_TRAILING_REPH = re.compile(r'(?<!\u0930\u094d)([' + _CONS + r'](?:[\u093e-\u094c\u0901-\u0903])?)\u0930\u094d' + _BOUNDARY_OR_SFX)
+
+def fixTrailingReph(text):
+	"""Fix Preeti post-consonant reph typing order (e.g. गनर् -> गर्न, रेकडर् -> रेकर्ड, कमर् -> कर्म)."""
+	def rep(m):
+		cluster = m.group(1)
+		# Preserve 'पुनर्' (valid Nepali prefix stem)
+		if cluster == 'न' and m.string[max(0, m.start() - 2):m.start()] == 'पु':
+			return m.group(0)
+		return '\u0930\u094d' + cluster
+	return _PAT_TRAILING_REPH.sub(rep, text)
+
+_COMPOSE_PAIRS = [
+	(r'\u093e+[\u200b\u200c\u200d\ufeff]*\u0947', '\u094b'),
+	(r'\u093e+[\u200b\u200c\u200d\ufeff]*\u0948', '\u094c'),
+	(r'\u0947[\u200b\u200c\u200d\ufeff]*\u093e+', '\u094b'),
+	(r'\u0948[\u200b\u200c\u200d\ufeff]*\u093e+', '\u094c'),
+	(r'\u0905[\u200b\u200c\u200d\ufeff]*\u094b', '\u0913'),
+	(r'\u0905[\u200b\u200c\u200d\ufeff]*\u094c', '\u0914'),
+	(r'\u0905[\u200b\u200c\u200d\ufeff]*\u093e+[\u200b\u200c\u200d\ufeff]*\u0947', '\u0913'),
+	(r'\u0905[\u200b\u200c\u200d\ufeff]*\u093e+[\u200b\u200c\u200d\ufeff]*\u0948', '\u0914'),
+	(r'\u0905[\u200b\u200c\u200d\ufeff]*\u093e+', '\u0906'),
+	(r'\u090f[\u200b\u200c\u200d\ufeff]*\u0947+', '\u0910'),
+	(r'\u090f[\u200b\u200c\u200d\ufeff]*\u0948+', '\u0910'),
+]
+
+def composeMatras(text):
+	"""Normalize decomposed Devanagari vowel signs and letters into atomic Unicode characters."""
+	for pat, repl in _COMPOSE_PAIRS:
+		text = re.sub(pat, repl, text)
+	return text
 
 
 def cleanShuffled(text):
@@ -143,7 +211,12 @@ def cleanShuffled(text):
 	# (repeated words are NOT removed here: "जय जय", "बिस्तारै बिस्तारै" are real; text a PDF
 	#  draws twice is removed by the PDF engine, which knows what the document contains)
 
-	# 1. OCR confusions from Preeti glyphs
+	# 1. First compose any decomposed vowel signs and normalize glued Preeti digits / trailing reph
+	text = composeMatras(text)
+	text = fixGluedDigits(text)
+	text = fixTrailingReph(text)
+
+	# 2. OCR confusions from Preeti glyphs
 	# Preeti quotes æ and Æ recognized as ऋ and म्: ऋ...म् -> “...”
 	text = re.sub(r'ऋ([\u0900-\u097f]+?)म्' + _BOUNDARY, r'“\1”', text)
 	# Preeti ´ (झ) recognized as ः (visarga) after म्: म्ः -> म्झ (e.g. सम्ःनु -> सम्झनु)
@@ -171,7 +244,6 @@ def cleanShuffled(text):
 	_DEVA_BOUND_L = r'(?<![\u0900-\u097f])'
 	_DEVA_BOUND_R = r'(?![\u0900-\u097f])'
 
-
 	# Preeti digit 5 typo for verb 'छ' at end of sentences (e.g. बनाईबक्सेको ५ । -> बनाईबक्सेको छ ।)
 	text = re.sub(r'([क-ह][\u0900-\u097f]*(?:ेको|एको|ने|दा|छैन))\s+५\s*([।\.])', r'\1 छ \2', text)
 
@@ -184,7 +256,7 @@ def cleanShuffled(text):
 	text = re.sub(_DEVA_BOUND_L + r'वन्यजन्तरु' + _DEVA_BOUND_R, 'वन्यजन्तु', text)
 	text = re.sub(_DEVA_BOUND_L + r'सरुविधा' + _DEVA_BOUND_R, 'सुविधा', text)
 
-	# 2. Restore dropped characters (e.g. unmapped Preeti ¿ -> रु / र) using the dictionary
+	# 3. Restore dropped characters (e.g. unmapped Preeti ¿ -> रु / र) using the dictionary
 	if neLexicon.isLoaded():
 		def check_dropped_gap(m):
 			a, b = m.group(1), m.group(2)
@@ -205,7 +277,7 @@ def cleanShuffled(text):
 	_bracket_saved = []
 	def _save_bracket(m):
 		_bracket_saved.append(m.group(0))
-		return " __B%d__ " % (len(_bracket_saved) - 1)
+		return "\ue000%d\ue001" % (len(_bracket_saved) - 1)
 	text = re.sub(r'(?<![' + _CONS + r'\u093e-\u094c\u0901-\u0903\u094d])\[[^\[\]\r\n]{1,60}\](?![' + _CONS + r'])', _save_bracket, text)
 	text = re.sub(r'(?<![' + _CONS + r'\u093e-\u094c\u0901-\u0903\u094d])\{[^\{\}\r\n]{1,60}\}(?![' + _CONS + r'])', _save_bracket, text)
 
@@ -223,7 +295,7 @@ def cleanShuffled(text):
 	text = re.sub(r'(?<=[' + _CONS + r'])[\u00ac¬]', 'ु', text)
 
 	for _idx, _orig in enumerate(_bracket_saved):
-		text = text.replace(" __B%d__ " % _idx, _orig)
+		text = text.replace("\ue000%d\ue001" % _idx, _orig)
 
 	# Common legacy font glyph/OCR mistakes: व्रम -> क्रम
 	text = re.sub(r'व्रम', 'क्रम', text)
@@ -236,7 +308,10 @@ def cleanShuffled(text):
 	# Repeated punctuation: '––' -> '–'
 	text = re.sub(r'([–—\-])\1+', r'\1', text)
 
-	return text.strip()
+	# Final pass matra composition:
+	text = composeMatras(text)
+
+	return text
 
 
 

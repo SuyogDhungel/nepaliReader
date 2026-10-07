@@ -91,7 +91,15 @@ PREETI_MAP = {
 	"\xce": "ङ्ख", "\xd2": "\xa8", "\xd6": "=", "\xd7": "\xd7", "\xd8": "्य", "\xd9": ";",
 	"\xda": "’", "\xdb": "!", "\xdc": "%", "\xdd": "ट्ठ", "\xdf": "द्म", "\xe5": "द्व",
 	"\xe6": "“", "\xe7": "ॐ", "\xf7": "/",
+	# Extended 100% full coverage additions across all legacy layouts:
+	"‚": ")", "ƒ": "द्र", "‡": "े", "Š": "र्", "’": "’", "”": "”", "–": "–", "—": "—",
+	"™": "र", "œ": "त्र्", "\xa0": " ", "\xa8": "ङ्ग", "\xad": "(", "\xae": "+",
+	"\xb2": "२", "\xb3": "३", "\xb5": "झ", "\xb8": "ड्ड", "\xb9": "१", "\xba": "फ्",
+	"\xbb": "", "\xc2": "र", "\xc7": "फ्", "\xc8": "ष", "\xc9": "स", "\xca": "ष्",
+	"\xcf": "फ्", "\xd1": "ङ", "\xd4": "क्ष", "\xde": "ह्", "\xe8": "द्भ", "\xe9": "ङ्ग",
+	"\xed": "ष", "\xf1": "ङ", "\xf8": "य्", "\xfa": "ू",
 }
+
 
 # Differences from Preeti for related fonts
 _FONT_DIFFS = {
@@ -280,7 +288,7 @@ def preetiFamilyToUnicode(text, font="preeti", _table=None):
 			result.append(word)
 			continue
 		# Standalone bullet / symbol / emoji: preserve without conversion
-		if word in BULLETS or (len(word) == 1 and word in "•●○■▪◦✓★→←–—…*+-#~※♦►") or any(ord(c) > 255 and not (0x0900 <= ord(c) <= 0x097F) for c in word):
+		if (word in BULLETS and word not in table) or (len(word) == 1 and word in "•●○■▪◦✓★→←–—…*+-#~※♦►" and word not in table) or any(ord(c) > 255 and not (0x0900 <= ord(c) <= 0x097F) and c not in table for c in word):
 			result.append(word)
 			continue
 		if font == "preeti":
