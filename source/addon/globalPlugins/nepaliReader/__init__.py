@@ -38,6 +38,7 @@ from . import neLexicon
 from . import pdfText
 from . import visualScript
 from . import diag
+from . import multilangIntegration
 
 addonHandler.initTranslation()
 
@@ -397,6 +398,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		diag.start(_cacheDir())
 		self._patchTextInfoSpeech()
 		try:
+			multilangIntegration.install()
+		except Exception:
+			log.debugWarning("Nepali Reader: MultiLang initialization failed", exc_info=True)
+		try:
 			self._patchCopyAndSelection()
 		except Exception:
 			log.error("Nepali Reader: could not hook copying", exc_info=True)
@@ -409,6 +414,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		try:
 			# after every add-on has loaded, give up any key another command already uses
 			wx.CallAfter(self._avoidGestureClashes)
+			wx.CallLater(2000, multilangIntegration.install)
 			wx.CallLater(3000, self._checkHooks)
 			wx.CallLater(3500, self._startupReminder)
 		except Exception:
@@ -722,9 +728,11 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				if len(text) == 1 or any(type(x).__name__ == "CharacterModeCommand" for x in speechSequence):
 					out.append(text)
 					continue
-				prevIsLang = bool(out and isinstance(out[-1], LangChangeCommand) and getattr(out[-1], "lang", "") == "ne")
+				isNe = multilangIntegration.isNepaliDevanagari(text)
+				targetLang = "ne" if isNe else "hi"
+				prevIsLang = bool(out and isinstance(out[-1], LangChangeCommand) and getattr(out[-1], "lang", "") == targetLang)
 				if not prevIsLang:
-					out.append(LangChangeCommand("ne"))
+					out.append(LangChangeCommand(targetLang))
 					out.append(text)
 					out.append(LangChangeCommand(None))
 					continue
@@ -1611,7 +1619,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 					result.append(item)
 					continue
 				curLang = (lastFormat.get("language") or "").lower() if lastFormat else ""
-				if not curLang.startswith(("ne", "hi")):
+				isNe = multilangIntegration.isNepaliDevanagari(item) or bool(rebuilt.get(i))
+				if not curLang.startswith("ne") and (isNe or not curLang.startswith("hi")):
 					result.append(self._formatWithLanguage(lastFormat, "ne"))
 					result.append(item)
 					result.append(self._formatWithLanguage(lastFormat, None, restore=True))
@@ -1637,7 +1646,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 					result.append(item)
 					continue
 				curLang = (lastFormat.get("language") or "").lower() if lastFormat else ""
-				if not curLang.startswith(("ne", "hi")):
+				isNe = multilangIntegration.isNepaliDevanagari(item) or bool(rebuilt.get(i))
+				if not curLang.startswith("ne") and (isNe or not curLang.startswith("hi")):
 					result.append(self._formatWithLanguage(lastFormat, "ne"))
 					result.append(item)
 					result.append(self._formatWithLanguage(lastFormat, None, restore=True))

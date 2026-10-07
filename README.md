@@ -99,12 +99,22 @@ If any shortcut conflicts with another add-on or if you prefer different keys, y
 * **Ctrl + Left / Right Arrow**: Moves word by word through real Devanagari words.
 * **Shift + Arrows**: Selects text accurately without broken characters.
 * **Numbers & Dates**: Dates like `२०७५` and numbers like `१.`, `(१)`, `२३` are announced in spoken Nepali via eSpeak.
+* **MultiLang & Multi-Voice TTS Support**: Seamlessly integrates with the **MultiLang** virtual synthesizer add-on. If MultiLang is active, Nepali Reader ensures Devanagari text is correctly recognized as Nepali (`ne`) rather than forced to Hindi (`hi`), and automatically routes speech to installed Nepali TTS voices (such as **Hear2Read Indic Voices** with Google Nepali voice or **eSpeak NG**) across Word documents, PDFs, and web browsers.
 
 ---
 
 ## 📜 Changelog
 
-### Version 1.1.4 (Current Stable Release)
+### Version 1.1.5 (Current Release)
+* **Seamless MultiLang Add-on Integration**: Full automatic integration with the popular MultiLang virtual synthesizer add-on. Ensures Devanagari text is recognized as Nepali (`ne`) rather than forced to Hindi (`hi`).
+* **Supporting TTS Voice Discovery**: Automatically resolves and activates the best available Nepali voice across installed synthesizers—including Hear2Read Indic Voices (`Hear2ReadNG` with Google Nepali neural voice) and eSpeak NG (`ne`)—without requiring manual NVDA configuration profiles.
+* **Microsoft Word Proofing Language Override**: Overrides Word's default `hi-IN` language tagging on Devanagari paragraphs whenever the vocabulary is identified as Nepali, ensuring MultiLang and NVDA switch to the Nepali voice rather than Hindi.
+* **Preeti Bracket Matra Parsing**: Fixed Preeti keyboard typography where `]` (e-kar / o-kar), `}` (ai-kar / au-kar), `[` (ri-kar), and `{` (reph) were stripped as punctuation brackets, eliminating corrupted words like `रहेका] छ` -> `रहेको छ`, `शिक्षाल]` -> `शिक्षाले`, `यसका] पुर}` -> `यसको पुरै`, `कुन}` -> `कुनै`, `पाइन]` -> `पाइने`, `पहिला]` -> `पहिलो`, `हाम्रा]` -> `हाम्रो`.
+* **Himali Downward U-kar (`\xac` / `¬`)**: Added missing `\xac` Alt+0172 character to `PREETI_MAP`, fixing words like `स¬झावहरू` -> `सुझावहरू`.
+* **Preeti/Himali `क्र` Modifier Conjuncts**: Extended glyph modifier resolution for `व` + `्र` + modifier `m`, restoring `पाठ्यव्रम` -> `पाठ्यक्रम`, `कार्यव्रम` -> `कार्यक्रम`, `व्रियाकलाप` -> `क्रियाकलाप`, `प्रव्रिया` -> `प्रक्रिया`.
+* **Number Preservation in MultiLang**: Prevented MultiLang from dropping Devanagari numerals (`०-९`) and numbers attached to Nepali clauses into English speech.
+
+### Version 1.1.4
 * **Double Character Reading Elimination**: Character navigation (`Left/Right Arrow`) speaks individual characters and vowel signs cleanly without repeating syllables twice.
 * **Preeti Clause Brackets & 9/0 Key Resolution**: Parenthesized words and legal clauses (e.g. `(s)` -> `(क)`, `(v)` -> `(ख)`, `(lzIff)` -> `(शिक्षा)`, `(!)` -> `(१)`, `9s0` -> `(क)`) accurately preserve outer parentheses rather than turning into digits `९...०` or `ढकण्`, while genuine multi-digit Preeti numbers (`@)@(` -> `२०२९`, `@)` -> `२०`) remain numbers.
 * **Native Unicode Selection & Copying**: Preserves native Devanagari text and clipboard formats on `Ctrl+C`, `Ctrl+A`, `Shift+Arrows`, and `Ctrl+Shift+Arrows` in standard applications (Word, Notepad, Chrome) without unintended conversion.
