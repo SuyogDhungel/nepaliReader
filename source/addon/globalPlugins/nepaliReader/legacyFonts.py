@@ -81,9 +81,8 @@ PREETI_MAP = {
 	",": ",", ".": "।", "/": "र",
 	"Z": "श्", "X": "ह्", "C": "ऋ", "V": "ख्", "B": "द्य", "N": "ल्", "M": "ः",
 	"<": "?", ">": "श्र", "?": "रु",
-	# extended (Alt / Windows-1252) characters
 	"„": "ध्र", "…": "‘", "ˆ": "फ्", "‰": "झ्", "‹": "ङ्घ",
-	"‘": "ॅ", "“": "ँ", "Œ": "त्त्", "•": "•", "˜": "ऽ", "›": "द्र", "\xa1": "ज्ञ्",
+	"‘": "ॅ", "“": "ँ", "Œ": "त्त्", "•": "ड्ड", "˜": "ऽ", "›": "द्र", "\xa1": "ज्ञ्",
 	"\xa2": "द्घ", "\xa3": "घ्", "\xa4": "झ्", "\xa5": "र्‍", "\xa7": "ट्ट", "\xa9": "र",
 	"\xaa": "ङ", "\xab": "्र", "\xac": "ु", "\xb0": "ङ्ढ", "\xb1": "+", "\xb4": "झ", "\xb6": "ठ्ठ",
 	"\xb7": "ङ्ग", "·": "ङ्ग",
@@ -92,12 +91,12 @@ PREETI_MAP = {
 	"\xda": "’", "\xdb": "!", "\xdc": "%", "\xdd": "ट्ठ", "\xdf": "द्म", "\xe5": "द्व",
 	"\xe6": "“", "\xe7": "ॐ", "\xf7": "/",
 	# Extended 100% full coverage additions across all legacy layouts:
-	"‚": ")", "ƒ": "द्र", "‡": "े", "Š": "र्", "’": "’", "”": "”", "–": "–", "—": "—",
+	"‚": ")", "ƒ": "द्र", "†": "!", "‡": "े", "Š": "र्", "’": "’", "”": "”", "–": "–", "—": "—",
 	"™": "र", "œ": "त्र्", "\xa0": " ", "\xa8": "ङ्ग", "\xad": "(", "\xae": "+",
 	"\xb2": "२", "\xb3": "३", "\xb5": "झ", "\xb8": "ड्ड", "\xb9": "१", "\xba": "फ्",
 	"\xbb": "", "\xc2": "र", "\xc7": "फ्", "\xc8": "ष", "\xc9": "स", "\xca": "ष्",
-	"\xcf": "फ्", "\xd1": "ङ", "\xd4": "क्ष", "\xde": "ह्", "\xe8": "द्भ", "\xe9": "ङ्ग",
-	"\xed": "ष", "\xf1": "ङ", "\xf8": "य्", "\xfa": "ू",
+	"\xcf": "फ्", "\xd1": "ङ", "\xd4": "क्ष", "\xde": "़", "\xe8": "द्भ", "\xe9": "ङ्ग",
+	"\xec": "त्त्", "\xed": "ष", "\xf1": "ङ", "\xf8": "य्", "\xfa": "ू",
 }
 
 
@@ -136,6 +135,9 @@ for _name, _diff in _FONT_DIFFS.items():
 	_m = dict(PREETI_MAP)
 	_m.update(_diff)
 	_PREETI_FAMILY_MAPS[_name] = _m
+_PREETI_FAMILY_MAPS["gorkhapatra"] = PREETI_MAP
+_PREETI_FAMILY_MAPS["ganess"] = PREETI_MAP
+_PREETI_FAMILY_MAPS["nayanepal"] = PREETI_MAP
 
 _MOD_BASES = {"उ": "ऊ", "भ": "झ", "प": "फ"}
 _MOD_SKIPPABLE = SIGNS | {HALANT, "र", "य"}
@@ -145,6 +147,7 @@ _COMPOSE = [
 	("अाे", "ओ"), ("अाै", "औ"), ("अा", "आ"), ("एे", "ऐ"), ("एै", "ऐ"),
 	("अो", "ओ"), ("अौ", "औ"),
 	("ाे", "ो"), ("ाै", "ौ"),
+	("अाॅ", "ऑ"), ("ाॅ", "ॉ"),
 ]
 
 _DEDUP = re.compile("([ँंेैुूाी])\\1+")
@@ -288,7 +291,7 @@ def preetiFamilyToUnicode(text, font="preeti", _table=None):
 			result.append(word)
 			continue
 		# Standalone bullet / symbol / emoji: preserve without conversion
-		if (word in BULLETS and word not in table) or (len(word) == 1 and word in "•●○■▪◦✓★→←–—…*+-#~※♦►" and word not in table) or any(ord(c) > 255 and not (0x0900 <= ord(c) <= 0x097F) and c not in table for c in word):
+		if word in BULLETS or (len(word) == 1 and word in "•●○■▪◦✓★→←–—…*+-#~※♦►") or any(ord(c) > 255 and not (0x0900 <= ord(c) <= 0x097F) and c not in table for c in word):
 			result.append(word)
 			continue
 		if font == "preeti":
@@ -505,7 +508,7 @@ _FONT_NAME_PATTERNS = [
 	(re.compile(r"sagarmatha", re.I), "sagarmatha"),
 	(re.compile(r"himal", re.I), "himali"),
 	(re.compile(r"pcs\s*nepali", re.I), "pcs"),
-	(re.compile(r"\bsun\b|sumod|acharya|kanchan|everest|annapurna|jagadamba|rupa|shangrila", re.I), "preeti"),
+	(re.compile(r"gorkhapatra|ganess|nayanepal|\bsun\b|sumod|acharya|kanchan|everest|annapurna|jagadamba|rupa|shangrila", re.I), "preeti"),
 	(re.compile(r"kruti\s*dev|krutidev|k010|kruti", re.I), "krutidev"),
 ]
 

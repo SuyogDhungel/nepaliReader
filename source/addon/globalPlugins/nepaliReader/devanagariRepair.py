@@ -319,6 +319,7 @@ def cleanForCharNav(text):
 	_DEVA_BOUND_R = r'(?![\u0900-\u097f])'
 	text = composeMatras(text)
 	text = fixGluedDigits(text)
+	text = fixTrailingReph(text)
 	text = re.sub(r'म्ः', 'म्झ', text)
 	text = re.sub(r'०ा', 'ण', text)
 	text = re.sub(r'लैि·क', 'लैङ्गिक', text)

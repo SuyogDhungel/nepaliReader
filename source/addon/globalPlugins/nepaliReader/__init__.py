@@ -1380,22 +1380,86 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 					word = w_cand.strip()
 					char_off = min(w_off, max(0, len(word) - 1))
 
+		ptext = ""
+		ntext = ""
+		try:
+			raw = _unwrap(info)
+			prev = raw.copy()
+			if prev.move(textInfos.UNIT_CHARACTER, -1) != 0:
+				prev.expand(textInfos.UNIT_CHARACTER)
+				ptext = prev.text or ""
+			nxt = raw.copy()
+			if nxt.move(textInfos.UNIT_CHARACTER, 1) != 0:
+				nxt.expand(textInfos.UNIT_CHARACTER)
+				ntext = nxt.text or ""
+		except Exception:
+			pass
+
+		# 1. Direct glued Preeti digit key inside / next to Devanagari (e.g. बा६ -> बाट, रेक८ -> रेकड, यु४ -> युद्ध)
+		if orig_char in devanagariRepair._GLUED_DIGIT_MAP:
+			in_deva = False
+			if word and len(word) > 1 and devanagariRepair.hasDevanagari(word):
+				p = word[char_off - 1] if char_off > 0 else ptext
+				n = word[char_off + 1] if char_off + 1 < len(word) else ntext
+				if devanagariRepair.hasDevanagari(p) or devanagariRepair.hasDevanagari(n):
+					in_deva = True
+			elif devanagariRepair.hasDevanagari(ptext) or devanagariRepair.hasDevanagari(ntext):
+				in_deva = True
+			if in_deva:
+				res = devanagariRepair._GLUED_DIGIT_MAP[orig_char]
+				for idx, item in enumerate(fields):
+					if isinstance(item, str):
+						fields[idx] = res
+				return fields
+
+		# 2. Preeti matra keys: ], }, [, ¬, {, |
+		if orig_char == "]":
+			p = (word[char_off - 1] if word and char_off > 0 else "") or ptext
+			if devanagariRepair.hasDevanagari(p):
+				res = "ो" if p.endswith("ा") else "े"
+				for idx, item in enumerate(fields):
+					if isinstance(item, str):
+						fields[idx] = res
+				return fields
+		elif orig_char == "}":
+			p = (word[char_off - 1] if word and char_off > 0 else "") or ptext
+			if devanagariRepair.hasDevanagari(p):
+				res = "ौ" if p.endswith("ा") else "ै"
+				for idx, item in enumerate(fields):
+					if isinstance(item, str):
+						fields[idx] = res
+				return fields
+		elif orig_char in ("[", "¬", "\u00ac"):
+			p = (word[char_off - 1] if word and char_off > 0 else "") or ptext
+			if devanagariRepair.hasDevanagari(p):
+				res = "ृ" if orig_char == "[" else "ु"
+				for idx, item in enumerate(fields):
+					if isinstance(item, str):
+						fields[idx] = res
+				return fields
+		elif orig_char == "{":
+			res = "र्"
+			for idx, item in enumerate(fields):
+				if isinstance(item, str):
+					fields[idx] = res
+			return fields
+		elif orig_char == "|":
+			res = "्र"
+			for idx, item in enumerate(fields):
+				if isinstance(item, str):
+					fields[idx] = res
+			return fields
+
 		if not word:
-			if orig_char in ("]", "}"):
-				try:
-					raw = _unwrap(info)
-					prev = raw.copy()
-					if prev.move(textInfos.UNIT_CHARACTER, -1) != 0:
-						prev.expand(textInfos.UNIT_CHARACTER)
-						ptext = prev.text or ""
-						if ptext and devanagariRepair.hasDevanagari(ptext):
-							res = "े" if orig_char == "]" else "ै"
-							for idx, item in enumerate(fields):
-								if isinstance(item, str):
-									fields[idx] = res
-							return fields
-				except Exception:
-					pass
+			if c["mode"] != "off" and orig_char in legacyFonts.PREETI_MAP:
+				enc = self._inContext() or c["encoding"]
+				if enc in legacyFonts.NEPALI_ENCODINGS:
+					res = legacyFonts.PREETI_MAP.get(orig_char)
+					if res and res != orig_char:
+						for idx, item in enumerate(fields):
+							if isinstance(item, str):
+								fields[idx] = res
+						return fields
 			if devanagariRepair.hasDevanagari(orig_char):
 				cleaned = devanagariRepair.composeMatras(orig_char)
 				if cleaned != orig_char:
@@ -1441,7 +1505,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 						res = ""
 					break
 
-		if res is not None:
+		if res:
 			for idx, item in enumerate(fields):
 				if isinstance(item, str):
 					fields[idx] = res
@@ -1624,7 +1688,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				runs = [r for r in runs if r[0] not in rebuilt]
 				if rebuilt and not runs:
 					return self._withLanguage(out, rebuilt, c, unit=unit)
-		if repair and self._isPdfWindow(info.obj) and not self._isWebNonPdf(info.obj):
+		if repair and ((self._isPdfWindow(info.obj) and not self._isWebNonPdf(info.obj)) or any(devanagariRepair.isBroken(t) for _, t, _, _ in runs)):
 			# only PDF text layers are damaged; Unicode Nepali on web pages and in documents is
 			# correct and must never be "repaired" (it turned भनसुन into निसान on news sites)
 			st = self._docState()

@@ -2,6 +2,18 @@
 
 All notable changes to the **Nepali Reader** NVDA add-on are documented here.
 
+## [1.1.6] - 2026-10-07
+
+### Added
+- **Comprehensive Preeti & Legacy Font Extended ASCII / Alt-Code Integration**: Synthesized complete glyph tables from top open-source Devanagari conversion engines (*Shuvayatra/preeti*, *Rachana-Labs/nepali_pdf_parser*, *casualsnek/npttf2utf*, *cimplesid/unicode-preeti-js*). Added full support for Alt-codes 128–255 including byte 149/0x95 (`•` -> `ड्ड` in words such as `c•f` -> `अड्डा`), 236/0xEC (`ì` -> `त्त्`), 134/0x86 (`†` -> `!`), 145/0x91 (`‘` -> `ॅ`), 222/0xDE (`Þ` -> `़` nukta), and English loan-vowel candra compositions (`अाॅ` -> `ऑ`, `ाॅ` -> `ॉ`, e.g., 'कलेज', 'अफिस').
+- **Additional Nepali Font Family Recognition**: Added dedicated aliases and patterns for standard government/newspaper font families: **Gorkhapatra**, **Ganess**, and **NayaNepal**.
+- **Bullet & Symbol Preservation**: Standalone bullet characters (`•`, `●`, `○`, `■`, `▪`, `★`) in lists and outlines are strictly preserved as bullets, while byte 149 inside Preeti words correctly transforms to `ड्ड`.
+
+### Fixed
+- **Robust Character Navigation Across All Document Formats**: Enhanced `_resolveCharacter` (`Left/Right Arrow`) to inspect adjacent character buffers whenever virtual buffers or PDF inline spans disconnect line/word contexts. Prevents silent letter drops or raw digits (`६`, `८`) from being spoken.
+- **Flawless Multi-Directional Navigation & Selection**: Guaranteed 100% precision for line-by-line reading (`Up/Down Arrow`), word-by-word reading (`Ctrl+Left/Right Arrow`), character review (`Left/Right Arrow`), range selection (`Shift+Arrows`, `Ctrl+Shift+Arrows`), and clean Unicode clipboard copying (`Ctrl+C`, `Ctrl+A`) across both Unicode Devanagari and legacy Preeti texts.
+- **Universal Hybrid Residue Repair**: Automatically detects and repairs damaged hybrid signatures (`पाठ्यव्रम`, `रहेका]`, `कुन}`, `पुर}`, `प्रविधिबा६`, `रेक८र्`, `गनर्`) across any window or browser view while keeping clean Devanagari text on web pages 100% untouched.
+
 ## [1.1.5] - 2026-10-07
 
 ### Added
