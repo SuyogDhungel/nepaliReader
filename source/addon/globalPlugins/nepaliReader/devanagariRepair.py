@@ -78,7 +78,7 @@ _HYBRID_BROKEN = re.compile(
 	r"\u093e[\u200b\u200c\u200d\ufeff]*[\u0947\u0948]|"
 	r"(?:[\u0904-\u0939\u0958-\u095f\u093e-\u094d])[0-9\u0966-\u096f](?![0-9\u0966-\u096f])|"
 	r"(?<![0-9\u0966-\u096f])[0-9\u0966-\u096f](?=[\u0904-\u0939\u0958-\u095f\u093e-\u094d])|"
-	r"(?<!\u0930\u094d)[" + _CONS + r"](?:[\u093e-\u094c\u0901-\u0903])?\u0930\u094d(?=\s|[।॥,.;:!?()\[\]{}\"\'\-\–\—]|$)|"
+	r"(?<!पु)(?<!\u0930\u094d)[" + _CONS + r"](?:[\u093e-\u094c\u0901-\u0903])?\u0930\u094d(?=\s|[।॥,.;:!?()\[\]{}\"\'\-\–\—]|$)|"
 	r"व्रम|व्रिया|व्रे|व्रा"
 )
 
@@ -249,9 +249,8 @@ def cleanShuffled(text):
 
 	# Common font/OCR corruptions:
 	text = re.sub(_DEVA_BOUND_L + r'महव' + _DEVA_BOUND_R, 'महत्त्व', text)
-	text = re.sub(_DEVA_BOUND_L + r'महवको' + _DEVA_BOUND_R, 'महत्त्वको', text)
+	text = re.sub(_DEVA_BOUND_L + r'महव(को|का|की|मा|ले|लाई|बाट|हरू|पूर्ण)', r'महत्त्व\1', text)
 	text = re.sub(_DEVA_BOUND_L + r'महवराख्ने' + _DEVA_BOUND_R, 'महत्त्व राख्ने', text)
-	text = re.sub(_DEVA_BOUND_L + r'महवपूर्ण' + _DEVA_BOUND_R, 'महत्त्वपूर्ण', text)
 	text = re.sub(_DEVA_BOUND_L + r'निकरुञ्ज' + _DEVA_BOUND_R, 'निकुञ्ज', text)
 	text = re.sub(_DEVA_BOUND_L + r'वन्यजन्तरु' + _DEVA_BOUND_R, 'वन्यजन्तु', text)
 	text = re.sub(_DEVA_BOUND_L + r'सरुविधा' + _DEVA_BOUND_R, 'सुविधा', text)
@@ -269,8 +268,6 @@ def cleanShuffled(text):
 			return m.group(0)
 		text = re.sub(_DEVA_BOUND_L + r'([\u0900-\u097f]{1,4})\s+([\u0900-\u097f]{2,8})' + _DEVA_BOUND_R, check_dropped_gap, text)
 
-	# Nepal ko Sambidhan (never 'Nepal ka Sambidhan' in Nepali)
-	text = re.sub(r'नेपाल\s+का\s+संविधान', 'नेपालको संविधान', text)
 
 	# Hybrid PDF / legacy font residue repairs:
 	# Protect balanced brackets [ ... ] and { ... } ONLY when NOT attached to a Devanagari consonant/matra
@@ -312,6 +309,37 @@ def cleanShuffled(text):
 	text = composeMatras(text)
 
 	return text
+
+
+def cleanForCharNav(text):
+	"""Cleans hybrid PDF / Preeti residue in text for character navigation without swapping reph order."""
+	if not _DEVANAGARI.search(text) and not any(c in text for c in '[]{}¬'):
+		return text
+	_DEVA_BOUND_L = r'(?<![\u0900-\u097f])'
+	_DEVA_BOUND_R = r'(?![\u0900-\u097f])'
+	text = composeMatras(text)
+	text = fixGluedDigits(text)
+	text = re.sub(r'म्ः', 'म्झ', text)
+	text = re.sub(r'०ा', 'ण', text)
+	text = re.sub(r'लैि·क', 'लैङ्गिक', text)
+	text = re.sub(r'ि\s*·', 'ङ्ग', text)
+	text = re.sub(r'ा[\u200b\u200c\u200d\ufeff\s]*\]', 'ो', text)
+	text = re.sub(r'ा[\u200b\u200c\u200d\ufeff\s]*\}', 'ौ', text)
+	text = re.sub(r'(?:(?<=[' + _CONS + r'])|(?<=[' + _SIGNS + r']))[\u200b\u200c\u200d\ufeff\s]*\]', 'े', text)
+	text = re.sub(r'(?:(?<=[' + _CONS + r'])|(?<=[' + _SIGNS + r']))[\u200b\u200c\u200d\ufeff\s]*\}', 'ै', text)
+	text = re.sub(r'(?<=[' + _CONS + r'])\[', 'ृ', text)
+	text = re.sub(r'(?<=[' + _CONS + r'])[\u00ac¬]', 'ु', text)
+	text = re.sub(r'व्रम', 'क्रम', text)
+	text = re.sub(r'व्रिया', 'क्रिया', text)
+	text = re.sub(r'व्रे', 'क्रे', text)
+	text = re.sub(r'व्रा', 'क्रा', text)
+	text = re.sub(r'व्री', 'क्री', text)
+	text = re.sub(r'माइव्रोसफ्ट', 'माइक्रोसफ्ट', text)
+	text = re.sub(_DEVA_BOUND_L + r'महव' + _DEVA_BOUND_R, 'महत्त्व', text)
+	text = re.sub(_DEVA_BOUND_L + r'महव(को|का|की|मा|ले|लाई|बाट|हरू|पूर्ण)', r'महत्त्व\1', text)
+	text = re.sub(_DEVA_BOUND_L + r'महवराख्ने' + _DEVA_BOUND_R, 'महत्त्व राख्ने', text)
+	return text
+
 
 
 

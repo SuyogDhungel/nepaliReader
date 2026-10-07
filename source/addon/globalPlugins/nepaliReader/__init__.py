@@ -1139,6 +1139,19 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		except Exception:
 			return None
 
+	@staticmethod
+	def _wordContext(info):
+		"""(text of the word holding info, offset of info in it) or None."""
+		try:
+			rawInfo = _unwrap(info)
+			word = rawInfo.copy()
+			word.expand(textInfos.UNIT_WORD)
+			pre = word.copy()
+			pre.setEndPoint(rawInfo, "endToStart")
+			return word.text, len(pre.text)
+		except Exception:
+			return None
+
 	# ------------------------------------------------------------------
 	# context
 	# ------------------------------------------------------------------
@@ -1345,7 +1358,44 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		if not orig_char:
 			return fields
 		ctx = self._lineContext(info)
-		if not ctx:
+		word = None
+		char_off = 0
+		if ctx:
+			line, off = ctx
+			if 0 <= off < len(line) and line[off] not in (" ", "\t", "\r", "\n", "।", "॥"):
+				ws = max(line.rfind(" ", 0, off), line.rfind("\t", 0, off)) + 1
+				we = len(line)
+				for sep in (" ", "\t", "\r", "\n", "।", "॥"):
+					k = line.find(sep, off)
+					if k >= 0:
+						we = min(we, k)
+				if ws <= off < we:
+					word = line[ws:we]
+					char_off = off - ws
+		if not word:
+			wctx = self._wordContext(info)
+			if wctx:
+				w_cand, w_off = wctx
+				if w_cand and 0 <= w_off < len(w_cand) and w_cand[w_off] not in (" ", "\t", "\r", "\n", "।", "॥"):
+					word = w_cand.strip()
+					char_off = min(w_off, max(0, len(word) - 1))
+
+		if not word:
+			if orig_char in ("]", "}"):
+				try:
+					raw = _unwrap(info)
+					prev = raw.copy()
+					if prev.move(textInfos.UNIT_CHARACTER, -1) != 0:
+						prev.expand(textInfos.UNIT_CHARACTER)
+						ptext = prev.text or ""
+						if ptext and devanagariRepair.hasDevanagari(ptext):
+							res = "े" if orig_char == "]" else "ै"
+							for idx, item in enumerate(fields):
+								if isinstance(item, str):
+									fields[idx] = res
+							return fields
+				except Exception:
+					pass
 			if devanagariRepair.hasDevanagari(orig_char):
 				cleaned = devanagariRepair.composeMatras(orig_char)
 				if cleaned != orig_char:
@@ -1353,32 +1403,16 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 						if isinstance(item, str) and item == orig_char:
 							fields[idx] = cleaned
 			return fields
-		line, off = ctx
-		if not (0 <= off < len(line)):
-			return fields
-		if line[off] in (" ", "\t", "\r", "\n", "।", "॥"):
-			return fields
-		ws = max(line.rfind(" ", 0, off), line.rfind("\t", 0, off)) + 1
-		we = len(line)
-		for sep in (" ", "\t", "\r", "\n", "।", "॥"):
-			k = line.find(sep, off)
-			if k >= 0:
-				we = min(we, k)
-		if not (ws <= off < we):
-			return fields
-		word = line[ws:we]
-		char_off = off - ws
+
 		cleaned_word = None
 		if devanagariRepair.hasDevanagari(word):
-			cleaned_word = devanagariRepair.cleanShuffled(word)
-			if c["repairUnicode"]:
-				cleaned_word = devanagariRepair.repair(cleaned_word, broken=True)
+			cleaned_word = devanagariRepair.cleanForCharNav(word)
 		elif c["mode"] != "off":
 			enc = self._inContext() or c["encoding"]
 			if detector.looksLegacy(word, enc):
 				cleaned_word = legacyFonts.convert(word, enc)
 				if cleaned_word and devanagariRepair.hasDevanagari(cleaned_word):
-					cleaned_word = devanagariRepair.cleanShuffled(cleaned_word)
+					cleaned_word = devanagariRepair.cleanForCharNav(cleaned_word)
 		if not cleaned_word or cleaned_word == word:
 			if devanagariRepair.hasDevanagari(orig_char):
 				cleaned = devanagariRepair.composeMatras(orig_char)

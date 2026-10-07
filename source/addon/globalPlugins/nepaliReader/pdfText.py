@@ -789,12 +789,10 @@ class DocIndex:
 			shown, fixed, amap, enc = _wordTexts(w)
 			if fixed == "महव":
 				fixed = "महत्त्व"
-			elif fixed == "महवको":
-				fixed = "महत्त्वको"
+			elif fixed and fixed.startswith("महव") and fixed[3:] in ("को", "का", "की", "मा", "ले", "लाई", "बाट", "हरू", "पूर्ण"):
+				fixed = "महत्त्व" + fixed[3:]
 			elif fixed == "महवराख्ने":
 				fixed = "महत्त्व राख्ने"
-			elif fixed == "महवपूर्ण":
-				fixed = "महत्त्वपूर्ण"
 			key = keyOf(shown)
 			if not key:
 				continue
