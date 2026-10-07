@@ -7,8 +7,12 @@ import re
 
 try:
 	from .detectorModel import MODEL
+	from . import neLexicon
+	from . import legacyFonts
 except ImportError:  # unit tests
 	from detectorModel import MODEL
+	import neLexicon
+	import legacyFonts
 
 # Very common English words, plus words NVDA itself speaks (roles, states).
 # These are never treated as legacy text unless the whole line is overwhelmingly legacy.
@@ -152,6 +156,10 @@ def _strongAlone(token, sc, encoding):
 	sig = _KRUTI_SIGNATURE if encoding == "krutidev" else _PREETI_SIGNATURE
 	if sig.search(core):
 		return sc >= STRONG_WORD - 3
+	if neLexicon.isLoaded():
+		conv = legacyFonts.convert(core, encoding)
+		if conv and neLexicon.isWord(conv.strip(_STRIP)) and not isEnglishWord(core.lower()):
+			return True
 	return sc >= STRONG_WORD and len(core) >= 4 and not core.isupper()
 
 
@@ -250,7 +258,14 @@ def decide(text, encoding="preeti", context=False):
 
 
 def looksLegacy(text, encoding="preeti", context=False):
-	return any(flag for _, flag in decide(text, encoding, context))
+	if any(flag for _, flag in decide(text, encoding, context)):
+		return True
+	core = text.strip()
+	if core and neLexicon.isLoaded() and not isEnglishWord(core.lower()):
+		conv = legacyFonts.convert(core, encoding)
+		if conv and neLexicon.isWord(conv.strip(_STRIP)):
+			return True
+	return False
 
 
 def convertMixed(text, converter, encoding="preeti", context=False):

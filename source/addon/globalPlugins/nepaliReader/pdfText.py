@@ -16,14 +16,18 @@ import math
 import re
 import time
 
-from . import glyphRefs
-from . import legacyFonts
-from . import pdfReader
-from . import sfnt
 try:
+	from . import glyphRefs
+	from . import legacyFonts
+	from . import pdfReader
+	from . import sfnt
 	from . import devanagariRepair
 	from .detector import cleanGluedTokens
 except ImportError:
+	import glyphRefs
+	import legacyFonts
+	import pdfReader
+	import sfnt
 	import devanagariRepair
 	from detector import cleanGluedTokens
 

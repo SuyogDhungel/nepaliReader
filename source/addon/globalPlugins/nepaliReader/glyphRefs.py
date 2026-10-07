@@ -15,7 +15,10 @@ import re
 import threading
 import zlib
 
-from . import sfnt
+try:
+	from . import sfnt
+except ImportError:
+	import sfnt
 
 _lock = threading.Lock()
 _byHash = {}      # outline hash -> text over all fonts (None when fonts disagree)

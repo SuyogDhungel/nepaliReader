@@ -6,7 +6,10 @@
 import re
 import zlib
 
-from . import pdfCrypt
+try:
+	from . import pdfCrypt
+except ImportError:
+	import pdfCrypt
 
 
 class PdfError(Exception):

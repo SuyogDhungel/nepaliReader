@@ -154,6 +154,10 @@ _GLUED_DIGIT_MAP = {
 	'9': 'ढ',  '९': 'ढ',
 	'0': 'ण',  '०': 'ण',
 }
+_PREETI_SHIFT_DIGIT_MAP = {
+	')': '०', '!': '१', '@': '२', '#': '३', '$': '४',
+	'%': '५', '^': '६', '&': '७', '*': '८', '(': '९',
+}
 _GLUED_DIGITS = r'[0-9\u0966-\u096f]'
 
 def fixGluedDigits(text):
@@ -166,6 +170,12 @@ def fixGluedDigits(text):
 	text = re.sub(
 		r'(?<!' + _GLUED_DIGITS + r')(' + _GLUED_DIGITS + r')(' + _DEVA_LETTERS + r')',
 		lambda m: _GLUED_DIGIT_MAP.get(m.group(1), m.group(1)) + m.group(2),
+		text
+	)
+	# Glued Preeti shifted digits: % -> ५, ! -> १ etc.
+	text = re.sub(
+		r'(' + _DEVA_LETTERS + r')([!@#$%^&*()])(?!\S*[/0-9])',
+		lambda m: m.group(1) + _PREETI_SHIFT_DIGIT_MAP.get(m.group(2), m.group(2)),
 		text
 	)
 	return text
@@ -278,6 +288,8 @@ def cleanShuffled(text):
 	text = re.sub(r'(?<![' + _CONS + r'\u093e-\u094c\u0901-\u0903\u094d])\[[^\[\]\r\n]{1,60}\](?![' + _CONS + r'])', _save_bracket, text)
 	text = re.sub(r'(?<![' + _CONS + r'\u093e-\u094c\u0901-\u0903\u094d])\{[^\{\}\r\n]{1,60}\}(?![' + _CONS + r'])', _save_bracket, text)
 
+	# Stray/duplicate Preeti bracket after complete vowel sign (बनेको] -> बनेको, भएकोले] -> भएकोले, ज्ञानको} -> ज्ञानको):
+	text = re.sub(r'([ोौेै])[\u200b\u200c\u200d\ufeff\s]*[\]\}]', r'\1', text)
 	# aa-matra + ] -> o-matra (रहेका] -> रहेको, ज्ञानका] -> ज्ञानको, केन्द्रका] -> केन्द्रको, यसका] -> यसको, नेपालका] -> नेपालको)
 	text = re.sub(r'ा[\u200b\u200c\u200d\ufeff\s]*\]', 'ो', text)
 	# aa-matra + } -> au-matra
@@ -290,6 +302,12 @@ def cleanShuffled(text):
 	text = re.sub(r'(?:(?<=[' + _CONS + r'])|(?<=[' + _CONS + r']\u094d[' + _CONS + r']))\[', 'ृ', text)
 	# ¬ (Alt+0172 / 0xac) used as u-matra (स¬झाव -> सुझाव)
 	text = re.sub(r'(?<=[' + _CONS + r'])[\u00ac¬]', 'ु', text)
+	# Trailing stray Preeti consonant glued to Devanagari word (ऐनg -> ऐन):
+	text = re.sub(r'(?<=[\u0900-\u097f])[a-zA-Z](?=\s|[।॥,.;:!?()\[\]{}"\'\-\–\—]|$)', '', text)
+	# Preeti % used for digit 5 after honorific or Devanagari (श्री % -> श्री ५)
+	text = re.sub(r'(?<=[\u0900-\u097f]\s)%', '५', text)
+	# Preeti M used for colon after Devanagari (प्रस्तावना M -> प्रस्तावना :)
+	text = re.sub(r'(?<=[\u0900-\u097f])\s*M(?=\s|[।॥,.;:!?()\[\]{}"\'\-\–\—]|$)', ' :', text)
 
 	for _idx, _orig in enumerate(_bracket_saved):
 		text = text.replace("\ue000%d\ue001" % _idx, _orig)
@@ -324,12 +342,19 @@ def cleanForCharNav(text):
 	text = re.sub(r'०ा', 'ण', text)
 	text = re.sub(r'लैि·क', 'लैङ्गिक', text)
 	text = re.sub(r'ि\s*·', 'ङ्ग', text)
+	# Stray/duplicate Preeti bracket after complete vowel sign (बनेको] -> बनेको, भएकोले] -> भएकोले):
+	text = re.sub(r'([ोौेै])[\u200b\u200c\u200d\ufeff\s]*[\]\}]', r'\1', text)
 	text = re.sub(r'ा[\u200b\u200c\u200d\ufeff\s]*\]', 'ो', text)
 	text = re.sub(r'ा[\u200b\u200c\u200d\ufeff\s]*\}', 'ौ', text)
-	text = re.sub(r'(?:(?<=[' + _CONS + r'])|(?<=[' + _SIGNS + r']))[\u200b\u200c\u200d\ufeff\s]*\]', 'े', text)
-	text = re.sub(r'(?:(?<=[' + _CONS + r'])|(?<=[' + _SIGNS + r']))[\u200b\u200c\u200d\ufeff\s]*\}', 'ै', text)
+	text = re.sub(r'(?:(?<=[' + _CONS + r'])|(?<=[' + _CONS + r']\u094d[' + _CONS + r']))[\u200b\u200c\u200d\ufeff\s]*\]', 'े', text)
+	text = re.sub(r'(?:(?<=[' + _CONS + r'])|(?<=[' + _CONS + r']\u094d[' + _CONS + r']))[\u200b\u200c\u200d\ufeff\s]*\}', 'ै', text)
 	text = re.sub(r'(?<=[' + _CONS + r'])\[', 'ृ', text)
 	text = re.sub(r'(?<=[' + _CONS + r'])[\u00ac¬]', 'ु', text)
+	# Trailing stray Preeti consonant glued to Devanagari word (ऐनg -> ऐन):
+	text = re.sub(r'(?<=[\u0900-\u097f])[a-zA-Z](?=\s|[।॥,.;:!?()\[\]{}"\'\-\–\—]|$)', '', text)
+	# Preeti % and M after Devanagari (श्री % -> श्री ५, प्रस्तावना M -> प्रस्तावना :):
+	text = re.sub(r'(?<=[\u0900-\u097f]\s)%', '५', text)
+	text = re.sub(r'(?<=[\u0900-\u097f])\s*M(?=\s|[।॥,.;:!?()\[\]{}"\'\-\–\—]|$)', ' :', text)
 	text = re.sub(r'व्रम', 'क्रम', text)
 	text = re.sub(r'व्रिया', 'क्रिया', text)
 	text = re.sub(r'व्रे', 'क्रे', text)

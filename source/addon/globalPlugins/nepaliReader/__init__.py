@@ -703,15 +703,16 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				isPdf = False
 			inCtx = bool(ctxEnc or isPdf)
 			if mode != "off":
-				if len(text.strip()) <= 3 and not any(ch.isdigit() for ch in text) and any(ch in "!@#$%^&*()+=~`_{}[]\\|/<>?;'-" for ch in text):
-					conv_sym = legacyFonts.convert(text, defaultEnc)
-					if conv_sym and conv_sym != text:
-						text = conv_sym
-				elif detector.looksLegacy(text, defaultEnc, context=inCtx):
+				if len(text.strip()) <= 4 and (inCtx or not self._docState().isUnicodeDocument):
+					conv_short = legacyFonts.convert(text.strip(), defaultEnc)
+					if conv_short and (devanagariRepair.hasDevanagari(conv_short) or conv_short in (":", "५", "१", "२", "३", "४", "६", "७", "८", "९", "०")):
+						if (neLexicon.isLoaded() and neLexicon.isWord(conv_short.strip(".,:;!?()[]{}"))) or any(ch in "!@#$%^&*()+=~`_{}[]\\|/<>?;'-" for ch in text) or conv_short in (":", "५", "१", "२", "३", "४", "६", "७", "८", "९", "०"):
+							text = conv_short
+				if text == item and detector.looksLegacy(text, defaultEnc, context=inCtx):
 					conv = detector.convertMixed(text, lambda t: legacyFonts.convert(t, defaultEnc) or t, encoding=defaultEnc, context=inCtx)
 					if conv != text:
 						text = conv
-			if devanagariRepair.hasDevanagari(text):
+			if devanagariRepair.hasDevanagari(text) or any(ch in "%M" for ch in text):
 				text = devanagariRepair.cleanShuffled(text)
 				if repair and devanagariRepair.isBroken(text):
 					text = devanagariRepair.repair(text, broken=True)
@@ -1352,11 +1353,27 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
 	def _resolveCharacter(self, info, formatConfig, c):
 		"""Resolves a single character during Left/Right Arrow navigation, repairing hybrid residue,
-		decomposed matras, glued digit keys and inverted reph from word context."""
+		decomposed matras, glued digit keys, Preeti keys, and inverted reph from word context."""
 		fields = info.getTextWithFields(formatConfig)
 		orig_char = info.text or ""
 		if not orig_char:
 			return fields
+
+		# Check DocIndex first if reading a PDF
+		if self._isPdfWindow(info.obj):
+			idx = self._pdfIndex(info.obj)
+			if idx is not None:
+				ctx = self._lineContext(info)
+				if ctx:
+					line, off = ctx
+					chAt = idx.charAt(line, off)
+					if chAt and devanagariRepair.hasDevanagari(chAt):
+						chAt = devanagariRepair.cleanForCharNav(chAt)
+						for i, item in enumerate(fields):
+							if isinstance(item, str):
+								fields[i] = chAt
+						return fields
+
 		ctx = self._lineContext(info)
 		word = None
 		char_off = 0
@@ -1395,6 +1412,13 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		except Exception:
 			pass
 
+		ctxEnc = self._inContext()
+		isPdf = self._isPdfWindow(info.obj)
+		enc = ctxEnc or c["encoding"]
+		inLegacy = bool(ctxEnc or isPdf or (word and detector.looksLegacy(word, enc, context=bool(ctxEnc or isPdf))))
+
+		res = None
+
 		# 1. Direct glued Preeti digit key inside / next to Devanagari (e.g. बा६ -> बाट, रेक८ -> रेकड, यु४ -> युद्ध)
 		if orig_char in devanagariRepair._GLUED_DIGIT_MAP:
 			in_deva = False
@@ -1407,105 +1431,111 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				in_deva = True
 			if in_deva:
 				res = devanagariRepair._GLUED_DIGIT_MAP[orig_char]
-				for idx, item in enumerate(fields):
-					if isinstance(item, str):
-						fields[idx] = res
-				return fields
 
-		# 2. Preeti matra keys: ], }, [, ¬, {, |
-		if orig_char == "]":
+		# 2. Preeti shifted number row symbols (% -> ५, ! -> १, @ -> २, etc.)
+		elif orig_char in devanagariRepair._PREETI_SHIFT_DIGIT_MAP:
+			if inLegacy or devanagariRepair.hasDevanagari(ptext) or devanagariRepair.hasDevanagari(ntext) or (word and devanagariRepair.hasDevanagari(word)):
+				res = devanagariRepair._PREETI_SHIFT_DIGIT_MAP[orig_char]
+
+		# 3. Preeti colon: M -> :
+		elif orig_char == "M":
+			if inLegacy or devanagariRepair.hasDevanagari(ptext) or (word and devanagariRepair.hasDevanagari(word)):
+				res = ":"
+
+		# 4. Preeti matra keys: ], }, [, ¬, {, |
+		elif orig_char == "]":
 			p = (word[char_off - 1] if word and char_off > 0 else "") or ptext
 			if devanagariRepair.hasDevanagari(p):
-				res = "ो" if p.endswith("ा") else "े"
-				for idx, item in enumerate(fields):
-					if isinstance(item, str):
-						fields[idx] = res
-				return fields
+				if any(p.endswith(s) for s in ("ो", "ौ", "े", "ै")):
+					res = ""
+				elif p.endswith("ा"):
+					res = "ो"
+				else:
+					res = "े"
 		elif orig_char == "}":
 			p = (word[char_off - 1] if word and char_off > 0 else "") or ptext
 			if devanagariRepair.hasDevanagari(p):
-				res = "ौ" if p.endswith("ा") else "ै"
-				for idx, item in enumerate(fields):
-					if isinstance(item, str):
-						fields[idx] = res
-				return fields
+				if any(p.endswith(s) for s in ("ो", "ौ", "े", "ै")):
+					res = ""
+				elif p.endswith("ा"):
+					res = "ौ"
+				else:
+					res = "ै"
 		elif orig_char in ("[", "¬", "\u00ac"):
 			p = (word[char_off - 1] if word and char_off > 0 else "") or ptext
 			if devanagariRepair.hasDevanagari(p):
 				res = "ृ" if orig_char == "[" else "ु"
-				for idx, item in enumerate(fields):
-					if isinstance(item, str):
-						fields[idx] = res
-				return fields
 		elif orig_char == "{":
 			res = "र्"
-			for idx, item in enumerate(fields):
-				if isinstance(item, str):
-					fields[idx] = res
-			return fields
 		elif orig_char == "|":
 			res = "्र"
-			for idx, item in enumerate(fields):
-				if isinstance(item, str):
-					fields[idx] = res
-			return fields
 
-		if not word:
-			if c["mode"] != "off" and orig_char in legacyFonts.PREETI_MAP:
-				enc = self._inContext() or c["encoding"]
-				if enc in legacyFonts.NEPALI_ENCODINGS:
-					res = legacyFonts.PREETI_MAP.get(orig_char)
-					if res and res != orig_char:
-						for idx, item in enumerate(fields):
-							if isinstance(item, str):
-								fields[idx] = res
-						return fields
-			if devanagariRepair.hasDevanagari(orig_char):
-				cleaned = devanagariRepair.composeMatras(orig_char)
-				if cleaned != orig_char:
-					for idx, item in enumerate(fields):
-						if isinstance(item, str) and item == orig_char:
-							fields[idx] = cleaned
-			return fields
+		# 5. Keystroke resolution inside a word
+		if res is None and word:
+			# A. Legacy / Preeti word (ASCII)
+			if not devanagariRepair.hasDevanagari(word) and c["mode"] != "off":
+				conv = legacyFonts.convert(word, enc)
+				if conv and (devanagariRepair.hasDevanagari(conv) or (neLexicon.isLoaded() and neLexicon.isWord(conv.strip(".,:;!?()[]{}"))) or inLegacy):
+					c_cur = word[char_off] if 0 <= char_off < len(word) else orig_char
+					p_cur = word[char_off - 1] if char_off > 0 else ""
+					n_cur = word[char_off + 1] if char_off + 1 < len(word) else ""
+					if c_cur == 'f' and n_cur == ']': res = 'ो'
+					elif c_cur == ']' and p_cur == 'f': res = ''
+					elif c_cur == 'f' and n_cur == '}': res = 'ौ'
+					elif c_cur == '}' and p_cur == 'f': res = ''
+					elif c_cur == 'P' and n_cur == ']': res = 'ऐ'
+					elif c_cur == ']' and p_cur == 'P': res = ''
+					elif c_cur == 'c' and n_cur == 'f': res = 'आ'
+					elif c_cur == 'f' and p_cur == 'c': res = ''
+					elif c_cur == 'o' and n_cur == 'f': res = 'ध'
+					elif c_cur == 'f' and p_cur == 'o': res = ''
+					elif c_cur == '|': res = '्र'
+					elif c_cur == '{': res = 'र्'
+					elif c_cur == ']': res = 'े'
+					elif c_cur == '}': res = 'ै'
+					elif c_cur == '[': res = 'ृ'
+					elif c_cur in ('\u00ac', '¬'): res = 'ु'
+					elif c_cur == 'M': res = ':'
+					elif c_cur in legacyFonts.PREETI_MAP: res = legacyFonts.PREETI_MAP[c_cur]
+					else: res = c_cur
 
-		cleaned_word = None
-		if devanagariRepair.hasDevanagari(word):
-			cleaned_word = devanagariRepair.cleanForCharNav(word)
-		elif c["mode"] != "off":
-			enc = self._inContext() or c["encoding"]
-			if detector.looksLegacy(word, enc):
-				cleaned_word = legacyFonts.convert(word, enc)
-				if cleaned_word and devanagariRepair.hasDevanagari(cleaned_word):
-					cleaned_word = devanagariRepair.cleanForCharNav(cleaned_word)
-		if not cleaned_word or cleaned_word == word:
-			if devanagariRepair.hasDevanagari(orig_char):
-				cleaned = devanagariRepair.composeMatras(orig_char)
-				if cleaned != orig_char:
-					for idx, item in enumerate(fields):
-						if isinstance(item, str) and item == orig_char:
-							fields[idx] = cleaned
-			return fields
+			# B. Devanagari or hybrid word
+			elif devanagariRepair.hasDevanagari(word):
+				cleaned_word = devanagariRepair.cleanForCharNav(word)
+				c_cur = word[char_off] if 0 <= char_off < len(word) else orig_char
+				p_cur = word[char_off - 1] if char_off > 0 else ""
+				if c_cur == ']' and any(p_cur.endswith(s) for s in ('ो', 'ौ', 'े', 'ै')):
+					res = ''
+				elif c_cur == '}' and any(p_cur.endswith(s) for s in ('ो', 'ौ', 'े', 'ै')):
+					res = ''
+				elif c_cur in ('g', 'x') and devanagariRepair.hasDevanagari(p_cur) and char_off == len(word) - 1:
+					res = ''
+				elif cleaned_word:
+					if len(word) == len(cleaned_word):
+						res = cleaned_word[char_off] if 0 <= char_off < len(cleaned_word) else orig_char
+					else:
+						import difflib
+						sm = difflib.SequenceMatcher(None, word, cleaned_word)
+						for tag, alo, ahi, blo, bhi in sm.get_opcodes():
+							if alo <= char_off < ahi:
+								if tag == "equal":
+									res = cleaned_word[blo + (char_off - alo)]
+								elif tag in ("replace", "insert"):
+									sub_len = bhi - blo
+									offset = char_off - alo
+									res = cleaned_word[blo + offset] if offset < sub_len else ""
+								elif tag == "delete":
+									res = ""
+								break
 
-		# Map char_off from word to cleaned_word
-		res = None
-		if len(word) == len(cleaned_word):
-			res = cleaned_word[char_off] if 0 <= char_off < len(cleaned_word) else orig_char
-		else:
-			import difflib
-			sm = difflib.SequenceMatcher(None, word, cleaned_word)
-			for tag, alo, ahi, blo, bhi in sm.get_opcodes():
-				if alo <= char_off < ahi:
-					if tag == "equal":
-						res = cleaned_word[blo + (char_off - alo)]
-					elif tag in ("replace", "insert"):
-						sub_len = bhi - blo
-						offset = char_off - alo
-						res = cleaned_word[blo + offset] if offset < sub_len else ""
-					elif tag == "delete":
-						res = ""
-					break
+		# 6. Fallback standalone character mapping
+		if res is None:
+			if inLegacy and orig_char in legacyFonts.PREETI_MAP:
+				res = legacyFonts.PREETI_MAP.get(orig_char)
+			elif devanagariRepair.hasDevanagari(orig_char):
+				res = devanagariRepair.composeMatras(orig_char)
 
-		if res:
+		if res is not None:
 			for idx, item in enumerate(fields):
 				if isinstance(item, str):
 					fields[idx] = res
@@ -1908,6 +1938,12 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				convert[i] = (used, False)
 			return
 		if not legacyWords:
+			if words == 1 and neLexicon.isLoaded() and not detector.isEnglishWord(joined.strip().strip(".,:;").lower()):
+				conv_w = legacyFonts.convert(joined.strip(), used)
+				if conv_w and (neLexicon.isWord(conv_w.strip(".,:;!?()[]{}")) or conv_w in (":", "५", "१", "२", "३", "४", "६", "७", "८", "९", "०")):
+					for i, _t in unknown:
+						convert[i] = (used, False)
+					return
 			return
 		hasDeva = any("\u0900" <= c <= "\u097f" for c in joined)
 		lineIsLegacy = not hasDeva and (legacyWords * 2 >= words or legacyWords >= 2)
