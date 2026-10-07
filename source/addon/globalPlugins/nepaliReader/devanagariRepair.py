@@ -152,16 +152,23 @@ _GLUED_DIGIT_MAP = {
 	'7': 'ठ',  '७': 'ठ',
 	'8': 'ड',  '८': 'ड',
 	'9': 'ढ',  '९': 'ढ',
-	'0': 'ण',  '०': 'ण',
+	'0': 'ण',
 }
 _PREETI_SHIFT_DIGIT_MAP = {
-	')': '०', '!': '१', '@': '२', '#': '३', '$': '४',
-	'%': '५', '^': '६', '&': '७', '*': '८', '(': '९',
+	'!': '१', '@': '२', '#': '३', '$': '४',
+	'%': '५', '^': '६', '&': '७', '*': '८',
 }
 _GLUED_DIGITS = r'[0-9\u0966-\u096f]'
 
 def fixGluedDigits(text):
 	"""Fix Preeti digit keys mistakenly embedded inside Devanagari words without spaces."""
+	# Protect balanced parentheses e.g. (क), (१), (ङ१), (२०३०।६।४) so clause numbers are preserved
+	_p_saved = []
+	def _save_p(m):
+		_p_saved.append(m.group(0))
+		return "\ue002%d\ue003" % (len(_p_saved) - 1)
+	text = re.sub(r'\([^\r\n()]{1,60}\)', _save_p, text)
+
 	text = re.sub(
 		r'(' + _DEVA_LETTERS + r')(' + _GLUED_DIGITS + r')(?!' + _GLUED_DIGITS + r')',
 		lambda m: m.group(1) + _GLUED_DIGIT_MAP.get(m.group(2), m.group(2)),
@@ -172,12 +179,15 @@ def fixGluedDigits(text):
 		lambda m: _GLUED_DIGIT_MAP.get(m.group(1), m.group(1)) + m.group(2),
 		text
 	)
-	# Glued Preeti shifted digits: % -> ५, ! -> १ etc.
+	# Glued Preeti shifted digits: % -> ५, ! -> १ etc. (parentheses () strictly excluded)
 	text = re.sub(
-		r'(' + _DEVA_LETTERS + r')([!@#$%^&*()])(?!\S*[/0-9])',
+		r'(' + _DEVA_LETTERS + r')([!@#$%^&*])(?!\S*[/0-9])',
 		lambda m: m.group(1) + _PREETI_SHIFT_DIGIT_MAP.get(m.group(2), m.group(2)),
 		text
 	)
+
+	for _idx, _orig in enumerate(_p_saved):
+		text = text.replace("\ue002%d\ue003" % _idx, _orig)
 	return text
 
 _BOUNDARY_OR_SFX = r'(?=\s|[।॥,.;:!?()\[\]{}"\'\-\–\—]|$|का|को|की|मा|ले|लाई|बाट|देखि|हरू|सँग)'
@@ -221,6 +231,10 @@ def cleanShuffled(text):
 	# (repeated words are NOT removed here: "जय जय", "बिस्तारै बिस्तारै" are real; text a PDF
 	#  draws twice is removed by the PDF engine, which knows what the document contains)
 
+	# Fix misconverted closing parenthesis after clause letters before digit fixing: (क० -> (क), (ख० -> (ख), (ङ१० -> (ङ१)
+	text = re.sub(r'\(([\u0915-\u0939\u0958-\u095f](?:[०-९\u0966-\u096f]+)?)०', r'(\1)', text)
+	text = re.sub(r'(^|\s)([\u0915-\u0939\u0958-\u095f](?:[०-९\u0966-\u096f]+)?)०(?=\s|[“"\'‘])', r'\1(\2)', text)
+
 	# 1. First compose any decomposed vowel signs and normalize glued Preeti digits / trailing reph
 	text = composeMatras(text)
 	text = fixGluedDigits(text)
@@ -261,9 +275,15 @@ def cleanShuffled(text):
 	text = re.sub(_DEVA_BOUND_L + r'महव' + _DEVA_BOUND_R, 'महत्त्व', text)
 	text = re.sub(_DEVA_BOUND_L + r'महव(को|का|की|मा|ले|लाई|बाट|हरू|पूर्ण)', r'महत्त्व\1', text)
 	text = re.sub(_DEVA_BOUND_L + r'महवराख्ने' + _DEVA_BOUND_R, 'महत्त्व राख्ने', text)
-	text = re.sub(_DEVA_BOUND_L + r'निकरुञ्ज' + _DEVA_BOUND_R, 'निकुञ्ज', text)
-	text = re.sub(_DEVA_BOUND_L + r'वन्यजन्तरु' + _DEVA_BOUND_R, 'वन्यजन्तु', text)
+	text = re.sub(_DEVA_BOUND_L + r'निक(?:रु|रू)[ञन्]+ज' + _DEVA_BOUND_R, 'निकुञ्ज', text)
+	text = re.sub(_DEVA_BOUND_L + r'वन्यज[न्स्त]+(?:रु|रू)' + _DEVA_BOUND_R, 'वन्यजन्तु', text)
 	text = re.sub(_DEVA_BOUND_L + r'सरुविधा' + _DEVA_BOUND_R, 'सुविधा', text)
+	text = re.sub(_DEVA_BOUND_L + r'छ(?:रु|रू)[टत्]+[यया]+इएको' + _DEVA_BOUND_R, 'छुट्याइएको', text)
+	text = re.sub(_DEVA_BOUND_L + r'छ(?:रु|रू)[टत्]+[यया]+एको' + _DEVA_BOUND_R, 'छुट्याएको', text)
+	text = re.sub(_DEVA_BOUND_L + r'छ(?:रु|रू)[टत्]+[यया]+उन' + _DEVA_BOUND_R, 'छुट्याउन', text)
+	text = re.sub(_DEVA_BOUND_L + r'छ(?:रु|रू)[टत्]+[यया]+ई' + _DEVA_BOUND_R, 'छुट्याई', text)
+	text = re.sub(_DEVA_BOUND_L + r'छ(?:रु|रू)[टत्]+[यया]+इने' + _DEVA_BOUND_R, 'छुट्याइने', text)
+	text = re.sub(_DEVA_BOUND_L + r'प्रसले' + _DEVA_BOUND_R, 'प्रसङ्गले', text)
 
 	# 3. Restore dropped characters (e.g. unmapped Preeti ¿ -> रु / र) using the dictionary
 	if neLexicon.isLoaded():
@@ -308,6 +328,9 @@ def cleanShuffled(text):
 	text = re.sub(r'(?<=[\u0900-\u097f]\s)%', '५', text)
 	# Preeti M used for colon after Devanagari (प्रस्तावना M -> प्रस्तावना :)
 	text = re.sub(r'(?<=[\u0900-\u097f])\s*M(?=\s|[।॥,.;:!?()\[\]{}"\'\-\–\—]|$)', ' :', text)
+	# Fix misconverted closing parenthesis after clause letters: (क० -> (क), (ख० -> (ख), (ङ१० -> (ङ१)
+	text = re.sub(r'\(([\u0915-\u0939\u0958-\u095f](?:[०-९\u0966-\u096f]+)?)०', r'(\1)', text)
+	text = re.sub(r'(^|\s)([\u0915-\u0939\u0958-\u095f](?:[०-९\u0966-\u096f]+)?)०(?=\s|[“"\'‘])', r'\1(\2)', text)
 
 	for _idx, _orig in enumerate(_bracket_saved):
 		text = text.replace("\ue000%d\ue001" % _idx, _orig)
@@ -335,6 +358,9 @@ def cleanForCharNav(text):
 		return text
 	_DEVA_BOUND_L = r'(?<![\u0900-\u097f])'
 	_DEVA_BOUND_R = r'(?![\u0900-\u097f])'
+	# Fix misconverted closing parenthesis after clause letters before digit fixing: (क० -> (क), (ख० -> (ख), (ङ१० -> (ङ१)
+	text = re.sub(r'\(([\u0915-\u0939\u0958-\u095f](?:[०-९\u0966-\u096f]+)?)०', r'(\1)', text)
+	text = re.sub(r'(^|\s)([\u0915-\u0939\u0958-\u095f](?:[०-९\u0966-\u096f]+)?)०(?=\s|[“"\'‘])', r'\1(\2)', text)
 	text = composeMatras(text)
 	text = fixGluedDigits(text)
 	text = fixTrailingReph(text)
@@ -355,6 +381,9 @@ def cleanForCharNav(text):
 	# Preeti % and M after Devanagari (श्री % -> श्री ५, प्रस्तावना M -> प्रस्तावना :):
 	text = re.sub(r'(?<=[\u0900-\u097f]\s)%', '५', text)
 	text = re.sub(r'(?<=[\u0900-\u097f])\s*M(?=\s|[।॥,.;:!?()\[\]{}"\'\-\–\—]|$)', ' :', text)
+	# Fix misconverted closing parenthesis after clause letters: (क० -> (क), (ख० -> (ख), (ङ१० -> (ङ१)
+	text = re.sub(r'\(([\u0915-\u0939\u0958-\u095f](?:[०-९\u0966-\u096f]+)?)०', r'(\1)', text)
+	text = re.sub(r'(^|\s)([\u0915-\u0939\u0958-\u095f](?:[०-९\u0966-\u096f]+)?)०(?=\s|[“"\'‘])', r'\1(\2)', text)
 	text = re.sub(r'व्रम', 'क्रम', text)
 	text = re.sub(r'व्रिया', 'क्रिया', text)
 	text = re.sub(r'व्रे', 'क्रे', text)
@@ -364,6 +393,10 @@ def cleanForCharNav(text):
 	text = re.sub(_DEVA_BOUND_L + r'महव' + _DEVA_BOUND_R, 'महत्त्व', text)
 	text = re.sub(_DEVA_BOUND_L + r'महव(को|का|की|मा|ले|लाई|बाट|हरू|पूर्ण)', r'महत्त्व\1', text)
 	text = re.sub(_DEVA_BOUND_L + r'महवराख्ने' + _DEVA_BOUND_R, 'महत्त्व राख्ने', text)
+	text = re.sub(_DEVA_BOUND_L + r'निक(?:रु|रू)[ञन्]+ज' + _DEVA_BOUND_R, 'निकुञ्ज', text)
+	text = re.sub(_DEVA_BOUND_L + r'वन्यज[न्स्त]+(?:रु|रू)' + _DEVA_BOUND_R, 'वन्यजन्तु', text)
+	text = re.sub(_DEVA_BOUND_L + r'छ(?:रु|रू)[टत्]+[यया]+इएको' + _DEVA_BOUND_R, 'छुट्याइएको', text)
+	text = re.sub(_DEVA_BOUND_L + r'प्रसले' + _DEVA_BOUND_R, 'प्रसङ्गले', text)
 	return text
 
 
