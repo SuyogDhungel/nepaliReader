@@ -272,8 +272,18 @@ def cleanShuffled(text):
 	_DEVA_BOUND_L = r'(?<![\u0900-\u097f])'
 	_DEVA_BOUND_R = r'(?![\u0900-\u097f])'
 
-	# Preeti digit 5 typo for verb 'छ' at end of sentences (e.g. बनाईबक्सेको ५ । -> बनाईबक्सेको छ ।)
-	text = re.sub(r'([क-ह][\u0900-\u097f]*(?:ेको|एको|ने|दा|छैन))\s+५\s*([।\.])', r'\1 छ \2', text)
+	# Preeti digit 5 / ५ typo for verb 'छ' at end of clauses/sentences (e.g. रहेको 5, बनाईबक्सेको ५ । -> रहेको छ, बनाईबक्सेको छ ।)
+	text = re.sub(
+		r'([क-ह][\u0900-\u097f]*(?:[ेै]को|एको|[ािीुूेैोौ]ने|[ािीुूेैोौ]दा|[ािीुूेैोौ]दै|छैन|थियो|भयो|गर्यो|गरे))[ \t]+[5५]([ \t]*([।\.\n\r\)\],\'\"”’]|$))',
+		r'\1 छ\2',
+		text
+	)
+
+	# Multi-digit numbers glued to Devanagari words without spaces (e.g. बस्ने१८ -> बस्ने १८, वर्षीय२५ -> वर्षीय २५)
+	text = re.sub(r'(?<=[क-ह\u093e-\u094c])([0-9\u0966-\u096f]{2,})' + _BOUNDARY, r' \1', text)
+
+	# Preeti hash key before digits in Devanagari context (e.g. संख्या #२२८४ -> संख्या २२८४)
+	text = re.sub(r'(संख्या)\s*#\s*([०-९\u0966-\u096f0-9]+)', r'\1 \2', text)
 
 	# Common font/OCR corruptions:
 	text = re.sub(_DEVA_BOUND_L + r'महव' + _DEVA_BOUND_R, 'महत्त्व', text)
@@ -288,6 +298,27 @@ def cleanShuffled(text):
 	text = re.sub(_DEVA_BOUND_L + r'छ(?:रु|रू)[टत्]+[यया]+ई' + _DEVA_BOUND_R, 'छुट्याई', text)
 	text = re.sub(_DEVA_BOUND_L + r'छ(?:रु|रू)[टत्]+[यया]+इने' + _DEVA_BOUND_R, 'छुट्याइने', text)
 	text = re.sub(_DEVA_BOUND_L + r'प्रसले' + _DEVA_BOUND_R, 'प्रसङ्गले', text)
+
+	# Disaster bulletin / government document table OCR corruptions:
+	text = re.sub(_DEVA_BOUND_L + r'संख्या/टिरण' + _DEVA_BOUND_R, 'संख्या/विवरण', text)
+	text = re.sub(_DEVA_BOUND_L + r'टिरण' + _DEVA_BOUND_R, 'विवरण', text)
+	text = re.sub(_DEVA_BOUND_L + r'मृत\s+क' + _DEVA_BOUND_R, 'मृतक', text)
+	text = re.sub(_DEVA_BOUND_L + r'अनाममा\s+गा\.पा\.' + _DEVA_BOUND_R, 'अर्नमा गा.पा.', text)
+	text = re.sub(_DEVA_BOUND_L + r'बङ्ठै\s+या' + _DEVA_BOUND_R, 'बङ्ठैया', text)
+	text = re.sub(_DEVA_BOUND_L + r'बङ्ठैया\s+तोल' + _DEVA_BOUND_R, 'बङ्ठैया टोल', text)
+	text = re.sub(_DEVA_BOUND_L + r'तोल\s+बस्ने' + _DEVA_BOUND_R, 'टोल बस्ने', text)
+	text = re.sub(_DEVA_BOUND_L + r'विषमय(?=\s+किशोर)', 'वर्षीय', text)
+	text = re.sub(_DEVA_BOUND_L + r'खट्टामा' + _DEVA_BOUND_R, 'खुट्टामा', text)
+	text = re.sub(_DEVA_BOUND_L + r'खुट्टामा\s+तोकी' + _DEVA_BOUND_R, 'खुट्टामा टोकी', text)
+	text = re.sub(r'(सर्पदंश[\s\S]{1,100}?)तोकी' + _BOUNDARY, r'\1टोकी', text)
+
+	# Dropped matra filename and title repairs (दनक_वपद_बलटन -> दैनिक_विपद्_बुलेटिन):
+	text = re.sub(r'दनक_वपद_बलटन', 'दैनिक_विपद्_बुलेटिन', text)
+	text = re.sub(_DEVA_BOUND_L + r'दनक\s+वपद' + _DEVA_BOUND_R, 'दैनिक विपद्', text)
+	text = re.sub(_DEVA_BOUND_L + r'दनक\s+विपद्' + _DEVA_BOUND_R, 'दैनिक विपद्', text)
+	text = re.sub(_DEVA_BOUND_L + r'वपद\s+बलटन' + _DEVA_BOUND_R, 'विपद् बुलेटिन', text)
+	text = re.sub(_DEVA_BOUND_L + r'विपद्\s+बलटन' + _DEVA_BOUND_R, 'विपद् बुलेटिन', text)
+	text = re.sub(_DEVA_BOUND_L + r'दनक\s+बुलेटिन' + _DEVA_BOUND_R, 'दैनिक बुलेटिन', text)
 
 	# 3. Restore dropped characters (e.g. unmapped Preeti ¿ -> रु / र) using the dictionary
 	if neLexicon.isLoaded():
@@ -410,6 +441,9 @@ def cleanForCharNav(text):
 	text = re.sub(_DEVA_BOUND_L + r'वन्यज[न्स्त]+(?:रु|रू)' + _DEVA_BOUND_R, 'वन्यजन्तु', text)
 	text = re.sub(_DEVA_BOUND_L + r'छ(?:रु|रू)[टत्]+[यया]+इएको' + _DEVA_BOUND_R, 'छुट्याइएको', text)
 	text = re.sub(_DEVA_BOUND_L + r'प्रसले' + _DEVA_BOUND_R, 'प्रसङ्गले', text)
+	text = re.sub(_DEVA_BOUND_L + r'संख्या/टिरण' + _DEVA_BOUND_R, 'संख्या/विवरण', text)
+	text = re.sub(_DEVA_BOUND_L + r'मृत\s+क' + _DEVA_BOUND_R, 'मृतक', text)
+	text = re.sub(r'दनक_वपद_बलटन', 'दैनिक_विपद्_बुलेटिन', text)
 	return text
 
 

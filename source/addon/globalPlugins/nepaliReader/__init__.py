@@ -55,6 +55,8 @@ CONF_SPEC = {
 	"visualCheck": "boolean(default=True)",
 	"webFontOnly": "boolean(default=True)",
 	"lastOnMode": "option('auto', 'always', default='auto')",
+	"autoCheckUpdate": "boolean(default=True)",
+	"lastUpdateCheck": "float(default=0.0)",
 }
 config.conf.spec[CONF_SECTION] = CONF_SPEC
 
@@ -417,6 +419,12 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			wx.CallLater(2000, multilangIntegration.install)
 			wx.CallLater(3000, self._checkHooks)
 			wx.CallLater(3500, self._startupReminder)
+			if conf().get("autoCheckUpdate", True):
+				try:
+					from . import updater
+					updater.startAutoUpdateCheck(conf())
+				except Exception:
+					pass
 		except Exception:
 			log.debugWarning("Nepali Reader: gesture check failed", exc_info=True)
 
@@ -535,9 +543,16 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		# Translators: menu item
 		item = menu.Append(wx.ID_ANY, _("&Settings..."))
 		gui.mainFrame.sysTrayIcon.Bind(wx.EVT_MENU, self._onMenuSettings, item)
+		# Translators: menu item to check for updates
+		itemUpdate = menu.Append(wx.ID_ANY, _("&Check for updates..."))
+		gui.mainFrame.sysTrayIcon.Bind(wx.EVT_MENU, lambda e: self._onCheckUpdates(), itemUpdate)
 		# Translators: name of the add-on's submenu in NVDA's Tools menu
 		self._menu = toolsMenu.AppendSubMenu(menu, _("&Nepali Reader"))
 		_menuSync[0] = self._syncMenu
+
+	def _onCheckUpdates(self):
+		from . import updater
+		updater.checkUpdate(manual=True, configRef=conf())
 
 	def _removeMenu(self):
 		try:
@@ -743,21 +758,15 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			try:
 				if isOn():
 					raw = _unwrap(info).text or ""
-					if devanagariRepair.hasDevanagari(raw):
-						cleaned = devanagariRepair.cleanShuffled(raw)
-						if plugin._isPdfWindow(info.obj) or devanagariRepair.isBroken(raw):
+					text = plugin._plainText(info)
+					target = text if (text and text != raw) else raw
+					if devanagariRepair.hasDevanagari(target):
+						cleaned = devanagariRepair.cleanShuffled(target)
+						if plugin._isPdfWindow(info.obj) or devanagariRepair.isBroken(target) or plugin._isBrokenDoc():
 							cleaned = devanagariRepair.repair(cleaned, broken=True)
 						if cleaned and cleaned != raw:
 							return api.copyToClip(textInfos.convertToCrlf(cleaned), notify)
-						return origCopy(_unwrap(info), notify)
-					text = plugin._plainText(info)
-					if diag.wanted():
-						try:
-							diag.write("copy: %r -> %r" % (raw[:60], (text or "")[:60]))
-						except Exception:
-							pass
-					# Only override clipboard if text was ACTUALLY converted and changed!
-					if text and text != raw:
+					elif text and text != raw:
 						return api.copyToClip(textInfos.convertToCrlf(text), notify)
 			except Exception:
 				log.debugWarning("Nepali Reader: copy failed", exc_info=True)
@@ -776,16 +785,16 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 						info = mgr.makeTextInfo(textInfos.POSITION_SELECTION)
 						if not info.isCollapsed:
 							raw = info.text or ""
-							if devanagariRepair.hasDevanagari(raw):
-								cleaned = devanagariRepair.cleanShuffled(raw)
-								if plugin._isPdfWindow(mgr) or devanagariRepair.isBroken(raw):
+							text = plugin._plainText(info)
+							target = text if (text and text != raw) else raw
+							if devanagariRepair.hasDevanagari(target):
+								cleaned = devanagariRepair.cleanShuffled(target)
+								if plugin._isPdfWindow(mgr) or devanagariRepair.isBroken(target) or plugin._isBrokenDoc():
 									cleaned = devanagariRepair.repair(cleaned, broken=True)
 								if cleaned and cleaned != raw:
 									api.copyToClip(textInfos.convertToCrlf(cleaned), notify=True)
 									return
-								return origCursorCopy(mgr, gesture)
-							new = plugin._plainText(info)
-							if not new or new == raw:
+							if not text or text == raw:
 								c = conf()
 								ctxEnc = plugin._inContext()
 								defaultEnc = ctxEnc or c["encoding"]
@@ -793,11 +802,11 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 									isPdf = plugin._isPdfWindow(mgr)
 									conv = detector.convertMixed(raw, lambda t: legacyFonts.convert(t, defaultEnc) or t, encoding=defaultEnc, context=bool(ctxEnc or isPdf))
 									if conv and conv != raw:
-										new = conv
-								if c["repairUnicode"] and new and devanagariRepair.hasDevanagari(new):
-									new = devanagariRepair.repair(new, broken=True)
-							if new and new != raw:
-								api.copyToClip(textInfos.convertToCrlf(new), notify=True)
+										text = conv
+								if c["repairUnicode"] and text and devanagariRepair.hasDevanagari(text):
+									text = devanagariRepair.repair(text, broken=True if (plugin._isPdfWindow(mgr) or plugin._isBrokenDoc()) else None)
+							if text and text != raw:
+								api.copyToClip(textInfos.convertToCrlf(text), notify=True)
 								return
 					except Exception:
 						log.debugWarning("Nepali Reader: cursor copy failed", exc_info=True)
@@ -807,6 +816,31 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			self._patched2.append((CursorManager, "script_copyToClipboard", origCursorCopy, cursorCopyToClipboard))
 		except Exception:
 			log.debugWarning("Nepali Reader: could not hook CursorManager copy", exc_info=True)
+
+		try:
+			origCopyToClip = api.copyToClip
+
+			def copyToClip(text, notify=False):
+				try:
+					if isOn() and isinstance(text, str) and text:
+						if devanagariRepair.hasDevanagari(text):
+							cleaned = devanagariRepair.cleanShuffled(text)
+							if devanagariRepair.isBroken(text) or plugin._isBrokenDoc():
+								cleaned = devanagariRepair.repair(cleaned, broken=True)
+							if cleaned:
+								text = cleaned
+						elif conf()["mode"] != "off" and detector.looksLegacy(text, "preeti"):
+							conv = detector.convertMixed(text, legacyFonts.preetiFamilyToUnicode)
+							if conv:
+								text = conv
+				except Exception:
+					pass
+				return origCopyToClip(text, notify=notify)
+
+			api.copyToClip = copyToClip
+			self._patched2.append((api, "copyToClip", origCopyToClip, copyToClip))
+		except Exception:
+			log.debugWarning("Nepali Reader: could not hook api.copyToClip", exc_info=True)
 
 		try:
 			import speech
@@ -1431,6 +1465,13 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				in_deva = True
 			if in_deva:
 				res = devanagariRepair._GLUED_DIGIT_MAP[orig_char]
+			elif orig_char in ("5", "५"):
+				if ctx:
+					line, off = ctx
+					before = line[:off] if 0 <= off <= len(line) else ""
+					import re
+					if re.search(r'([क-ह][\u0900-\u097f]*(?:[ेै]को|एको|[ािीुूेैोौ]ने|[ािीुूेैोौ]दा|[ािीुूेैोौ]दै|छैन|थियो|भयो|गर्यो|गरे))\s*$', before):
+						res = "छ"
 
 		# 2. Preeti shifted number row symbols (% -> ५, ! -> १, @ -> २, etc.)
 		elif orig_char in devanagariRepair._PREETI_SHIFT_DIGIT_MAP:
@@ -1670,6 +1711,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 							conv = detector.convertMixed(val, legacyFonts.preetiFamilyToUnicode)
 							if conv and conv != val:
 								item.field[attr] = conv
+						elif devanagariRepair.hasDevanagari(val):
+							val_clean = devanagariRepair.cleanShuffled(val)
+							if val_clean and val_clean != val:
+								item.field[attr] = val_clean
 		if not runs:
 			return fields
 		out = list(fields)
@@ -1718,6 +1763,14 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				runs = [r for r in runs if r[0] not in rebuilt]
 				if rebuilt and not runs:
 					return self._withLanguage(out, rebuilt, c, unit=unit)
+		if repair:
+			for k, (i, text, known, enc) in enumerate(runs):
+				if devanagariRepair.hasDevanagari(text):
+					cl = devanagariRepair.cleanShuffled(text)
+					if cl != text:
+						out[i] = cl
+						runs[k] = (i, cl, known, enc)
+						changed = True
 		if repair and ((self._isPdfWindow(info.obj) and not self._isWebNonPdf(info.obj)) or any(devanagariRepair.isBroken(t) for _, t, _, _ in runs)):
 			# only PDF text layers are damaged; Unicode Nepali on web pages and in documents is
 			# correct and must never be "repaired" (it turned भनसुन into निसान on news sites)
@@ -2031,15 +2084,15 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				info = None
 		if info is not None and not info.isCollapsed:
 			raw = info.text or ""
-			# In normal applications (Word, Notepad, Chrome) and unbroken PDFs, if text already contains native Devanagari:
-			# preserve original selection and let the app / browse-mode copy natively!
-			if devanagariRepair.hasDevanagari(raw) and not (self._isPdfWindow(src) and self._isBrokenDoc()):
-				if ti is not None and not getattr(ti, "passThrough", True) and hasattr(ti, "script_copyToClipboard"):
-					ti.script_copyToClipboard(gesture)
-				else:
-					gesture.send()
-				return
 			new = self._plainText(info)
+			target = new if (new and new != raw) else raw
+			if devanagariRepair.hasDevanagari(target):
+				cleaned = devanagariRepair.cleanShuffled(target)
+				if self._isPdfWindow(src) or devanagariRepair.isBroken(target) or self._isBrokenDoc():
+					cleaned = devanagariRepair.repair(cleaned, broken=True)
+				if cleaned and cleaned != raw:
+					api.copyToClip(textInfos.convertToCrlf(cleaned), notify=True)
+					return
 			if not new or new == raw:
 				c = conf()
 				ctxEnc = self._inContext()
@@ -2049,8 +2102,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 					conv = detector.convertMixed(raw, lambda t: legacyFonts.convert(t, defaultEnc) or t, encoding=defaultEnc, context=bool(ctxEnc or isPdf))
 					if conv and conv != raw:
 						new = conv
-				if c["repairUnicode"] and new and devanagariRepair.hasDevanagari(new) and self._isPdfWindow(src) and self._isBrokenDoc():
-					new = devanagariRepair.repair(new, broken=True)
+				if c["repairUnicode"] and new and devanagariRepair.hasDevanagari(new):
+					new = devanagariRepair.repair(new, broken=True if (self._isPdfWindow(src) or self._isBrokenDoc()) else None)
 			if new and new != raw:
 				api.copyToClip(textInfos.convertToCrlf(new), notify=True)
 				return
@@ -2063,7 +2116,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
 	def _fixClipboard(self, focus):
 		"""After the application copied a selection of Preeti / damaged text, put the real text on
-		the clipboard instead (only when the clipboard holds exactly that selection)."""
+		the clipboard instead."""
 		try:
 			if focus is None:
 				focus = api.getFocusObject()
@@ -2071,20 +2124,20 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			ti = getattr(focus, "treeInterceptor", None)
 			if ti is not None and not getattr(ti, "passThrough", True):
 				src = ti  # browse mode: the selection is in the virtual document
-			info = src.makeTextInfo(textInfos.POSITION_SELECTION)
-			if info.isCollapsed:
-				return
-			raw = info.text or ""
-			if devanagariRepair.hasDevanagari(raw) and not (self._isPdfWindow(src) and self._isBrokenDoc()):
-				return
-			new = self._plainText(info)
-			if not new or new == raw:
-				return
 			clip = api.getClipData() or ""
-			same = "".join(clip.split()) == "".join(raw.split())
-			diag.write("copy after app: same=%s %r -> %r" % (same, raw[:50], new[:50]))
-			if same:
-				api.copyToClip(textInfos.convertToCrlf(new))
+			if not clip:
+				return
+			if devanagariRepair.hasDevanagari(clip):
+				cleaned = devanagariRepair.cleanShuffled(clip)
+				if self._isPdfWindow(src) or devanagariRepair.isBroken(clip) or self._isBrokenDoc():
+					cleaned = devanagariRepair.repair(cleaned, broken=True)
+				if cleaned and cleaned != clip:
+					api.copyToClip(textInfos.convertToCrlf(cleaned))
+					return
+			if conf()["mode"] != "off" and detector.looksLegacy(clip, "preeti"):
+				conv = detector.convertMixed(clip, legacyFonts.preetiFamilyToUnicode)
+				if conv and conv != clip:
+					api.copyToClip(textInfos.convertToCrlf(conv))
 		except Exception:
 			log.debugWarning("Nepali Reader: could not fix the copied text", exc_info=True)
 
@@ -2209,6 +2262,9 @@ class NepaliReaderSettingsPanel(SettingsPanel):
 		# Translators: settings label
 		self.webCheck = helper.addItem(wx.CheckBox(self, label=_("On web pages and chat apps, convert only text whose font is Preeti, Kruti Dev or similar")))
 		self.webCheck.SetValue(c["webFontOnly"])
+		# Translators: settings label
+		self.updateCheck = helper.addItem(wx.CheckBox(self, label=_("Automatically check for updates from GitHub")))
+		self.updateCheck.SetValue(c.get("autoCheckUpdate", True))
 
 	def onSave(self):
 		c = conf()
@@ -2224,4 +2280,5 @@ class NepaliReaderSettingsPanel(SettingsPanel):
 		c["switchLanguage"] = self.langCheck.GetValue()
 		c["visualCheck"] = self.visualCheck.GetValue()
 		c["webFontOnly"] = self.webCheck.GetValue()
+		c["autoCheckUpdate"] = self.updateCheck.GetValue()
 		_menuSync[0]()
