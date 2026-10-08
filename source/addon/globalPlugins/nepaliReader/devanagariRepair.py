@@ -252,9 +252,10 @@ def normalizeFilenameSlugs(text):
 	"""
 	is_slug_context = (
 		'_' in text or
+		'-' in text or
 		bool(re.search(r'\.(?:pdf|docx|xlsx|doc|txt|html|htm|epub)(?:\b|$)', text, re.I)) or
 		bool(re.search(r'[-–—]\s*(?:Google Chrome|Brave|Microsoft Edge|Edge|Firefox|Acrobat|Adobe|Foxit|SumatraPDF|File Explorer)', text, re.I)) or
-		bool(re.search(r'^[०-९0-9]{4}[-/_][०-९0-9]{1,2}[-/_][०-९0-9]{1,2}', text))
+		bool(re.search(r'(?:^|\s)[०-९0-9]{4}[-/_][०-९0-9]{1,2}[-/_][०-९0-9]{1,2}', text))
 	)
 	if not is_slug_context:
 		return text

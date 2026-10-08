@@ -21,6 +21,7 @@ import addonHandler
 import api
 import config
 import globalPluginHandler
+import NVDAObjects
 import textInfos
 import tones
 import ui
@@ -379,7 +380,33 @@ def _cacheDir():
 	return os.path.join(base, "nepaliReader")
 
 
+class _NepaliNormalizedObject(NVDAObjects.NVDAObject):
+	"""Overlay class ensuring that object names (such as files in File Explorer,
+	window titles, browser tabs) have their Devanagari text and stripped-matra slugs normalized."""
+
+	def _get_name(self):
+		try:
+			getter = getattr(super(), "_get_name", None)
+			orig = getter() if getter else None
+		except Exception:
+			orig = None
+		if not orig:
+			try:
+				orig = getattr(super(), "name", None)
+			except Exception:
+				orig = None
+		if not orig or not isOn():
+			return orig
+		if devanagariRepair.hasDevanagari(orig):
+			return devanagariRepair.cleanShuffled(orig)
+		return orig
+
+
 class GlobalPlugin(globalPluginHandler.GlobalPlugin):
+
+	def chooseNVDAObjectOverlayClasses(self, obj, clsList):
+		if isOn():
+			clsList.insert(0, _NepaliNormalizedObject)
 
 	def __init__(self, *args, **kwargs):
 		super().__init__(*args, **kwargs)
@@ -399,6 +426,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		threading.Thread(target=self._loadDictionary, name="NepaliReaderDict", daemon=True).start()
 		diag.start(_cacheDir())
 		self._patchTextInfoSpeech()
+		self._registerSpeechFilter()
 		try:
 			multilangIntegration.install()
 		except Exception:
