@@ -61,7 +61,7 @@ def getCurrentVersion():
 				return parseVersion(addon.version)
 	except Exception:
 		pass
-	return (1, 1, 6)
+	return (1, 1, 7)
 
 
 def _downloadAndInstall(url, newVerStr):

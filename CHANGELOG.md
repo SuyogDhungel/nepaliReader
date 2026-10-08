@@ -2,6 +2,17 @@
 
 All notable changes to the **Nepali Reader** NVDA add-on are documented here.
 
+## [1.1.7] - 2026-10-08
+
+### Added
+- **Integrated GitHub Auto-Updater**: Built-in automatic update engine checking GitHub releases. Users receive update notifications with one-click background download and installation without needing external websites or manual downloads. Added a manual "Check for updates..." item under NVDA's Tools menu and a toggle in Nepali Reader settings.
+
+### Fixed
+- **Unicode PDF Window Title & Filename Speech Normalization**: Permanently fixed speech announcements for government PDF filenames, URLs, and window titles with stripped matras (e.g. `२०८३-०६-२०_दनक_वपद_बलटन.pdf` is spoken naturally and accurately as `२०८३-०६-२० दैनिक विपद् बुलेटिन` in File Explorer, Brave, Chrome, and Edge) without altering files on disk.
+- **Many Preeti Reading & Pronunciation Fixes**: Resolved orthographic syllable parsing and ligatures for complex Nepali clusters and vowel combinations.
+- **Literal Number & Clause Integrity**: Eliminated speculative word substitutions at sentence boundaries; genuine digits (`५` / `5`), numbered clauses, and legal section references remain intact as numbers without false-positive alterations.
+- **1:1 Selection and Clipboard Copying Fidelity**: Guaranteed synchronized Unicode Devanagari copying (`Ctrl+C`, `Ctrl+A`) matching spoken text across browse mode and review cursors.
+
 ## [1.1.6] - 2026-10-07
 
 ### Added

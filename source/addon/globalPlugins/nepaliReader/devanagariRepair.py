@@ -223,6 +223,45 @@ def composeMatras(text):
 		text = re.sub(pat, repl, text)
 	return text
 
+_SLUG_MAP = {
+	'दनक': 'दैनिक',
+	'वपद': 'विपद्',
+	'बलटन': 'बुलेटिन',
+	'परतवदन': 'प्रतिवेदन',
+	'करयकर्म': 'कार्यक्रम',
+	'करयक्रम': 'कार्यक्रम',
+	'सचून': 'सूचना',
+	'सचूना': 'सूचना',
+	'समचर': 'समाचार',
+	'नयमवल': 'नियमावली',
+	'नदरशक': 'निर्देशिका',
+	'करयपलक': 'कार्यपालिका',
+	'परशरन': 'प्रकाशन',
+	'परशसन': 'प्रशासन',
+	'बजत': 'बजेट',
+	'मन्तरलय': 'मन्त्रालय',
+	'वभग': 'विभाग',
+	'सरकर': 'सरकार',
+	'रष्ट्रय': 'राष्ट्रिय',
+}
+
+def normalizeFilenameSlugs(text):
+	"""Normalizes stripped-matra Devanagari slugs in filenames, URLs, and window titles
+	(e.g. '२०८३-०६-२०_दनक_वपद_बलटन.pdf' -> '२०८३-०६-२०_दैनिक_विपद्_बुलेटिन.pdf').
+	Only triggers on strings containing underscores, URL/file extensions, browser titles, or date slugs.
+	"""
+	is_slug_context = (
+		'_' in text or
+		bool(re.search(r'\.(?:pdf|docx|xlsx|doc|txt|html|htm|epub)(?:\b|$)', text, re.I)) or
+		bool(re.search(r'[-–—]\s*(?:Google Chrome|Brave|Microsoft Edge|Edge|Firefox|Acrobat|Adobe|Foxit|SumatraPDF|File Explorer)', text, re.I)) or
+		bool(re.search(r'^[०-९0-9]{4}[-/_][०-९0-9]{1,2}[-/_][०-९0-9]{1,2}', text))
+	)
+	if not is_slug_context:
+		return text
+	for slug, fixed in _SLUG_MAP.items():
+		text = re.sub(r'(^|[\s_\-./\\])' + re.escape(slug) + r'(?=[\s_\-./\\]|\.(?:pdf|docx|xlsx|doc)|$)', r'\g<1>' + fixed, text, flags=re.I)
+	return text
+
 
 def cleanShuffled(text):
 	"""Fixes viewer / PDFium artifacts: leaked syllables, OCR misrecognitions, and fake-bold repeats."""
@@ -230,6 +269,9 @@ def cleanShuffled(text):
 		return text
 	# (repeated words are NOT removed here: "जय जय", "बिस्तारै बिस्तारै" are real; text a PDF
 	#  draws twice is removed by the PDF engine, which knows what the document contains)
+
+	# Normalize stripped-matra slugs in filenames, URLs, and window titles
+	text = normalizeFilenameSlugs(text)
 
 	# Fix misconverted closing parenthesis after clause letters before digit fixing:
 	# Both Shift+9 and Shift+0 used for ( ... ) in Preeti: ९क० -> (क)
