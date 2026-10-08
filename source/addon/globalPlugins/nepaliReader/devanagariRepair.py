@@ -306,6 +306,16 @@ _SLUG_VOCAB = {
 	'दरपयग': 'दुरुपयोग',
 	'सरवचच': 'सर्वोच्च',
 	'अदलत': 'अदालत',
+	'नणय': 'निर्णय',
+	'नरणय': 'निर्णय',
+	'आदश': 'आदेश',
+	'उममदवर': 'उम्मेदवार',
+	'नमवल': 'नामावली',
+	'परकशत': 'प्रकाशित',
+	'वशववदयलय': 'विश्वविद्यालय',
+	'परकष': 'परीक्षा',
+	'नयनतरण': 'नियन्त्रण',
+	'करयलय': 'कार्यालय',
 	'परतनधसभ': 'प्रतिनिधिसभा',
 	'रषटरयसभ': 'राष्ट्रियसभा',
 	'नरवचन': 'निर्वाचन',
@@ -423,7 +433,9 @@ _SLUG_VOCAB = {
 }
 
 def resolveSlugToken(token):
-	"""Resolves a single stripped-matra Devanagari token back to clean Devanagari."""
+	"""Resolves a single stripped-matra Devanagari token back to clean Devanagari.
+	Uses Tier 1 curated government vocabulary, and Tier 2 full 36,000+ word offline dictionary."""
+	# 1. Tier 1: Curated official vocabulary & frequent participles
 	if token in _SLUG_VOCAB:
 		return _SLUG_VOCAB[token]
 	for sfx_slug, sfx_real in _SLUG_SUFFIXES:
@@ -431,6 +443,21 @@ def resolveSlugToken(token):
 			stem = token[:-len(sfx_slug)]
 			if stem in _SLUG_VOCAB:
 				return _SLUG_VOCAB[stem] + sfx_real
+
+	# 2. Tier 2: Full 36,000+ word offline dictionary skeleton resolver
+	try:
+		dict_match = neLexicon.getSkeletonWord(token)
+		if dict_match:
+			return dict_match
+		for sfx_slug, sfx_real in _SLUG_SUFFIXES:
+			if token.endswith(sfx_slug) and len(token) > len(sfx_slug):
+				stem = token[:-len(sfx_slug)]
+				dict_match = neLexicon.getSkeletonWord(stem)
+				if dict_match:
+					return dict_match + sfx_real
+	except Exception:
+		pass
+
 	return token
 
 def normalizeFilenameSlugs(text):
@@ -452,7 +479,7 @@ def normalizeFilenameSlugs(text):
 	tokens = re.split(r'([_\s\-./\\]+)', text)
 	out = []
 	for t in tokens:
-		if re.search(r'^[\u0905-\u0939\u0958-\u095f]+$', t):
+		if re.search(r'^[\u0900-\u097f]+$', t) and not re.search(r'[०-९0-9]', t):
 			out.append(resolveSlugToken(t))
 		else:
 			out.append(t)

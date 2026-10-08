@@ -31,10 +31,11 @@ _COMMON_NEPALI = frozenset({
 	"प्रस्तावना", "संशोधन", "प्रमाणीकरण", "राजपत्र", "अनुसूची", "बालबालिका", "बालबालिकाको",
 })
 _loaded = False
+_SKELETON_INDEX = {}
 
 
 def load(path=None):
-	global _STEMS, _SFX, _PFX, _SFX_LENGTHS, _loaded
+	global _STEMS, _SFX, _PFX, _SFX_LENGTHS, _SKELETON_INDEX, _loaded
 	if path is None:
 		path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nepaliWords.dat")
 	with open(path, "rb") as f:
@@ -62,12 +63,43 @@ def load(path=None):
 	if os.path.exists(names):
 		with open(names, "rb") as f:
 			_NAMES = frozenset(zlib.decompress(f.read()).decode("utf-8").split("\n"))
+
+	# Build reverse skeleton index for stripped Devanagari slugs
+	sk_idx = {}
+	def _sk(w):
+		return re.sub(r'[\u093e-\u094c\u0901-\u0903\u094d]', '', w)
+
+	for w in _COMMON_NEPALI:
+		s = _sk(w)
+		if s and s not in sk_idx:
+			sk_idx[s] = w
+	for w in _NAMES:
+		s = _sk(w)
+		if s and s not in sk_idx:
+			sk_idx[s] = w
+	for w in stems:
+		if len(w) >= 2:
+			s = _sk(w)
+			if s and s not in sk_idx:
+				sk_idx[s] = w
+	_SKELETON_INDEX = sk_idx
+
 	_loaded = True
 	return len(stems) + len(_EXTRA) + len(_NAMES)
 
 
 def isLoaded():
 	return _loaded
+
+
+def getSkeletonWord(slug):
+	"""Returns the full Devanagari dictionary word for a stripped consonant slug, or None."""
+	if not _loaded:
+		try:
+			load()
+		except Exception:
+			pass
+	return _SKELETON_INDEX.get(slug)
 
 
 def isWord(word):
