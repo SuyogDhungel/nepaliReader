@@ -1465,13 +1465,6 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				in_deva = True
 			if in_deva:
 				res = devanagariRepair._GLUED_DIGIT_MAP[orig_char]
-			elif orig_char in ("5", "५"):
-				if ctx:
-					line, off = ctx
-					before = line[:off] if 0 <= off <= len(line) else ""
-					import re
-					if re.search(r'([क-ह][\u0900-\u097f]*(?:[ेै]को|एको|[ािीुूेैोौ]ने|[ािीुूेैोौ]दा|[ािीुूेैोौ]दै|छैन|थियो|भयो|गर्यो|गरे))\s*$', before):
-						res = "छ"
 
 		# 2. Preeti shifted number row symbols (% -> ५, ! -> १, @ -> २, etc.)
 		elif orig_char in devanagariRepair._PREETI_SHIFT_DIGIT_MAP:
