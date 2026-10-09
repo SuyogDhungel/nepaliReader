@@ -1026,12 +1026,44 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			info = _unwrap(info)
 			if not isOn() or not self._isPdfWindow(info.obj):
 				return None
-			if self._pdfIndex(info.obj) is None:
+			idx = self._pdfIndex(info.obj)
+			if idx is None:
 				return None
-			return self._plainText(info)
+			raw = info.text or ""
 		except Exception:
 			diag.exception("central text")
 			return None
+		if not raw.strip():
+			return raw
+		# straight to the index, the same lookup word and line reading use (no field conversion
+		# in between that could quietly hand the raw text back)
+		new = None
+		try:
+			if "\n" in raw or "\r" in raw:
+				out = []
+				found = False
+				for ln in raw.splitlines(True):
+					body = ln.rstrip("\r\n")
+					end = ln[len(body):]
+					got = self._indexText(None, idx, body) if pdfText.keyOf(body) else None
+					if got is not None:
+						found = True
+						out.append(got + end)
+					else:
+						out.append(ln)
+				new = "".join(out) if found else None
+			else:
+				new = self._indexText(info, idx, raw)
+		except Exception:
+			diag.exception("central text lookup")
+			new = None
+		if new is None:
+			try:
+				new = self._plainText(info)
+			except Exception:
+				diag.exception("central text fallback")
+				new = raw
+		return new
 
 	def _pdfTextOfString(self, text):
 		"""The real text of a plain string that is being copied out of a PDF viewer (other

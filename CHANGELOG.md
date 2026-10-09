@@ -13,6 +13,7 @@ All notable changes to the **Nepali Reader** NVDA add-on are documented here.
 - **Integrated GitHub Auto-Updater**: Built-in automatic update engine checking GitHub releases. Users receive update notifications with one-click background download and installation without needing external websites or manual downloads. Added a manual "Check for updates..." item under NVDA's Tools menu and a toggle in Nepali Reader settings.
 
 ### Fixed
+- Unicode PDFs: selecting with Ctrl+Shift+Arrow and copying with Ctrl+C now give the same corrected text as line and word reading (looked up straight in the PDF's rebuilt text).
 - **Copy in browse mode when Nepali mode is off**: Ctrl+C now always uses NVDA's own browse mode copy, so copying works with the add-on switched off (by Roshan Gautam). Conflict with ClipSpeak resolved.
 - **Fully inactive when switched off**: The MultiLang language hooks now do nothing while Nepali mode is off (menu or shortcut), so MultiLang behaves exactly as without the add-on.
 - **English stays English when reading character by character or word by word** in documents that mix Preeti and English (Word, Notepad, browsers, PDFs). Before, an English letter was spoken as a Nepali letter. Character and word reading now follow exactly what line reading decides for the same word; in PDFs the document's own letter is used. Typing echo and spelling are never converted.
