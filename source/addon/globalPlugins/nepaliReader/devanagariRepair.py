@@ -38,7 +38,10 @@ _DEVA_LETTER = "\u0900-\u0963\u0971-\u097f"  # letters, signs (not digits, not d
 _DEVANAGARI = re.compile("[\u0900-\u097f]")
 _JUNK = re.compile("[\ufffd\u25cc\u00ad\ufeff\u200b\ue000-\uf8ff]")
 # a non-Devanagari character glued between Devanagari letters: "प्राधिcकरण", "जोखि8म"
-_GLUED = re.compile("(?<=[" + _DEVA_LETTER + "])[^\\s\u0900-\u097f\u200c\u200d।॥,.;:!?()\\[\\]{}'\"/\\-–—]{1,2}(?=[" + _DEVA_LETTER + "])")
+_GLUED = re.compile("(?<=[" + _DEVA_LETTER + "])[^\\s\u0900-\u097f\u200c\u200d।॥,.;:!?()\\[\\]{}'\"/\\-–—_‘’“”«»*+=<>·•…×÷]{1,2}(?=[" + _DEVA_LETTER + "])")
+# signs that never stand inside a Nepali word: a PDF's text layer gives them for a glyph it has no
+# letters for (सं&ा, बेप$ा on a map), and they are dropped rather than spoken
+_JUNK_SIGNS = frozenset("$#@^~`&|\\\ufffd")
 # in map/table labels some fonts store ि as a digit or symbol: "गाउँपा)लका", "नाग2रक", "धा7दङ"
 _GLUED_I = re.compile("(?<=[" + _DEVA_LETTER + "])[0-9)(*#@!%&+=<>?|\\^~]([" + _CONS + "]\u093c?)(?=[" + _DEVA_LETTER + "]|\\s|$)")
 _SPACE_SIGN = re.compile(" [" + _SIGNS + _MODS + "\u094d]+")
@@ -83,17 +86,17 @@ def lowWordRate(text, minWords=60, rate=0.5):
 _HYBRID_BROKEN = re.compile(
 	r"ा[\u200b\u200c\u200d\ufeff\s]*[\]\}]|[" + _CONS + r"](?:\u094d[" + _CONS + r"])?[\u200b\u200c\u200d\ufeff\s]*[\]\}]|"
 	r"[" + _CONS + r"]\[|[" + _CONS + r"][\u00ac¬]|"
-	r"\u093e[\u200b\u200c\u200d\ufeff]*[\u0947\u0948]|"
-	r"(?<!पु)(?<!\u0930\u094d)[" + _CONS + r"](?:[\u093e-\u094c\u0901-\u0903])?\u0930\u094d(?=\s|[।॥,.;:!?()\[\]{}\"\'\-\–\—]|$)|"
-	r"व्रम|व्रिया|व्रे|व्रा"
+	r"\u093e[\u200b\u200c\u200d\ufeff]*[\u0947\u0948]"
 )
 
 
 def isBroken(text):
 	"""Fault marks that never occur in correct text: doubled vowel signs, replacement characters,
 	stray virama, symbols standing for ि. (A low share of real words is judged by the caller over
-	a whole document, see wordStats.)"""
-	return bool(_DOUBLED.search(text)) or bool(_GLUED_I.search(text)) or bool(_HYBRID_BROKEN.search(text)) or hasGluedDigitDamage(text)
+	a whole document, see wordStats.)
+	A reph after its letter (गनर्) and व्र for क्र (पाठ्यव्रम) count only where the dictionary proves
+	them: अन्तर्, निर् and धुहेव्रे are words."""
+	return bool(_DOUBLED.search(text)) or _hasGluedI(text) or _hasGluedJunk(text) or bool(_HYBRID_BROKEN.search(_protectBrackets(text)[0])) or hasGluedDigitDamage(text) or _hasTrailingRephDamage(text) or _hasKraDamage(text)
 
 
 def repairGain(text):
@@ -121,7 +124,7 @@ def wordStats(text):
 		return 0, 0
 	ws = [_core(w) for w in text.split()]
 	ws = [w for w in ws if len(w) >= 2 and _DEVANAGARI.search(w)]
-	return sum(1 for w in ws if neLexicon.isWord(w)), len(ws)
+	return sum(1 for w in ws if _known(w)), len(ws)
 
 
 def _lowWordRate(text):
@@ -131,7 +134,7 @@ def _lowWordRate(text):
 	ws = [w for w in ws if len(w) >= 2 and _DEVANAGARI.search(w)]
 	if len(ws) < 3:
 		return False
-	unknown = sum(1 for w in ws if not neLexicon.isWord(w))
+	unknown = sum(1 for w in ws if not _known(w))
 	return unknown * 10 >= len(ws) * 4  # 40% or more are not words
 
 
@@ -143,7 +146,7 @@ def wordRate(text):
 	ws = [w for w in ws if len(w) >= 2 and _DEVANAGARI.search(w)]
 	if len(ws) < 3:
 		return None
-	return sum(1 for w in ws if neLexicon.isWord(w)) / float(len(ws))
+	return sum(1 for w in ws if _known(w)) / float(len(ws))
 
 
 _BOUNDARY = r'(?=\s|[।॥,.;:!?()\[\]{}"\'\-\–\—]|$)'
@@ -240,15 +243,42 @@ def fixGluedDigits(text):
 _BOUNDARY_OR_SFX = r'(?=\s|[।॥,.;:!?()\[\]{}"\'\-\–\—]|$|का|को|की|मा|ले|लाई|बाट|देखि|हरू|सँग)'
 _PAT_TRAILING_REPH = re.compile(r'(?<!\u0930\u094d)([' + _CONS + r'](?:[\u093e-\u094c\u0901-\u0903])?)\u0930\u094d' + _BOUNDARY_OR_SFX)
 
-def fixTrailingReph(text):
-	"""Fix Preeti post-consonant reph typing order (e.g. गनर् -> गर्न, रेकडर् -> रेकर्ड, कमर् -> कर्म)."""
+# one Devanagari word (letters and signs; digits, danda and punctuation end it)
+_DEVA_WORD = re.compile("[\u0900-\u0963\u0971-\u097f\u200c\u200d]+")
+
+
+def _trailingRephFix(word):
+	"""`word` with its reph moved in front of the letter it follows, if that makes a dictionary
+	word of a word that is not one; else None.
+	A letter + र् is a correct reph before the next letter (नि|र्|माण, श|र्|मा, का|र्|की) and the
+	suffix look-ahead matches there too, so only the dictionary can tell the two apart."""
+	if "\u0930\u094d" not in word or _known(word) or not _PAT_TRAILING_REPH.search(word):
+		return None
+
 	def rep(m):
 		cluster = m.group(1)
 		# Preserve 'पुनर्' (valid Nepali prefix stem)
 		if cluster == 'न' and m.string[max(0, m.start() - 2):m.start()] == 'पु':
 			return m.group(0)
 		return '\u0930\u094d' + cluster
-	return _PAT_TRAILING_REPH.sub(rep, text)
+	cand = _PAT_TRAILING_REPH.sub(rep, word)
+	return cand if cand != word and _known(cand) else None
+
+
+def fixTrailingReph(text):
+	"""Fix Preeti post-consonant reph typing order (e.g. गनर् -> गर्न, रेकडर् -> रेकर्ड, कमर् -> कर्म).
+	Only where the dictionary proves it (see _trailingRephFix): निर्माण, शर्मा, कार्की, मार्का stay as
+	they are (they were read र्निमाण, र्शमा, र्काकी, र्माका). Nothing is guessed without the dictionary."""
+	if "\u0930\u094d" not in text or not neLexicon.isLoaded():
+		return text
+	return _DEVA_WORD.sub(lambda m: _trailingRephFix(m.group(0)) or m.group(0), text)
+
+
+def _hasTrailingRephDamage(text):
+	"""True when some word of `text` is a dictionary word only after its reph is moved (गनर्)."""
+	if "\u0930\u094d" not in text or not neLexicon.isLoaded():
+		return False
+	return any(_trailingRephFix(m.group(0)) for m in _DEVA_WORD.finditer(text))
 
 _COMPOSE_PAIRS = [
 	(r'\u093e+[\u200b\u200c\u200d\ufeff]*\u0947', '\u094b'),
@@ -599,6 +629,201 @@ def _aroundExact(text, fn):
 	return "".join(out)
 
 
+# after a Devanagari letter or sign; a digit is not enough: "कक्षा १०A", "दर ४ %", "१० M" are correct
+_AFTER_DEVA_LETTER = "(?<=[\u0900-\u0963\u0971-\u097f])"
+_STRAY_LATIN = re.compile(_AFTER_DEVA_LETTER + r'[a-zA-Z](?=\s|[।॥,.;:!?()\[\]{}"\'\-\–\—]|$)')
+_HONORIFIC_FIVE = re.compile(r'(?<=श्री\s)%')
+_PREETI_COLON = re.compile(_AFTER_DEVA_LETTER + r'\s*M(?=\s|[।॥,.;:!?()\[\]{}"\'\-\–\—]|$)')
+
+
+# Preeti quotes æ and Æ recognized as ऋ and म्: ऋ...म् -> “...”
+_PREETI_QUOTES = re.compile(r'ऋ([\u0900-\u097f]+?)म्' + _BOUNDARY)
+
+
+def _preetiQuotes(m):
+	"""“word” for ऋwordम् only when the word inside is a dictionary word and the whole is not
+	a word: Sanskrit ऋतम्, ऋणम्, ऋषिम् are words ending in म्, not quotes."""
+	inner = m.group(1)
+	if len(inner) >= 2 and _known(inner) and not _known(m.group(0)) and not _known("ऋ" + inner):
+		return "“" + inner + "”"
+	return m.group(0)
+
+
+# ि· (i sign + middle dot) stands for ङ्ग only where ि cannot be: not after a letter (a middle dot
+# is also a separator: "पनि · अर्को", "नेपाली · हिन्दी")
+_I_DOT = re.compile("(?<![" + _CONS + "\u093c])\u093f\\s*·")
+
+
+def _preetiKeyResidue(text):
+	"""Preeti keys left after Devanagari words in hybrid text."""
+	# Trailing stray Preeti consonant glued to Devanagari word (ऐनg -> ऐन)
+	text = _STRAY_LATIN.sub('', text)
+	# Preeti % for the digit 5 of the honorific श्री ५ (श्री % -> श्री ५). Only there: a percent
+	# sign after a number or a word ("दर ४ %", "वृद्धिदर %") is a percent sign.
+	text = _HONORIFIC_FIVE.sub('५', text)
+	# Preeti M used for colon after Devanagari (प्रस्तावना M -> प्रस्तावना :)
+	return _PREETI_COLON.sub(' :', text)
+
+
+# a pair [ ... ] or { ... } on one line
+_BRACKET_PAIR = re.compile(r'\[[^\[\]\r\n]{1,60}\](?![' + _CONS + r'])')
+_BRACE_PAIR = re.compile(r'(?<![' + _CONS + r'\u093e-\u094c\u0901-\u0903\u094d])\{[^\{\}\r\n]{1,60}\}(?![' + _CONS + r'])')
+_CONS_OR_NUKTA = frozenset(chr(c) for c in list(range(0x0915, 0x093A)) + list(range(0x0958, 0x0960)) + [0x093C])
+_DEVA_WORD_CHARS = frozenset(chr(c) for c in list(range(0x0900, 0x0964)) + list(range(0x0971, 0x0980)) + [0x200C, 0x200D])
+
+
+def _isRiResidue(text, i):
+	"""True if the [ at text[i] is the Preeti key of ृ left in hybrid text (क[षि is कृषि): the
+	word with ृ in its place is a dictionary word."""
+	if i == 0 or text[i - 1] not in _CONS_OR_NUKTA:
+		return False
+	a = i
+	while a > 0 and text[a - 1] in _DEVA_WORD_CHARS:
+		a -= 1
+	b = i + 1
+	while b < len(text) and text[b] in _DEVA_WORD_CHARS:
+		b += 1
+	return _known(text[a:i] + "\u0943" + text[i + 1:b])
+
+
+def _protectBrackets(text):
+	"""(text with its real bracket pairs replaced by place holders, the pairs).
+	A pair is real unless its [ stands for ृ (see _isRiResidue). Before, only pairs with a space in
+	front were kept, and a footnote or a wiki link glued to a word was "repaired":
+	नेपाल[१] -> नेपालृ१], भूगोल[सम्पादन] -> भूगोलृसम्पादने."""
+	saved = []
+	if "[" not in text and "{" not in text:
+		return text, saved
+
+	def save(m):
+		saved.append(m.group(0))
+		return "\ue000%d\ue001" % (len(saved) - 1)
+
+	def saveBracket(m):
+		if _isRiResidue(m.string, m.start()):
+			return m.group(0)
+		return save(m)
+	text = _BRACKET_PAIR.sub(saveBracket, text)
+	text = _BRACE_PAIR.sub(save, text)
+	return text, saved
+
+
+def _restoreBrackets(text, saved):
+	for k, orig in enumerate(saved):
+		text = text.replace("\ue000%d\ue001" % k, orig)
+	return text
+
+
+# Preeti/Himali क्र drawn as व + ्र: पाठ्यव्रम, प्रव्रिया, कार्यव्रम
+_KRA = re.compile("व्र(?=म|िया|े|ा|ी)")
+
+
+def _kraFix(word):
+	"""`word` with व्र read as क्र, if that makes a dictionary word of a word that is not one."""
+	if "व्र" not in word or _known(word) or not _KRA.search(word):
+		return None
+	cand = _KRA.sub("क्र", word)
+	return cand if _known(cand) else None
+
+
+def fixKra(text):
+	"""व्र -> क्र where the dictionary proves it (पाठ्यव्रम -> पाठ्यक्रम); व्रत, व्रती and other
+	words with a real व्र stay as written."""
+	if "व्र" not in text or not neLexicon.isLoaded():
+		return text
+	return _DEVA_WORD.sub(lambda m: _kraFix(m.group(0)) or m.group(0), text)
+
+
+def _hasKraDamage(text):
+	if "व्र" not in text or not neLexicon.isLoaded():
+		return False
+	return any(_kraFix(m.group(0)) for m in _DEVA_WORD.finditer(text))
+
+
+# postpositions and endings Nepali also writes apart from their word ("सरकार को", "नेपाल सम्मको")
+_POSTPOSITIONS = ("हरूको", "हरूका", "हरूमा", "हरूले", "हरूलाई", "हरू", "लाई", "बाट", "देखि", "सम्म", "सँगै", "सँग",
+	"सहित", "भन्दा", "पनि", "भित्र", "माथि", "तिर", "समेत", "मात्र", "को", "का", "की", "मा", "ले", "मै", "कै")
+
+
+def _knownForm(w):
+	"""A dictionary word, a postposition, or one of them with postpositions on it (सम्मको, सँगै)."""
+	if _known(w) or w in _POSTPOSITIONS:
+		return True
+	for p in _POSTPOSITIONS:
+		if len(w) > len(p) and w.endswith(p) and _knownForm(w[:-len(p)]):
+			return True
+	return False
+
+
+def _wordAround(s, i, j):
+	"""(start, end) of the Devanagari word that the characters s[i:j] are glued into."""
+	a = i
+	while a > 0 and s[a - 1] in _DEVA_WORD_CHARS:
+		a -= 1
+	b = j
+	while b < len(s) and s[b] in _DEVA_WORD_CHARS:
+		b += 1
+	return a, b
+
+
+def _pairedParen(s, i):
+	"""True if the bracket s[i] has its partner on the line: "क्षेत्र(काठमाडौं)", "(क)स्वदेशमा"."""
+	if s[i] == "(":
+		close, nxt = s.find(")", i + 1), s.find("(", i + 1)
+		return close >= 0 and (nxt < 0 or close < nxt)
+	if s[i] == ")":
+		opn, prev = s.rfind("(", 0, i), s.rfind(")", 0, i)
+		return opn >= 0 and opn > prev
+	return False
+
+
+def _gluedIFix(m):
+	"""Replacement for a _GLUED_I match: the symbol read as ि after the next letter, only where the
+	dictionary proves it (गाउँपा)लका is गाउँपालिका, नाग2रक is नागरिक). A bracket with its partner
+	on the line, math (क+ख=ग, क>ख) and a word with ि in a wrong place are left as they are."""
+	s = m.string
+	i = m.start()
+	if _pairedParen(s, i) or not neLexicon.isLoaded():
+		return m.group(0)
+	a, b = _wordAround(s, i, m.end())
+	cand = s[a:i] + m.group(1) + "\u093f" + s[m.end():b]
+	if _known(cand):
+		return m.group(1) + "\u093f"
+	return m.group(0)
+
+
+def _hasGluedI(text):
+	"""True when a symbol inside a word stands for ि (see _gluedIFix)."""
+	for m in _GLUED_I.finditer(text):
+		if _gluedIFix(m) != m.group(0):
+			return True
+	return False
+
+
+def _gluedFix(m):
+	"""Replacement for a _GLUED match: stray Latin letters inside a word are dropped
+	(प्राधिcकरण); a digit or other sign only where the dictionary proves the word (जोखि8म), so
+	ना2ख and कोभिड19को stay as written."""
+	junk = m.group(0)
+	if junk.isascii() and junk.isalpha():
+		return ""
+	if all(c in _JUNK_SIGNS for c in junk):
+		return ""
+	a, b = _wordAround(m.string, m.start(), m.end())
+	if _known(m.string[a:m.start()] + m.string[m.end():b]):
+		return ""
+	return junk
+
+
+def _hasGluedJunk(text):
+	"""True when a word is a dictionary word only without the signs glued inside it (जोखि8म)."""
+	for m in _GLUED.finditer(text):
+		a, b = _wordAround(m.string, m.start(), m.end())
+		if _known(text[a:m.start()] + text[m.end():b]):
+			return True
+	return False
+
+
 def cleanShuffled(text):
 	"""Fixes viewer / PDFium artifacts: leaked syllables, OCR misrecognitions, and fake-bold repeats."""
 	if not _DEVANAGARI.search(text):
@@ -629,14 +854,14 @@ def cleanShuffled(text):
 
 	# 2. OCR confusions from Preeti glyphs
 	# Preeti quotes æ and Æ recognized as ऋ and म्: ऋ...म् -> “...”
-	text = re.sub(r'ऋ([\u0900-\u097f]+?)म्' + _BOUNDARY, r'“\1”', text)
+	text = _PREETI_QUOTES.sub(_preetiQuotes, text)
 	# Preeti ´ (झ) recognized as ः (visarga) after म्: म्ः -> म्झ (e.g. सम्ःनु -> सम्झनु)
 	text = re.sub(r'म्ः', 'म्झ', text)
 	# Visual glyph confusions: ०ा (digit zero + aa matra) visually represents ण (e.g. प्रमा०ाीकर०ा -> प्रमाणीकरण)
 	text = re.sub(r'०ा', 'ण', text)
 	# ि· (i matra + middle dot) represents ङ्ग (e.g. लैि·क -> लैङ्गिक)
 	text = re.sub(r'लैि·क', 'लैङ्गिक', text)
-	text = re.sub(r'ि\s*·', 'ङ्ग', text)
+	text = _I_DOT.sub('ङ्ग', text)
 
 	# Keyboard-shifted digit typo confusions (dates like द्द)टघ।ड।द्दद्द -> २०६३।८।२२, द्द)ठद्द -> २०७२, list numbers ज्ञ. -> १., द्द. -> २.)
 	_preeti_keys = [('द्द', '२'), ('द्ध', '४'), ('ज्ञ', '१'), ('छ', '५'), ('ट', '६'), ('ठ', '७'), ('ड', '८'), ('ढ', '९'), ('घ', '३')]
@@ -680,27 +905,25 @@ def cleanShuffled(text):
 	text = re.sub(_DEVA_BOUND_L + r'मृत\s+क' + _DEVA_BOUND_R, 'मृतक', text)
 
 	# 3. Restore dropped characters (e.g. unmapped Preeti ¿ -> रु / र) using the dictionary
+	#    ("दु पयोग" -> "दुरुपयोग", "तु न्त" -> "तुरुन्त"). The second piece must be no word: a word
+	#    next to a postposition written apart is correct ("विमा को" was read विमारको, "आधा सम्मको"
+	#    आधारसम्मको, "का सँगै" कारसँगै)
 	if neLexicon.isLoaded():
 		def check_dropped_gap(m):
 			a, b = m.group(1), m.group(2)
-			if neLexicon.isWord(a) and neLexicon.isWord(b):
+			if _knownForm(b):
 				return m.group(0)
 			for ins in ("रु", "र"):
 				cand = a + ins + b
 				if neLexicon.isWord(cand):
 					return cand
 			return m.group(0)
-		text = re.sub(_DEVA_BOUND_L + r'([\u0900-\u097f]{1,4})\s+([\u0900-\u097f]{2,8})' + _DEVA_BOUND_R, check_dropped_gap, text)
+		text = re.sub(_DEVA_BOUND_L + r'([\u0900-\u0963\u0971-\u097f]{1,4})\s+([\u0900-\u0963\u0971-\u097f]{2,8})' + _DEVA_BOUND_R, check_dropped_gap, text)
 
 
 	# Hybrid PDF / legacy font residue repairs:
-	# Protect balanced brackets [ ... ] and { ... } ONLY when NOT attached to a Devanagari consonant/matra
-	_bracket_saved = []
-	def _save_bracket(m):
-		_bracket_saved.append(m.group(0))
-		return "\ue000%d\ue001" % (len(_bracket_saved) - 1)
-	text = re.sub(r'(?<![' + _CONS + r'\u093e-\u094c\u0901-\u0903\u094d])\[[^\[\]\r\n]{1,60}\](?![' + _CONS + r'])', _save_bracket, text)
-	text = re.sub(r'(?<![' + _CONS + r'\u093e-\u094c\u0901-\u0903\u094d])\{[^\{\}\r\n]{1,60}\}(?![' + _CONS + r'])', _save_bracket, text)
+	# Protect balanced brackets [ ... ] and { ... } that are real brackets (see _protectBrackets)
+	text, _bracket_saved = _protectBrackets(text)
 
 	# Stray/duplicate Preeti bracket after complete vowel sign (बनेको] -> बनेको, भएकोले] -> भएकोले, ज्ञानको} -> ज्ञानको):
 	text = re.sub(r'([ोौेै])[\u200b\u200c\u200d\ufeff\s]*[\]\}]', r'\1', text)
@@ -716,22 +939,12 @@ def cleanShuffled(text):
 	text = re.sub(r'(?:(?<=[' + _CONS + r'])|(?<=[' + _CONS + r']\u094d[' + _CONS + r']))\[', 'ृ', text)
 	# ¬ (Alt+0172 / 0xac) used as u-matra (स¬झाव -> सुझाव)
 	text = re.sub(r'(?<=[' + _CONS + r'])[\u00ac¬]', 'ु', text)
-	# Trailing stray Preeti consonant glued to Devanagari word (ऐनg -> ऐन):
-	text = re.sub(r'(?<=[\u0900-\u097f])[a-zA-Z](?=\s|[।॥,.;:!?()\[\]{}"\'\-\–\—]|$)', '', text)
-	# Preeti % used for digit 5 after honorific or Devanagari (श्री % -> श्री ५)
-	text = re.sub(r'(?<=[\u0900-\u097f]\s)%', '५', text)
-	# Preeti M used for colon after Devanagari (प्रस्तावना M -> प्रस्तावना :)
-	text = re.sub(r'(?<=[\u0900-\u097f])\s*M(?=\s|[।॥,.;:!?()\[\]{}"\'\-\–\—]|$)', ' :', text)
+	text = _preetiKeyResidue(text)
 
-	for _idx, _orig in enumerate(_bracket_saved):
-		text = text.replace("\ue000%d\ue001" % _idx, _orig)
+	text = _restoreBrackets(text, _bracket_saved)
 
 	# Common legacy font glyph/OCR mistakes: व्रम -> क्रम
-	text = re.sub(r'व्रम', 'क्रम', text)
-	text = re.sub(r'व्रिया', 'क्रिया', text)
-	text = re.sub(r'व्रे', 'क्रे', text)
-	text = re.sub(r'व्रा', 'क्रा', text)
-	text = re.sub(r'व्री', 'क्री', text)
+	text = fixKra(text)
 	text = re.sub(r'माइव्रोसफ्ट', 'माइक्रोसफ्ट', text)
 
 	# Repeated punctuation: '––' -> '–'
@@ -757,12 +970,7 @@ def cleanForCharNav(text):
 		lambda m: m.group(1) + m.group(2) + (')' if m.group(1) == '(' else ']' if m.group(1) == '[' else '}'), text)
 	text = re.sub(r'(^|\s)([\u0915-\u0939\u0958-\u095f](?:[०-९\u0966-\u096f]+)?)०(?=\s|[“"\'‘])', r'\1\2)', text)
 
-	_bracket_saved = []
-	def _save_bracket(m):
-		_bracket_saved.append(m.group(0))
-		return "\ue000%d\ue001" % (len(_bracket_saved) - 1)
-	text = re.sub(r'(?<![' + _CONS + r'\u093e-\u094c\u0901-\u0903\u094d])\[[^\[\]\r\n]{1,60}\](?![' + _CONS + r'])', _save_bracket, text)
-	text = re.sub(r'(?<![' + _CONS + r'\u093e-\u094c\u0901-\u0903\u094d])\{[^\{\}\r\n]{1,60}\}(?![' + _CONS + r'])', _save_bracket, text)
+	text, _bracket_saved = _protectBrackets(text)
 
 	text = composeMatras(text)
 	text = fixGluedDigits(text)
@@ -770,7 +978,7 @@ def cleanForCharNav(text):
 	text = re.sub(r'म्ः', 'म्झ', text)
 	text = re.sub(r'०ा', 'ण', text)
 	text = re.sub(r'लैि·क', 'लैङ्गिक', text)
-	text = re.sub(r'ि\s*·', 'ङ्ग', text)
+	text = _I_DOT.sub('ङ्ग', text)
 	# Stray/duplicate Preeti bracket after complete vowel sign (बनेको] -> बनेको, भएकोले] -> भएकोले):
 	text = re.sub(r'([ोौेै])[\u200b\u200c\u200d\ufeff\s]*[\]\}]', r'\1', text)
 	text = re.sub(r'ा[\u200b\u200c\u200d\ufeff\s]*\]', 'ो', text)
@@ -779,19 +987,10 @@ def cleanForCharNav(text):
 	text = re.sub(r'(?:(?<=[' + _CONS + r'])|(?<=[' + _CONS + r']\u094d[' + _CONS + r']))[\u200b\u200c\u200d\ufeff\s]*\}', 'ै', text)
 	text = re.sub(r'(?<=[' + _CONS + r'])\[', 'ृ', text)
 	text = re.sub(r'(?<=[' + _CONS + r'])[\u00ac¬]', 'ु', text)
-	# Trailing stray Preeti consonant glued to Devanagari word (ऐनg -> ऐन):
-	text = re.sub(r'(?<=[\u0900-\u097f])[a-zA-Z](?=\s|[।॥,.;:!?()\[\]{}"\'\-\–\—]|$)', '', text)
-	# Preeti % and M after Devanagari (श्री % -> श्री ५, प्रस्तावना M -> प्रस्तावना :):
-	text = re.sub(r'(?<=[\u0900-\u097f]\s)%', '५', text)
-	text = re.sub(r'(?<=[\u0900-\u097f])\s*M(?=\s|[।॥,.;:!?()\[\]{}"\'\-\–\—]|$)', ' :', text)
+	text = _preetiKeyResidue(text)
 
-	for _idx, _orig in enumerate(_bracket_saved):
-		text = text.replace("\ue000%d\ue001" % _idx, _orig)
-	text = re.sub(r'व्रम', 'क्रम', text)
-	text = re.sub(r'व्रिया', 'क्रिया', text)
-	text = re.sub(r'व्रे', 'क्रे', text)
-	text = re.sub(r'व्रा', 'क्रा', text)
-	text = re.sub(r'व्री', 'क्री', text)
+	text = _restoreBrackets(text, _bracket_saved)
+	text = fixKra(text)
 	text = re.sub(r'माइव्रोसफ्ट', 'माइक्रोसफ्ट', text)
 	text = re.sub(_DEVA_BOUND_L + r'महव' + _DEVA_BOUND_R, 'महत्त्व', text)
 	text = re.sub(_DEVA_BOUND_L + r'महव(को|का|की|मा|ले|लाई|बाट|हरू|पूर्ण)', r'महत्त्व\1', text)
@@ -822,8 +1021,8 @@ def repair(text, broken=None):
 	text = cleanShuffled(text)
 	text = _JUNK.sub("", text)
 	if broken:
-		text = _GLUED_I.sub(lambda m: m.group(1) + "\u093f", text)
-	text = _GLUED.sub("", text)
+		text = _GLUED_I.sub(_gluedIFix, text)
+	text = _GLUED.sub(_gluedFix, text)
 	text = _SAME_SIGN.sub(r"\1", text)  # first, so a doubled ि is not taken for a misplaced one
 	if broken:
 		text = _SPACED_HALANT.sub("", text)  # "घ ् टना" -> "घटना"
@@ -836,8 +1035,8 @@ def repair(text, broken=None):
 	text = _SIGN_HALANT.sub(r"\1", text)
 	text = _HALANT_RUN.sub("\u094d", text)
 	if not broken:
-		text = _ORPHAN.sub("", text)
-		text = _ORPHAN_BEFORE_WORD.sub("", text)
+		text = _ORPHAN.sub(_dropOrphan, text)
+		text = _ORPHAN_BEFORE_WORD.sub(_dropOrphan, text)
 	text = _SIGN_RUN_AFTER.sub(r"\1", text)
 	text = unicodedata.normalize("NFC", text)
 	if broken:
@@ -845,6 +1044,21 @@ def repair(text, broken=None):
 		text = _REPH_DOUBLE.sub(r"\1", text)
 		text = _SIGN_RUN_AFTER.sub(r"\1", text)
 	return text
+
+
+_DEVA_BASE = frozenset(chr(c) for c in list(range(0x0904, 0x093A)) + list(range(0x0958, 0x0962)) + list(range(0x0972, 0x0980)))
+
+
+def _dropOrphan(m):
+	"""An _ORPHAN match is dropped only after a word with a letter in it ("रहेकाे ा"): a list of the
+	signs themselves ("ि ी ु ू", "ँ ं ः" in a lesson) is correct text."""
+	s = m.string
+	j = i = m.start()
+	while j > 0 and not s[j - 1].isspace():
+		j -= 1
+	if any(c in _DEVA_BASE for c in s[j:i]):
+		return ""
+	return m.group(0)
 
 
 def _placeI(text):
@@ -861,7 +1075,19 @@ def _core(tok):
 
 
 def _known(word):
-	return neLexicon.isLoaded() and neLexicon.isWord(word)
+	"""Dictionary word. र्‍य (with a joiner, the eyelash ra of गर्‍यो) and र्य are two spellings of the
+	same word, and the dictionary has some words only one way (पुर्‍याइ was read सर्‍याइ, भर्याङ मर्याङ)."""
+	if not neLexicon.isLoaded() or not word:
+		return False
+	if neLexicon.isWord(word):
+		return True
+	if "\u200d" in word or "\u200c" in word:
+		plain = word.replace("\u200d", "").replace("\u200c", "")
+		if plain and neLexicon.isWord(plain):
+			return True
+	if "\u0930\u094d\u092f" in word:
+		return neLexicon.isWord(word.replace("\u0930\u094d\u092f", "\u0930\u094d\u200d\u092f"))
+	return False
 
 
 _fixCache = {}

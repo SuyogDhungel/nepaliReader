@@ -241,12 +241,16 @@ def decide(text, encoding="preeti", context=False):
 			legacy >= 1 and english == 0 and any(sc is not None and _strongAlone(t, sc, encoding) for t, sc in scored))
 	else:
 		wholeLine = False
+	# A digit typed on Preeti's shifted keys (@)*!) or a one-letter list mark ((s), v_) is no
+	# evidence by itself: it follows the line, and in a line that is mostly English it stays as
+	# it is ("git commit && git push", "(a) ... (b) ..." with one odd word in the line)
+	notEnglishLine = legacy > 0 and legacy >= english
 	result = []
 	for t, sc in scored:
 		core = _core(t)
 		if not t or t.isspace() or any("\u0900" <= c <= "\u097f" for c in t):
 			result.append((t, False))
-		elif isPreetiSymbolNumber(t) and (wholeLine or legacy > 0):
+		elif isPreetiSymbolNumber(t) and (wholeLine or notEnglishLine):
 			result.append((t, True))
 		elif isNonLegacySymbolOrEmoji(t) or isNonLegacySymbolOrEmoji(core):
 			result.append((t, False))
@@ -268,10 +272,10 @@ def decide(text, encoding="preeti", context=False):
 			hasLetters = any(c.isascii() and c.isalpha() for c in t)
 			result.append((t, not _URLISH.search(t) and not englishLooking and (hasLetters or not t.replace(".", "").isdigit())))
 		else:
-			isBulletPrefix = (bool(re.match(r"^9[a-zA-Z]+0$", t)) or bool(_PREETI_LIST_TOKEN.match(t)) or (len(core) == 1 and core.islower() and (t[-1:] in "_).-/" or t[:1] in "([") and legacy > 0))
+			isBulletPrefix = (bool(re.match(r"^9[a-zA-Z]+0$", t)) or bool(_PREETI_LIST_TOKEN.match(t)) or (len(core) == 1 and core.islower() and (t[-1:] in "_).-/" or t[:1] in "([") and notEnglishLine))
 			result.append((t, bool(
 				isBulletPrefix
-				or (legacy > 0 and isPreetiSymbolNumber(t))
+				or (notEnglishLine and isPreetiSymbolNumber(t))
 				or (sc is not None and (
 					(legacy > english and _strongAlone(t, sc, encoding))
 					or (sc >= MIXED_WORD and len(_core(t)) >= 3 and not isEnglishWord(_core(t))

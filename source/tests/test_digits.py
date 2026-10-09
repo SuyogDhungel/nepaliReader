@@ -91,5 +91,15 @@ check('Sumod keys as Preeti keys', LF.convert(LF.asPreetiKeys('k|f;l', 'sumod') 
 check('Ganesh is Preeti', LF.encodingForFontName('ABCDEE+Ganesh'), 'preeti')
 check('HimChuli is Preeti', LF.encodingForFontName('ABCDEE+HimChuli'), 'preeti')
 check('Annapurna SIL is not legacy', LF.encodingForFontName('Annapurna SIL'), None)
+
+# correct Unicode is never changed (निर्माण was read र्निमाण, कार्की र्काकी on web pages)
+neLexicon.isWord('नेपाल')
+for t in ['निर्माण कार्य', 'शर्मा र कार्की', 'मार्का', 'पुनर्निर्माण', 'व्रत', 'ऋतम्', 'नेपाल[१] र भूगोल[सम्पादन]',
+		'पनि · अर्को', 'कक्षा १०A', 'दर ४ %', 'सरकार को निर्णय', 'कोभिड19को', 'गर्‍यो']:
+	check('correct text kept: ' + t, (DR.cleanShuffled(t), DR.repair(t)), (t, t))
+# broken text from PDFs is still repaired where the dictionary proves it
+for t, want in [('पाठ्यव्रम', 'पाठ्यक्रम'), ('गनर्', 'गर्न'), ('प्राधिcकरण', 'प्राधिकरण'), ('गाउँपा)लका', 'गाउँपालिका'),
+		('जोखि8म', 'जोखिम'), ('रेकडर्', 'रेकर्ड'), ('सं&ा', 'संा')]:
+	check('broken repaired: ' + t, DR.repair(t, broken=True), want)
 print('FAILED' if bad else 'ALL OK', bad)
 sys.exit(1 if bad else 0)
