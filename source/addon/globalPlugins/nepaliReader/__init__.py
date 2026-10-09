@@ -789,6 +789,13 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 					raw = _unwrap(info).text or ""
 					text = plugin._plainText(info)
 					target = text if (text and text != raw) else raw
+					central = plugin._centralText(info)
+					if central is not None:
+						# the PDF's own text: nothing may "repair" it a second time
+						diag.write("copy (pdf) %r -> %r" % (raw[:80], (central or "")[:80]))
+						if central != raw:
+							return api.copyToClip(textInfos.convertToCrlf(central), notify)
+						return origCopy(_unwrap(info), notify)
 					if devanagariRepair.hasDevanagari(target):
 						cleaned = devanagariRepair.cleanShuffled(target)
 						if plugin._isPdfWindow(info.obj) or devanagariRepair.isBroken(target) or plugin._isBrokenDoc():
@@ -816,6 +823,13 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 							raw = info.text or ""
 							text = plugin._plainText(info)
 							target = text if (text and text != raw) else raw
+							central = plugin._centralText(info)
+							if central is not None:
+								diag.write("copy (pdf cursor) %r -> %r" % (raw[:80], (central or "")[:80]))
+								if central != raw:
+									api.copyToClip(textInfos.convertToCrlf(central), notify=True)
+									return
+								return origCursorCopy(mgr, gesture)
 							if devanagariRepair.hasDevanagari(target):
 								cleaned = devanagariRepair.cleanShuffled(target)
 								if plugin._isPdfWindow(mgr) or devanagariRepair.isBroken(target) or plugin._isBrokenDoc():
@@ -928,6 +942,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 								central = plugin._centralText(tInfo)
 								if central is not None:
 									conv = central
+									diag.write("select (pdf) %r -> %r" % (raw[:80], (central or "")[:80]))
 								elif devanagariRepair.hasDevanagari(raw):
 									conv = devanagariRepair.cleanShuffled(raw)
 									if plugin._isPdfWindow(tInfo.obj) or devanagariRepair.isBroken(raw):
@@ -961,6 +976,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 								central = plugin._centralText(tInfo)
 								if central is not None:
 									conv = central
+									diag.write("select (pdf) %r -> %r" % (raw[:80], (central or "")[:80]))
 								elif devanagariRepair.hasDevanagari(raw):
 									conv = devanagariRepair.cleanShuffled(raw)
 									if plugin._isPdfWindow(tInfo.obj) or devanagariRepair.isBroken(raw):
@@ -1167,6 +1183,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		if pieces is None:
 			pieces = idx.lookup(text)
 		if not pieces or not any(ok for _p, ok in pieces):
+			try:
+				diag.write("index miss: %r key=%r" % (text[:90], key[:60]))
+			except Exception:
+				pass
 			return None
 		out = []
 		for piece, ok in pieces:
