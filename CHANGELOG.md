@@ -4,6 +4,9 @@ All notable changes to the **Nepali Reader** NVDA add-on are documented here.
 
 ## [1.1.8] - 2026-10-09
 
+### Added
+- **Settings Shortcut**: Restored `NVDA + Ctrl + L` shortcut to instantly open the Nepali Reader settings dialog.
+
 ### Fixed
 - **Copy in browse mode when Nepali mode is off**: Ctrl+C now always uses NVDA's own browse mode copy, so copying works with the add-on switched off (by Roshan Gautam). Conflict with ClipSpeak resolved.
 - **Fully inactive when switched off**: the MultiLang language hooks now do nothing while Nepali mode is off (menu or shortcut), so MultiLang behaves exactly as without the add-on.

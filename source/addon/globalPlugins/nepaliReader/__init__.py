@@ -554,7 +554,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		item = menu.Append(wx.ID_ANY, _("Convert selected text or clipboard"))
 		gui.mainFrame.sysTrayIcon.Bind(wx.EVT_MENU, lambda e: wx.CallLater(300, self.script_convertSelection, None), item)
 		# Translators: menu item
-		item = menu.Append(wx.ID_ANY, _("&Settings..."))
+		item = menu.Append(wx.ID_ANY, _("&Settings... (NVDA+Ctrl+L)"))
 		gui.mainFrame.sysTrayIcon.Bind(wx.EVT_MENU, self._onMenuSettings, item)
 		# Translators: menu item to check for updates
 		itemUpdate = menu.Append(wx.ID_ANY, _("&Check for updates..."))
@@ -2318,6 +2318,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		# Translators: input help for a command
 		description=_("Opens Nepali Reader settings dialog"),
 		category=CATEGORY,
+		gesture="kb:NVDA+control+l",
 	)
 	def script_openSettings(self, gesture):
 		import gui

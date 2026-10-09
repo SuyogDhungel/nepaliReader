@@ -64,7 +64,8 @@ You can control all features directly through the NVDA menu using your keyboard:
 
 | Shortcut | What It Does |
 |---|---|
-| **`NVDA + Ctrl + Shift + Space`** | **Toggle Nepali Mode**: turns reading conversion on or off. NVDA announces *"Nepali mode on"* or *"Nepali mode off"*. This is the only shortcut the add-on adds. |
+| **`NVDA + Ctrl + Shift + Space`** | **Toggle Nepali Mode**: turns reading conversion on or off. NVDA announces *"Nepali mode on"* or *"Nepali mode off"*. |
+| **`NVDA + Ctrl + L`** | **Open Settings**: directly opens the Nepali Reader settings dialog. |
 | **`Ctrl + C`** | **Smart Copy**: while Nepali mode is on, copying selected text puts clean Unicode Devanagari on the clipboard. |
 
 The other commands (convert selected text, legacy font mode, default font family) have no key by default. Use the NVDA menu, Tools, Nepali Reader, or assign a key yourself as described below.
