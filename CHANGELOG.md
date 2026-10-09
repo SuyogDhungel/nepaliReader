@@ -13,6 +13,13 @@ All notable changes to the **Nepali Reader** NVDA add-on are documented here.
 - **Integrated GitHub Auto-Updater**: Built-in automatic update engine checking GitHub releases. Users receive update notifications with one-click background download and installation without needing external websites or manual downloads. Added a manual "Check for updates..." item under NVDA's Tools menu and a toggle in Nepali Reader settings.
 
 ### Fixed
+- **Correct Unicode is never changed**: common words were changed on web pages and in documents (निर्माण read र्निमाण, शर्मा र्शमा, कार्की र्काकी, व्रत क्रत, नेपाल[१] नेपालृ१], दर ४ % दर ४ ५). Repairs of damaged PDF text now happen only where the dictionary proves the repaired word.
+- **More legacy fonts checked against their own glyphs**: Sumod-Acharya has its own table (ङ्क ङ्ग ट्ठ and signs that draw nothing), Ganesh and HimChuli are read as Preeti, Annapurna SIL is a Unicode font; Fontasy Himali ¶ is ठ्ठ; words typed partly in Preeti and partly in Sumod-Acharya are read as one word.
+- **Selection speech** is NVDA's own (selected, unselected, selected instead, a single character spelled), with the real text.
+- **No freezes**: finding out whether a browser tab shows a PDF never searches folders or reads files while NVDA is speaking.
+- Copied text: the add-on's own copy is not processed twice; text other programs copy is converted from Preeti only in a Preeti document or a PDF; page counts like /14 and numbers are never read as Preeti.
+- Devanagari file names shown as mojibake (à¤§à¤°...) are read as Devanagari where that is exact.
+- MultiLang is restored when the add-on stops, and its settings are not changed while Nepali mode is off.
 - **Web pages are no longer taken for a PDF**: a browser started by opening a PDF keeps that file on its command line, and every later window (Outlook, a sign-in page) was treated as that PDF and read through it. A window is now matched to a PDF only when its title names that file, and one common word (Outlook, Inbox) no longer matches a file name.
 - The viewer's "Finished loading PDF" message in front of the first line no longer changes that line (the page number 1 was read १).
 - **Fontasy Himali** (FONTASY_HIMALI_TT) now has its own layout: its digit keys are Nepali digits and Shift+digit keys are letters, the other way round from Preeti, and ' / " are ू / ु. PDFs in this font read correctly (लिमिटेडको, काठमाडौं, हुनेछ, १., (मिति २०६५।१२।३०)) instead of लिमि६े८को, का७मा८ौं, हूने५, ज्ञ. Himalb and Himalli keep the Preeti layout. Settings list both.
