@@ -63,3 +63,9 @@ line = 'Section 9 (a) of the Act, call (01) 4411234'
 check('English numbers by character', ''.join(chars(line)), line)
 print('FAILED' if bad else 'ALL OK', bad)
 sys.exit(1 if bad else 0)
+
+# Preeti overlay key m after प / भ, stray reph, extra halant (rebuilt PDF words)
+for w, want in [('आप्mना', 'आफ्ना'), ('बुभ्mदा', 'बुझ्दा'), ('समेतलार्ई', 'समेतलाई'), ('कार्य्विधिको', 'कार्यविधिको'), ('mobile', None), ('हुनेछ।', None)]:
+    got = DR.finalClean(w, neLexicon.isWord)
+    check('finalClean ' + w, got, want)
+print('ALL OK', bad)

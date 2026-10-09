@@ -1425,3 +1425,35 @@ def setDocumentSwaps(swaps, key):
 	_docSwapKey = key
 	_swapCache.clear()
 	_readCache.clear()
+
+
+# -- last clean-up of a word rebuilt from a PDF ---------------------------------------------------
+
+_M_FIX = re.compile("([\u092a\u092d])([\u093e-\u094c\u094d\u0902\u0901]*)m")
+_M_LETTER = {"\u092a": "\u092b", "\u092d": "\u091d"}
+_STRAY_REPH = re.compile("(\u093e)\u0930\u094d([\u0907\u0908])")
+
+
+def finalClean(fixed, isWord=None):
+	"""Small, certain corrections on a rebuilt word (None when nothing changes):
+	* the Preeti overlay key m written after प or भ draws फ or झ (आप्mना is आफ्ना, बुभ्mदा is बुझ्दा);
+	* a stray reph between ा and इ/ई (समेतलार्ई is समेतलाई);
+	* an extra halant that makes a word unknown, removed only when the word then is a known one."""
+	if not fixed:
+		return None
+	out = fixed
+	if "m" in out:
+		out = _M_FIX.sub(lambda m: _M_LETTER[m.group(1)] + m.group(2), out)
+	if "\u0930\u094d" in out:
+		out = _STRAY_REPH.sub("\\1\\2", out)
+	if isWord is not None and "\u094d" in out:
+		m = re.search("[\u0900-\u097f\u200d]+", out)
+		core = m.group(0) if m else ""
+		if core and not isWord(core):
+			for i, c in enumerate(core):
+				if c == "\u094d" and i > 0 and core[i - 1] in "\u092f\u0930\u0932\u0935":
+					cand = core[:i] + core[i + 1:]
+					if isWord(cand):
+						out = out.replace(core, cand, 1)
+						break
+	return out if out != fixed else None

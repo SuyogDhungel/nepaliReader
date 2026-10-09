@@ -37,7 +37,7 @@ NUKTA = "़"
 REPH = "र्"
 DEP_SIGNS = set("ऺऻािीुूृॄॅॆेैॉॊोौॎॏॕॖॗॢॣऀँंः़")
 INDEPENDENT = set(chr(c) for c in range(0x0904, 0x0915)) | set("ॠॡॲॳॴॵॶॷ")
-INDEX_VERSION = 22
+INDEX_VERSION = 23
 INFER = True
 
 
@@ -800,6 +800,10 @@ class DocIndex:
 				fixed = "महत्त्व" + fixed[3:]
 			elif fixed == "महवराख्ने":
 				fixed = "महत्त्व राख्ने"
+			if fixed and enc is None and _wordCheck is not None:
+				cl = devanagariRepair.finalClean(fixed, _wordCheck)
+				if cl is not None:
+					fixed, amap = cl, None
 			if fixed and ")" in fixed and enc != "krutidev":
 				fixed = legacyFonts._DECIMAL_ZERO.sub("\u0966", fixed)  # ६.)% is ६.०%
 			if fixed and enc != "krutidev" and "%" in fixed:
