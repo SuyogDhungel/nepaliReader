@@ -1060,6 +1060,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		try:
 			fields = self._convertFields(info, None)
 		except Exception:
+			diag.exception("plain text of a selection")
 			return info.text
 		return "".join(f for f in fields if isinstance(f, str))
 
