@@ -104,40 +104,7 @@ If any shortcut conflicts with another add-on or if you prefer different keys, y
 
 ## 📜 Changelog
 
-### Version 1.1.5 (Current Release)
-* **Seamless MultiLang Add-on Integration**: Full automatic integration with the popular MultiLang virtual synthesizer add-on. Ensures Devanagari text is recognized as Nepali (`ne`) rather than forced to Hindi (`hi`).
-* **Supporting TTS Voice Discovery**: Automatically resolves and activates the best available Nepali voice across installed synthesizers—including Hear2Read Indic Voices (`Hear2ReadNG` with Google Nepali neural voice) and eSpeak NG (`ne`)—without requiring manual NVDA configuration profiles.
-* **Microsoft Word Proofing Language Override**: Overrides Word's default `hi-IN` language tagging on Devanagari paragraphs whenever the vocabulary is identified as Nepali, ensuring MultiLang and NVDA switch to the Nepali voice rather than Hindi.
-* **Preeti Bracket Matra Parsing**: Fixed Preeti keyboard typography where `]` (e-kar / o-kar), `}` (ai-kar / au-kar), `[` (ri-kar), and `{` (reph) were stripped as punctuation brackets, eliminating corrupted words like `रहेका] छ` -> `रहेको छ`, `शिक्षाल]` -> `शिक्षाले`, `यसका] पुर}` -> `यसको पुरै`, `कुन}` -> `कुनै`, `पाइन]` -> `पाइने`, `पहिला]` -> `पहिलो`, `हाम्रा]` -> `हाम्रो`.
-* **Himali Downward U-kar (`\xac` / `¬`)**: Added missing `\xac` Alt+0172 character to `PREETI_MAP`, fixing words like `स¬झावहरू` -> `सुझावहरू`.
-* **Preeti/Himali `क्र` Modifier Conjuncts**: Extended glyph modifier resolution for `व` + `्र` + modifier `m`, restoring `पाठ्यव्रम` -> `पाठ्यक्रम`, `कार्यव्रम` -> `कार्यक्रम`, `व्रियाकलाप` -> `क्रियाकलाप`, `प्रव्रिया` -> `प्रक्रिया`.
-* **Number Preservation in MultiLang**: Prevented MultiLang from dropping Devanagari numerals (`०-९`) and numbers attached to Nepali clauses into English speech.
-
-### Version 1.1.4
-* **Double Character Reading Elimination**: Character navigation (`Left/Right Arrow`) speaks individual characters and vowel signs cleanly without repeating syllables twice.
-* **Preeti Clause Brackets & 9/0 Key Resolution**: Parenthesized words and legal clauses (e.g. `(s)` -> `(क)`, `(v)` -> `(ख)`, `(lzIff)` -> `(शिक्षा)`, `(!)` -> `(१)`, `9s0` -> `(क)`) accurately preserve outer parentheses rather than turning into digits `९...०` or `ढकण्`, while genuine multi-digit Preeti numbers (`@)@(` -> `२०२९`, `@)` -> `२०`) remain numbers.
-* **Native Unicode Selection & Copying**: Preserves native Devanagari text and clipboard formats on `Ctrl+C`, `Ctrl+A`, `Shift+Arrows`, and `Ctrl+Shift+Arrows` in standard applications (Word, Notepad, Chrome) without unintended conversion.
-* **Universal Script & Symbol Protection**: Arabic numbers and decimals (`8848.86`, `8516`, `100%`), math symbols, emojis, bullets (`•`, `*`, `-`), and stars (`★`) are strictly protected from false legacy conversion.
-* **Document Language Dominance (>=20% Rule)**: If >=20% of observed words in a document are Unicode Devanagari, the context is locked to Unicode so English text, numbers, and symbols are never converted as Preeti unless explicitly tagged by font name.
-* **Startup Guidance & Toggle Reminders**: Clear user notifications on startup and on toggle (`NVDA+Alt+N`) advising users to keep Nepali mode OFF during English typing or system menus and ON when reading Nepali documents.
-
-### Version 1.1.3
-* Startup announcement and settings panel tip recommending users keep Nepali mode OFF (`NVDA + Alt + N`) during English typing or system menus and ON when reading Nepali documents.
-* Streamlined distribution package size to 2.99 MB.
-
-### Version 1.1.2
-* **Selective Delta Announcements**: Fixed selection speech announcement so ONLY newly selected/unselected text is spoken instead of repeating the entire selection from top to bottom.
-* **Typo Repairs & Normalization**: Added automatic correction for Preeti typewriter typos (`dxj` -> `महत्त्व`, `महवको` -> `महत्त्वको`, `महवराख्ने` -> `महत्त्व राख्ने`).
-* **Line-Wrap Artifact Removal**: Removed trailing multi-space artifacts and orphan hyphenated syllables at PDF line breaks.
-* **Laptop Rollover Fix**: Full support for `NVDA + Alt + N` as a conflict-free toggle gesture for laptop keyboard layouts.
-* **NVDA Store Compatibility**: Fully validated for stable NVDA 2024.1 through 2026.2.
-
-### Version 1.0.0 (Official Initial Release)
-* Universal automatic conversion for Preeti, Kantipur, Sagarmatha, Fontasy Himali, and PCS Nepali fonts.
-* Deep TrueType glyph reconstruction for broken text-based Devanagari PDFs from Word, InDesign, Chrome, and LibreOffice.
-* Automatic Nepali language tagging for eSpeak Devanagari numeral pronunciation.
-* Smart clipboard copy (`Ctrl + C`) that converts legacy and PDF text directly to standard Unicode.
-* Full NVDA menu and custom input gesture integration.
+See [CHANGELOG.md](CHANGELOG.md) for the full history of every version.
 
 ---
 

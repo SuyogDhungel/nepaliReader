@@ -129,6 +129,15 @@ _orig_getSynth = None
 _installed = False
 
 
+def _active():
+	"""False while Nepali mode is switched off: the hooks below then do exactly what MultiLang does without us."""
+	try:
+		from . import isOn
+		return bool(isOn())
+	except Exception:
+		return True
+
+
 def install():
 	"""Hooks MultiLang if installed or active so Nepali language and TTS voices are properly handled."""
 	global _installed, _orig_addDetectedLanguageCommands, _orig_getSynth
@@ -158,6 +167,9 @@ def install():
 					2. Detects Devanagari text as Nepali whenever it contains Nepali vocabulary.
 					3. Prevents Devanagari numbers from being forced to English.
 					"""
+					if not _active():
+						yield from _orig_addDetectedLanguageCommands(speechSequence, defaultLang, scriptSettings, ignoreNumbersInLanguageDetection)
+						return
 					curScript = None
 					curLang = defaultLang
 					scripts_dict = getattr(ld, "SCRIPTS", {})
@@ -227,6 +239,8 @@ def install():
 				def nepali_getSynth(self, lang):
 					"""Ensures that when MultiLang switches to Nepali ('ne'),
 					the selected synthesizer is set to its Nepali voice rather than defaulting to English."""
+					if not _active():
+						return _orig_getSynth(self, lang)
 					if lang and lang.startswith("ne"):
 						settings = getattr(self, "_settings", {}).get(lang)
 						synth = None
