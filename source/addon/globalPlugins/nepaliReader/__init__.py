@@ -2216,6 +2216,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		"""After the application copied a selection of Preeti / damaged text, put the real text on
 		the clipboard instead."""
 		try:
+			if not isOn():
+				return
 			if focus is None:
 				focus = api.getFocusObject()
 			src = focus
