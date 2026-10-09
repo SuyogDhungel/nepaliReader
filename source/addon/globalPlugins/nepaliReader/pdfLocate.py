@@ -240,10 +240,7 @@ def _findRecentPdfByTitle(title):
 	"""Tries to find a recent PDF file matching a window title that doesn't end in .pdf."""
 	if not title:
 		return None
-	clean = re.sub(
-		r"\s*-\s*(Google Chrome|Microsoft\s*Edge|Mozilla Firefox|Chrome|Edge|Firefox|Brave|Opera|Vivaldi|Adobe Acrobat|Acrobat Reader|Adobe|SumatraPDF|Foxit).*$",
-		"", title, flags=re.I
-	).strip()
+	clean = _BROWSER_SUFFIX.sub("", title).strip()
 	if not clean or len(clean) < 3:
 		return None
 
@@ -265,18 +262,23 @@ def _findRecentPdfByTitle(title):
 			pass
 	candidates.sort(reverse=True)
 
-	# 0. Match PDF metadata /Title in recent candidate PDFs
 	clean_low = clean.lower()
+	for _mtime, p in candidates:
+		if os.path.splitext(os.path.basename(p))[0].strip().lower() == clean_low:
+			return p
+	# 0. Match PDF metadata /Title in recent candidate PDFs
 	for _mtime, p in candidates[:25]:
 		meta_title = _extractPdfTitle(p)
 		if meta_title:
 			m_low = meta_title.lower()
-			if clean_low == m_low or clean_low in m_low or m_low in clean_low:
+			if clean_low == m_low or (len(m_low) >= 12 and len(clean_low) >= 12 and (clean_low in m_low or m_low in clean_low)):
 				return p
 
 	# 1. Match title byte substring in recent PDFs (first 5MB)
+	if len(clean) < 6:
+		return None
 	raw_b = clean.encode("latin-1", "ignore")[:25]
-	if len(raw_b) >= 4:
+	if len(raw_b) >= 12:
 		for _mtime, p in candidates[:20]:
 			try:
 				with open(p, "rb") as f:
@@ -287,7 +289,9 @@ def _findRecentPdfByTitle(title):
 
 	# 2. Match Unicode converted title words in filename
 	try:
-		from . import legacyFonts
+		from . import legacyFonts, detector
+		if not detector.looksLegacy(clean, "preeti"):
+			raise ValueError("not a Preeti title")
 		conv = legacyFonts.convert(clean, "preeti") or ""
 		words = [w for w in re.split(r"[\s\-_\.,]+", conv) if len(w) >= 3]
 		if words:
@@ -302,10 +306,11 @@ def _findRecentPdfByTitle(title):
 	_GENERIC = {"nepal", "nepali", "news", "bank", "page", "home", "document", "report", "file", "download", "view", "post", "dashboard", "online", "login", "portal", "untitled", "member"}
 	clean_words = [w.lower() for w in re.split(r"[\s\-_\.,]+", clean) if len(w) >= 4]
 	specific = [w for w in clean_words if w not in _GENERIC]
-	if specific:
+	if len(specific) >= 2:
+		# (one word such as "Outlook" or "Inbox" is not enough: economic-outlook.pdf is another file)
 		for _mtime, p in candidates[:20]:
 			bn = os.path.basename(p).lower()
-			if sum(1 for w in specific if w in bn) >= max(1, (len(specific) + 1) // 2):
+			if sum(1 for w in specific if w in bn) >= max(2, (len(specific) + 1) // 2):
 				return p
 	elif len(clean_words) >= 3:
 		for _mtime, p in candidates[:20]:
@@ -316,16 +321,40 @@ def _findRecentPdfByTitle(title):
 	return None
 
 
+_BROWSER_SUFFIX = re.compile(
+	r"\s*-\s*(Google Chrome|Microsoft\s*Edge|Mozilla Firefox|Chrome|Edge|Firefox|Brave|Opera|Vivaldi|Adobe Acrobat|Acrobat Reader|Adobe|SumatraPDF|Foxit).*$",
+	re.I)
+
+
+def _titleIsFile(title, path):
+	"""True if a window title (without .pdf in it) names this PDF: its file name or its own title."""
+	clean = _BROWSER_SUFFIX.sub("", title or "").strip().lower()
+	if len(clean) < 3:
+		return False
+	stem = os.path.splitext(os.path.basename(path))[0].strip().lower()
+	if clean == stem:
+		return True
+	meta = (_extractPdfTitle(path) or "").strip().lower()
+	return bool(meta) and clean == meta
+
+
 def findFromTitle(title, pid=None):
 	"""The PDF file of a viewer window, from its title and its program (no NVDA objects needed,
 	so this can run in a background thread). Returns a local path or None."""
 	m = _PDF_TITLE.search(title or "")
 	name = m.group(1).strip() if m else None
 	if pid:
+		# a browser started with a PDF keeps it on its command line for every window it opens
+		# later (Outlook, a sign-in page): the file must be the one this window's title names
 		cl = _commandLine(pid)
 		for cand in re.findall(r'"([^"]+\.pdf)"|(\S+\.pdf)', cl, re.I):
 			c = cand[0] or cand[1]
-			if os.path.isfile(c) and (not name or os.path.basename(c).lower() == name.lower()):
+			if not os.path.isfile(c):
+				continue
+			if name:
+				if os.path.basename(c).lower() == name.lower():
+					return c
+			elif _titleIsFile(title, c):
 				return c
 	if name:
 		for fn in (_recentLink, _adobeRecent, _searchFolders):

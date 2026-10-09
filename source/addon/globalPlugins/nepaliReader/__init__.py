@@ -1390,6 +1390,12 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
 	def _indexText(self, info, idx, text):
 		"""The real text for one run of what the viewer gave, or None if the index doesn't know it."""
+		for pre in ("Finished loading PDF", "Loading PDF"):
+			# Brave/Chrome put their status message in front of the first line of the page
+			if text.startswith(pre) and len(text) > len(pre):
+				rest = text[len(pre):]
+				got = self._indexText(None, idx, rest) if pdfText.keyOf(rest) else None
+				return pre + (got if got is not None else rest)
 		key = pdfText.keyOf(text)
 		if not key:
 			return None
@@ -1587,7 +1593,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				cached = pdfLocate._isPdfUrl(url)
 				if not cached:
 					cached = self._isPdfViewerObj(obj)
-				if not cached:
+				if not cached and not url:
+					# (a page whose address is known and is not a PDF is never one)
 					cached = bool(pdfLocate.findFromTitle(rawTitle, getattr(fg, "processID", None)))
 				if cached:
 					self._pdfTabs.put(key, True)
