@@ -101,7 +101,7 @@ def getCurrentVersion():
 				return parseVersion(addon.version)
 	except Exception:
 		pass
-	return (1, 1, 7)
+	return (2, 0, 0)
 
 
 def launchInstaller(destPath):

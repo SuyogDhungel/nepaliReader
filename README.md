@@ -1,6 +1,6 @@
 # Nepali Reader for NVDA
 
-[![Download Add-on](https://img.shields.io/badge/Download-nepaliReader--1.1.7.nvda--addon-brightgreen?style=for-the-badge&logo=nvda)](https://github.com/SuyogDhungel/nepaliReader/releases/download/v1.1.7/nepaliReader-1.1.7.nvda-addon)
+[![Download Add-on](https://img.shields.io/badge/Download-nepaliReader--2.0.nvda--addon-brightgreen?style=for-the-badge&logo=nvda)](https://github.com/SuyogDhungel/nepaliReader/releases/download/v2.0/nepaliReader-2.0.nvda-addon)
 [![License: GPL v2](https://img.shields.io/badge/License-GPL%20v2-blue.svg)](LICENSE)
 [![NVDA Compatibility](https://img.shields.io/badge/NVDA-2024.1%20to%202026.2-purple.svg)](https://www.nvaccess.org/)
 
@@ -26,8 +26,8 @@ Screen reader users in Nepal regularly encounter two major barriers when reading
 ## 📥 How to Download and Install
 
 1. Download the add-on file:
-   👉 [**Click here to download nepaliReader-1.1.7.nvda-addon**](https://github.com/SuyogDhungel/nepaliReader/releases/download/v1.1.7/nepaliReader-1.1.7.nvda-addon)
-2. Once downloaded, open your **Downloads** folder and press **Enter** on `nepaliReader-1.1.7.nvda-addon`.
+   👉 [**Click here to download nepaliReader-2.0.nvda-addon**](https://github.com/SuyogDhungel/nepaliReader/releases/download/v2.0/nepaliReader-2.0.nvda-addon)
+2. Once downloaded, open your **Downloads** folder and press **Enter** on `nepaliReader-2.0.nvda-addon`.
 3. NVDA will ask: *"Are you sure you want to install this add-on?"* — Press **Yes** (`Alt + Y`).
 4. When prompted to restart NVDA, select **Yes**.
 5. That is all! Nepali Reader activates automatically upon startup.
