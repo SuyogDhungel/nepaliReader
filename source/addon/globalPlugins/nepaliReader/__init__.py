@@ -488,14 +488,27 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		owners = [globalCommands.commands]
 		owners += [p for p in globalPluginHandler.runningPlugins if p is not self]
 		norm = getattr(inputCore, "normalizeGestureIdentifier", lambda g: g.lower())
+
+		# Check for ClipSpeak or any other clipboard add-on explicitly
+		hasClipAddon = any(
+			("clipspeak" in type(p).__module__.lower() or "clipboard" in type(p).__module__.lower())
+			for p in globalPluginHandler.runningPlugins if p is not self
+		)
+
 		for ident in list(getattr(self, "_gestureMap", {}).keys()):
 			key = norm(ident)
 			taken = None
-			for o in owners:
-				gmap = getattr(o, "_gestureMap", None) or {}
-				if key in gmap or ident in gmap:
-					taken = type(o).__module__
-					break
+			if key in ("kb:control+c", "kb:c+control") and hasClipAddon:
+				taken = "clipspeak"
+			if taken is None:
+				for o in owners:
+					gmap = getattr(o, "_gestureMap", None) or {}
+					for k in gmap.keys():
+						if norm(str(k)).lower() == key:
+							taken = type(o).__module__
+							break
+					if taken:
+						break
 			if taken is None:
 				try:
 					for module, cls, scriptName in inputCore.manager.userGestureMap.getScriptsForGesture(key):
@@ -504,46 +517,17 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 							break
 				except Exception:
 					pass
-			if taken and key in ("kb:control+c", "kb:c+control"):
-				# another add-on (clipspeak, Clipboard Enhancement...) copies: keep it, and fix the
-				# copied text right after it
-				self._chainCopy(key, ident)
+
 			if taken:
 				try:
 					self.removeGestureBinding(ident)
 				except Exception:
+					pass
+				try:
 					self._gestureMap.pop(ident, None)
+				except Exception:
+					pass
 				log.info("Nepali Reader: %s is already used by %s, so it was left free" % (ident, taken))
-
-	def _chainCopy(self, key, ident):
-		plugin = self
-		for o in globalPluginHandler.runningPlugins:
-			if o is self:
-				continue
-			gmap = getattr(o, "_gestureMap", None) or {}
-			name = gmap.get(key) or gmap.get(ident)
-			if not name:
-				continue
-			attr = "script_" + (name if isinstance(name, str) else getattr(name, "__name__", "")[7:])
-			orig = getattr(o, attr, None)
-			if not callable(orig) or getattr(orig, "_nrChained", False):
-				continue
-
-			def chained(gesture, _orig=orig):
-				res = _orig(gesture)
-				if isOn():
-					wx.CallLater(400, plugin._fixClipboard, None)
-				return res
-
-			chained._nrChained = True
-			for k in ("__doc__", "category", "__name__", "resumeSayAllMode", "speakOnDemand", "canPropagate", "bypassInputHelp", "allowInSleepMode"):
-				if hasattr(orig, k):
-					try:
-						setattr(chained, k, getattr(orig, k))
-					except Exception:
-						pass
-			setattr(o, attr, chained)
-			log.info("Nepali Reader: copying with %s now gives the real Nepali text" % type(o).__module__)
 
 	def terminate(self):
 		self._unpatch()
@@ -2174,12 +2158,25 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		gesture="kb:control+c",
 	)
 	def script_copyFixed(self, gesture):
+		focus = api.getFocusObject()
+		ti = getattr(focus, "treeInterceptor", None) if focus else None
+		# 1. BROWSE MODE:
+		# Always delegate directly to NVDA's native treeInterceptor copy.
+		# When Nepali mode is ON, our CursorManager / TextInfo hooks will automatically convert it.
+		# When Nepali mode is OFF, native NVDA browse mode copies normally without interference.
+		if ti is not None and not getattr(ti, "passThrough", True):
+			if hasattr(ti, "script_copyToClipboard"):
+				ti.script_copyToClipboard(gesture)
+				return
+			gesture.send()
+			return
+
+		# 2. FOCUS MODE:
 		if not isOn():
 			gesture.send()
 			return
-		focus = api.getFocusObject()
-		ti = getattr(focus, "treeInterceptor", None) if focus else None
-		src = ti if (ti is not None and not getattr(ti, "passThrough", True)) else focus
+
+		src = focus
 		info = None
 		if src is not None:
 			try:
@@ -2211,12 +2208,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			if new and new != raw:
 				api.copyToClip(textInfos.convertToCrlf(new), notify=True)
 				return
-		if ti is not None and not getattr(ti, "passThrough", True) and hasattr(ti, "script_copyToClipboard"):
-			ti.script_copyToClipboard(gesture)
-		else:
-			gesture.send()
-			if focus is not None:
-				wx.CallLater(300, self._fixClipboard, focus)
+		gesture.send()
+		if focus is not None:
+			wx.CallLater(300, self._fixClipboard, focus)
 
 	def _fixClipboard(self, focus):
 		"""After the application copied a selection of Preeti / damaged text, put the real text on
