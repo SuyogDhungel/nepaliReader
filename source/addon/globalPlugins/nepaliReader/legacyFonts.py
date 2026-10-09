@@ -543,6 +543,9 @@ _LONE_CANDRA = re.compile("(?<![\u0900-\u097f])ॅ")
 _COLON = re.compile("(?<=्)ः|ः(?=\\s*[–—\\-(])|^ः$")
 
 
+_DECIMAL_ZERO = re.compile(r"(?<=[\u0966-\u096f][.,])\)(?=%|[\u0966-\u096f]|\s|$)")
+
+
 def convert(text, encoding="preeti"):
 	if encoding == "krutidev":
 		return krutiDevToUnicode(text)
@@ -554,6 +557,9 @@ def convert(text, encoding="preeti"):
 		out = _LONE_CANDRA.sub("‘", out)
 	if "ः" in out:
 		out = _COLON.sub(":", out)
+	if ")" in out:
+		# a ")" right after a Nepali digit and a point is the digit key for ० (६.)% is ६.०%)
+		out = _DECIMAL_ZERO.sub("\u0966", out)
 	return out
 
 

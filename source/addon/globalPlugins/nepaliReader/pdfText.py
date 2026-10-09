@@ -37,7 +37,7 @@ NUKTA = "़"
 REPH = "र्"
 DEP_SIGNS = set("ऺऻािीुूृॄॅॆेैॉॊोौॎॏॕॖॗॢॣऀँंः़")
 INDEPENDENT = set(chr(c) for c in range(0x0904, 0x0915)) | set("ॠॡॲॳॴॵॶॷ")
-INDEX_VERSION = 18
+INDEX_VERSION = 19
 INFER = True
 
 
@@ -797,6 +797,8 @@ class DocIndex:
 				fixed = "महत्त्व" + fixed[3:]
 			elif fixed == "महवराख्ने":
 				fixed = "महत्त्व राख्ने"
+			if fixed and ")" in fixed and enc != "krutidev":
+				fixed = legacyFonts._DECIMAL_ZERO.sub("\u0966", fixed)  # ६.)% is ६.०%
 			key = keyOf(shown)
 			if not key:
 				continue
