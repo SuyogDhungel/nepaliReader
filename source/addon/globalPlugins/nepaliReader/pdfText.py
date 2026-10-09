@@ -146,7 +146,9 @@ def aksharas(s):
 # Only these characters are compared between what the viewer shows and the PDF: Devanagari,
 # Latin letters, digits and punctuation. Viewers show unmapped glyphs differently (nothing,
 # U+FFFD, or a random character from the glyph number), so everything else is ignored.
-_DROP = re.compile("[^\u0021-\u007e\u0080-\u009f\u00a1-\u00ac\u00ae-\u017f\u0192\u02c6\u02dc\u2122\u0900-\u097f\ua8e0-\ua8ff\u2010-\u2027\u2030-\u205e\u20a0-\u20cf]+")
+# (U+2219 is kept: legacy fonts made with Fontographer give their middle-dot glyph that code too,
+# and Sumod-Acharya draws ङ्ग there - s~rgh\u2219f is कञ्चनजङ्गा)
+_DROP = re.compile("[^\u0021-\u007e\u0080-\u009f\u00a1-\u00ac\u00ae-\u017f\u0192\u02c6\u02dc\u2122\u2219\u0900-\u097f\ua8e0-\ua8ff\u2010-\u2027\u2030-\u205e\u20a0-\u20cf]+")
 
 
 _MARKS = re.compile("[\u0900-\u0903\u093a-\u094f\u0951-\u0957\u0962\u0963]")
@@ -1351,11 +1353,18 @@ def _wordTexts(w):
 		return shownText, "\u25cb", None, None  # Word's "o" list bullet (Courier New) is a hollow circle
 	# a word in a legacy font (possibly with punctuation in a standard font like Times or Arial)
 	legacy_encs = {s[0].legacy for s in segs if s[0].legacy}
+	keysOf = lambda s0, t: t
+	if len(legacy_encs) > 1 and legacy_encs <= set(legacyFonts.PREETI_TYPED):
+		# a word typed partly in Preeti and partly in a font typed like it (Sumod-Acharya): its
+		# keys are rewritten as the Preeti keys and it is converted as one word, so a ि or reph
+		# typed in one font lands on the letters of the other (k|f;l + ª\s is प्रासङ्कि)
+		keysOf = lambda s0, t: legacyFonts.asPreetiKeys(t, s0.legacy) if s0.legacy else t
+		legacy_encs = {"preeti"}
 	if len(legacy_encs) == 1:
 		non_legacy_text = "".join(t for s in segs if not s[0].legacy for c, t in s[1])
 		if not non_legacy_text or all(c in "()[]{}<>'\"“”‘’.,;:!?-_/\\•* " for c in non_legacy_text):
 			enc = next(iter(legacy_encs))
-			raw = keyOf(shownText)
+			raw = keyOf("".join(keysOf(s0[0], t) for s0 in segs for c, t in s0[1]))
 			if non_legacy_text and keyOf(non_legacy_text) and enc != "krutidev":
 				# punctuation drawn in a standard font (the hyphen of प्रबन्ध-पत्र in Times) is
 				# exactly what it shows; only the runs in the legacy font are keys
@@ -1363,7 +1372,7 @@ def _wordTexts(w):
 				run = []
 				for s0 in segs:
 					if s0[0].legacy:
-						run.append("".join(t for c, t in s0[1]))
+						run.append("".join(keysOf(s0[0], t) for c, t in s0[1]))
 						continue
 					if run:
 						rk = keyOf("".join(run))

@@ -3,7 +3,7 @@
 # This module has no NVDA dependencies so it can be unit tested on its own.
 #
 # Supported encodings:
-#   Nepali: Preeti, Kantipur, Sagarmatha, Fontasy Himali, PCS Nepali
+#   Nepali: Preeti, Kantipur, Sagarmatha, Fontasy Himali, PCS Nepali, Sumod-Acharya
 #   Hindi:  Kruti Dev (010 and the common Kruti Dev family layout)
 #
 # The Kruti Dev rules are a port of kru2uni / @anthro-ai/krutidev-unicode (ISC licence).
@@ -133,12 +133,24 @@ _FONT_DIFFS = {
 # Fontasy Himali (FONTASY_HIMALI_TT) is not laid out like Preeti on the number row: the digit
 # keys type the Nepali digits and Shift+digit types the letters (Preeti is the other way round),
 # and ' / " give ू / ु (Preeti: ु / ू). Himalb and Himalli use the Preeti layout.
+# ¶ is ठ्ठ as in Preeti: the font's own glyph has a closed ठ on top (लठ्ठा in telecom.pdf), and
+# npttf2utf's FONTASY_HIMALI_TT table agrees.
 _FONT_DIFFS["fontasy"] = dict(_FONT_DIFFS["himali"])
 _FONT_DIFFS["fontasy"].update({
 	"1": "१", "2": "२", "3": "३", "4": "४", "5": "५", "6": "६", "7": "७", "8": "८", "9": "९", "0": "०",
 	"!": "ज्ञ", "@": "द्द", "#": "घ", "$": "द्ध", "%": "छ", "^": "ट", "&": "ठ", "*": "ड", "(": "ढ", ")": "ण्",
-	"'": "ू", '"': "ु", "\xb6": "ट्ठ",
+	"'": "ू", '"': "ु",
 })
+
+# Sumod-Acharya (also "Sumod Acharya", "Sumodbold"; its full name is "Himalaya") uses the Preeti
+# layout, except where its own glyphs differ (checked on the font embedded in three real PDFs):
+# Ë is ङ्क and Í is ङ्ग (मूल्याङ्कन, लैङ्गिक, ताप्लेजुङ्ग on the page), ¶ is ट्ठ (चिट्ठी), ¤ is "!",
+# ‘ is a quote, ∙ is the same glyph as · (ङ्ग, कञ्चनजङ्गा), and ˆ „ … ¸ have no glyph at all: a page
+# typed with Preeti's ˆ (cfˆgf]) shows "आ नो", so nothing is read for them.
+_FONT_DIFFS["sumod"] = {
+	"\xcb": "ङ्क", "\xcd": "ङ्ग", "\xb6": "ट्ठ", "\xa4": "!", "‘": "‘", "∙": "ङ्ग",
+	"ˆ": "", "„": "", "…": "", "\xb8": "",
+}
 
 _PREETI_FAMILY_MAPS = {"preeti": PREETI_MAP}
 for _name, _diff in _FONT_DIFFS.items():
@@ -148,6 +160,36 @@ for _name, _diff in _FONT_DIFFS.items():
 _PREETI_FAMILY_MAPS["gorkhapatra"] = PREETI_MAP
 _PREETI_FAMILY_MAPS["ganess"] = PREETI_MAP
 _PREETI_FAMILY_MAPS["nayanepal"] = PREETI_MAP
+# fonts typed exactly like Preeti (the Preeti-only typing rules below apply to them too)
+_PREETI_TYPED = ("preeti", "sumod")
+PREETI_TYPED = _PREETI_TYPED
+
+
+def keyTable(encoding):
+	"""The key -> letters table of a Preeti-family encoding (Preeti's for an unknown one)."""
+	return _PREETI_FAMILY_MAPS.get(encoding, PREETI_MAP)
+
+
+_PREETI_KEY_OF = {}
+for _k, _v in PREETI_MAP.items():
+	_PREETI_KEY_OF.setdefault(_v, _k)
+
+
+def asPreetiKeys(keys, encoding):
+	"""The keys of a font typed like Preeti rewritten as the Preeti keys that draw the same
+	letters (Sumod-Acharya's Í is Preeti's Ë), so a word typed partly in each font can be
+	converted as one word. A key with no glyph is dropped."""
+	if encoding == "preeti":
+		return keys
+	table = keyTable(encoding)
+	out = []
+	for ch in keys:
+		v = table.get(ch)
+		if v is None or PREETI_MAP.get(ch) == v:
+			out.append(ch)
+		elif v:
+			out.append(_PREETI_KEY_OF.get(v, ch))
+	return "".join(out)
 
 _MOD_BASES = {"उ": "ऊ", "भ": "झ", "प": "फ"}
 _MOD_SKIPPABLE = SIGNS | {HALANT, "र", "य"}
@@ -288,7 +330,7 @@ def _isKeyWord(w):
 
 def preetiFamilyToUnicode(text, font="preeti", _table=None):
 	table = _table or _PREETI_FAMILY_MAPS.get(font, PREETI_MAP)
-	if _table is None and "\xbf" in text and font in ("preeti", "kantipur", "himali", "sagarmatha"):
+	if _table is None and "\xbf" in text and font in ("preeti", "kantipur", "himali", "sagarmatha", "sumod"):
 		parts = re.split(r"(\s+)", text)
 		if len(parts) > 1:
 			return "".join(preetiFamilyToUnicode(p, font) if p and not p.isspace() else p for p in parts)
@@ -328,7 +370,7 @@ def preetiFamilyToUnicode(text, font="preeti", _table=None):
 		if word in BULLETS or (len(word) == 1 and word in "•●○■▪◦✓★→←–—…*+-#~※♦►") or any(ord(c) > 255 and not (0x0900 <= ord(c) <= 0x097F) and c not in table for c in word):
 			result.append(word)
 			continue
-		if font == "preeti":
+		if font in _PREETI_TYPED:
 			# Smart quote detection: C<word>D used as “<word>” in Preeti
 			if word.startswith("C") and word.endswith("D") and len(word) >= 3:
 				if not word.startswith(("Clif", "C0f", "Crt", "Crf", "C4b", "Cuj")):
@@ -402,7 +444,7 @@ def preetiFamilyToUnicode(text, font="preeti", _table=None):
 				continue
 			# mixed letters with nothing to strip: convert it as one word below
 		s = _preetiWord(word, table, font)
-		if font == "preeti" and s.startswith("ऋ") and s.endswith("म्") and len(s) >= 4:
+		if font in _PREETI_TYPED and s.startswith("ऋ") and s.endswith("म्") and len(s) >= 4:
 			if not s.startswith(("ऋषि", "ऋण", "ऋतु", "ऋचा", "ऋद्धि", "ऋग्वेद")):
 				s = "“" + s[1:-1] + "”"
 		result.append(lead_b + s + trail_b)
@@ -548,12 +590,15 @@ _FONT_NAME_PATTERNS = [
 	(re.compile(r"fontasy", re.I), "fontasy"),
 	(re.compile(r"himal", re.I), "himali"),
 	(re.compile(r"pcs\s*nepali", re.I), "pcs"),
-	(re.compile(r"gorkhapatra|ganess|nayanepal|\bsun\b|sumod|acharya|kanchan|everest|annapurna|jagadamba|rupa|shangrila", re.I), "preeti"),
+	(re.compile(r"sumod", re.I), "sumod"),
+	# Ganesh and HimChuli: Preeti layout (their glyphs in deuki.pdf match Preeti key for key).
+	# "Annapurna SIL" is a Unicode font, not the legacy Annapurna.
+	(re.compile(r"gorkhapatra|ganess|ganesh|himchuli|nayanepal|\bsun\b|acharya|kanchan|everest|annapurna(?!\s*sil)|jagadamba|rupa|shangrila", re.I), "preeti"),
 	(re.compile(r"kruti\s*dev|krutidev|k010|kruti", re.I), "krutidev"),
 ]
 
-ENCODINGS = ("preeti", "kantipur", "sagarmatha", "himali", "fontasy", "pcs", "krutidev")
-NEPALI_ENCODINGS = ("preeti", "kantipur", "sagarmatha", "himali", "fontasy", "pcs")
+ENCODINGS = ("preeti", "kantipur", "sagarmatha", "himali", "fontasy", "pcs", "sumod", "krutidev")
+NEPALI_ENCODINGS = ("preeti", "kantipur", "sagarmatha", "himali", "fontasy", "pcs", "sumod")
 
 
 def encodingForFontName(fontName):

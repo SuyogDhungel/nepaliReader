@@ -76,5 +76,20 @@ check('Himalb is Preeti layout', LF.encodingForFontName('ABCDEE+Himalb'), 'himal
 check('Preeti ;+3 is संघ', LF.convert(';+3 ;+:yf', 'preeti'), 'संघ संस्था')
 check('Preeti year', LF.convert('@)&( ;fn', 'preeti'), '२०७९ साल')
 check('real words in a file name stay', DR.cleanShuffled('१.नेपाल-राष्ट्र-बैङ्क-ऐन-२०५८.pdf'), '१.नेपाल-राष्ट्र-बैङ्क-ऐन-२०५८.pdf')
+# Fontasy Himali's ¶ glyph is ठ्ठ (closed ठ on top, telecom.pdf), as in Preeti
+check('Fontasy ¶ is ठ्ठ', LF.convert('n¶f', 'fontasy'), 'लठ्ठा')
+# Sumod-Acharya: Preeti layout but its own glyphs (checked on the font in paper3/rajnitik/deuki.pdf)
+for fn in ('BCDFEE+Sumod-Acharya', 'ABCDEE+Sumod Acharya', 'ABCEEE+Sumodbold'):
+	check('Sumod font name ' + fn, LF.encodingForFontName(fn), 'sumod')
+for k, want in [("d'NofËg4f/f", 'मुल्याङ्कनद्धारा'), ('n}lÍs', 'लैङ्गिक'), ("-tfKn]h'Ísf]", '(ताप्लेजुङ्गको'),
+		('lr¶L', 'चिट्ठी'), ('s~rgh∙f', 'कञ्चनजङ्गा'), ('n ¤', 'ल !'), ('cfˆgf]', 'आनो'), ('ˆÇofS;,', 'फ्याक्स,'),
+		('kG„', 'पन्'), ('>L…', 'श्री'), ('-ef}lts¸', '(भौतिक'), ('‘k|r08’', '‘प्रचण्ड’'), ("k'¥ofpg", 'पुर्‍याउन'),
+		('dxŒj', 'महत्त्व'), ('leœofpg]', 'भित्र्याउने'), ("¿kdf", 'रूपमा')]:
+	check('Sumod ' + k, LF.convert(k, 'sumod'), want)
+check('Sumod keys as Preeti keys', LF.convert(LF.asPreetiKeys('k|f;l', 'sumod') + 'ª\\s', 'preeti'), 'प्रासङ्कि')
+# other Preeti-layout fonts (their glyphs in deuki.pdf match Preeti); Annapurna SIL is a Unicode font
+check('Ganesh is Preeti', LF.encodingForFontName('ABCDEE+Ganesh'), 'preeti')
+check('HimChuli is Preeti', LF.encodingForFontName('ABCDEE+HimChuli'), 'preeti')
+check('Annapurna SIL is not legacy', LF.encodingForFontName('Annapurna SIL'), None)
 print('FAILED' if bad else 'ALL OK', bad)
 sys.exit(1 if bad else 0)
