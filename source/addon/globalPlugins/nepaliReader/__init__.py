@@ -1035,7 +1035,14 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				return None
 			st.status = "building"
 			threading.Thread(target=self._buildPdf, args=(st, url, title, pid), name="NepaliReaderPdf", daemon=True).start()
-			return None
+		if st.status == "building" and not getattr(st, "waited", False):
+			# The first words of a PDF are spoken before the real text is known and would be guesses
+			# (संशोिन, मलुकी): wait once, briefly, for the first pages instead of speaking them.
+			st.waited = True
+			t0 = time.monotonic()
+			while st.status == "building" and time.monotonic() - t0 < 3.0:
+				time.sleep(0.04)
+			diag.write("pdf: waited %.1f s for the first pages (%s)" % (time.monotonic() - t0, st.status))
 		return st.index if st.status == "ready" else None
 
 	def _buildPdf(self, st, url, title, pid):
@@ -1442,7 +1449,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				ctx = self._lineContext(info)
 				if ctx:
 					line, off = ctx
-					chAt = idx.charAt(line, off)
+					chAt = idx.charAt(line, off, len(orig_char))
 					if chAt and devanagariRepair.hasDevanagari(chAt):
 						chAt = devanagariRepair.cleanForCharNav(chAt)
 						for i, item in enumerate(fields):

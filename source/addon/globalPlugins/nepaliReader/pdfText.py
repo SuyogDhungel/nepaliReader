@@ -37,7 +37,7 @@ NUKTA = "़"
 REPH = "र्"
 DEP_SIGNS = set("ऺऻािीुूृॄॅॆेैॉॊोौॎॏॕॖॗॢॣऀँंः़")
 INDEPENDENT = set(chr(c) for c in range(0x0904, 0x0915)) | set("ॠॡॲॳॴॵॶॷ")
-INDEX_VERSION = 21
+INDEX_VERSION = 22
 INFER = True
 
 
@@ -1154,7 +1154,7 @@ class DocIndex:
 				first[k] = j
 			if lo <= j < hi:
 				own.append(k)
-		if hi - lo == 1:
+		if hi - lo == 1 and (enc or len(fixed) == len(key)):
 			if enc:
 				conv = legacyFonts.convert(key[lo], enc)
 				if conv and conv.isascii() and key[lo].isascii() and lo < len(fixed) and not fixed.isascii():
@@ -1202,20 +1202,21 @@ class DocIndex:
 			return None
 		return self._span(q, r)
 
-	def charAt(self, lineText, offset):
-		"""The syllable of the real text at character `offset` of the viewer's line (or None)."""
+	def charAt(self, lineText, offset, length=1):
+		"""The syllable of the real text at character `offset` of the viewer's line (or None);
+		`length` is the size of the unit the viewer steps over (a cluster such as म्िाः)."""
 		key = matchKey(lineText)
 		pre = keyOf(lineText[:offset])
-		here = keyOf(lineText[offset:offset + 1])
+		here = keyOf(lineText[offset:offset + max(length, 1)])
 		if not key or not here:
 			return None
 		p = self._find(key)
 		if p < 0:
 			return None
 		q = p + len(pre)
-		res = self._span(q, q + 1)
-		if res and res[0][1]:
-			return res[0][0]
+		res = self._span(q, q + len(here))
+		if res and all(r[1] for r in res):
+			return "".join(r[0] for r in res)
 		return None
 
 	def _tokens(self, text):

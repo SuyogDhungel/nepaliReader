@@ -30,6 +30,8 @@ All notable changes to the **Nepali Reader** NVDA add-on are documented here.
 - **Character reading in PDFs**: digit and sign keys inside Preeti words (for example the 8 in चा8) now read as the letter they are (ड), matching line reading.
 - **Decimals in PDFs**: ६.)% is read ६.०% (a ")" after a digit and a point is the digit key for ०).
 - **Lone digit keys and mojibake**: a lone # ! @ $ ^ & * between Preeti words is the digit it draws (साउन # गते is साउन ३ गते), "#%" is ३%, and UTF-8 text shown through a Latin code page (à¤§à¤°...) such as a window title or address is left as it is instead of turning into Devanagari garbage.
+- **First words of a PDF**: the first line read while a PDF is still being opened was spoken from a guess (मलुकी ... संवरमा). The add-on now waits up to 3 seconds, once, for the first pages instead of guessing.
+- **Character reading of repaired PDF text**: stepping through a broken Unicode word now reads the repaired syllable for the whole unit NVDA steps over (प्रारम्िाः reads प्रा र म्भः), not a single letter picked by position.
 - **Quiet releases**: the automatic update check only notifies when the GitHub release notes contain the word [notify]. Releases without it are still found by "Check for updates...", and the next [notify] release carries every earlier fix.
 
 ## [1.1.6] - 2026-10-07
