@@ -16,6 +16,7 @@ class Sect(dict):
     def dict(self): return dict(self)
 conf={'nepaliReader':Sect(enabled=True,pdfFile=True,mode='auto',encoding='preeti',autoDetectKruti=True,useFontNames=True,repairUnicode=True,switchLanguage=True,convertSpelling=True,visualCheck=True,webFontOnly=True,lastOnMode='auto',tesseractPath='',ocrLanguages='nep+hin+eng'),'documentFormatting':Sect(reportFontName=False)}
 mod('addonHandler', initTranslation=lambda: None)
+mod('globalCommands', GlobalCommands=type('GlobalCommands',(),{'__gestures':{}}))
 mod('NVDAObjects', NVDAObject=type('NVDAObject',(),{}))
 class Spec(dict): pass
 mod('config', conf=type('C',(dict,),{'spec':Spec()})(conf))

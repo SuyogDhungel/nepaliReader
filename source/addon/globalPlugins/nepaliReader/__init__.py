@@ -1158,8 +1158,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		trail = text[len(text.rstrip()):]
 		result_text = lead + " ".join(out) + trail
 		if devanagariRepair.hasDevanagari(result_text):
-			result_text = devanagariRepair.cleanShuffled(result_text)
-			# what the PDF itself says is final: nothing downstream may "repair" it again
+			# what the PDF itself says is final: nothing downstream may "repair" it again (the
+			# pieces the index did not know were already repaired one by one above)
 			goodToks = set()
 			allGood = True
 			for pc, good in pieces:
@@ -1476,6 +1476,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 					word = w_cand.strip()
 					char_off = min(w_off, max(0, len(word) - 1))
 
+		verdict = None
 		if orig_char.isascii() and not orig_char.isspace():
 			verdict = self._lineTokenVerdict(info, c, ctx)
 			if verdict is False:
@@ -1501,27 +1502,27 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		ctxEnc = self._inContext()
 		isPdf = self._isPdfWindow(info.obj)
 		enc = ctxEnc or c["encoding"]
-		inLegacy = bool(ctxEnc or isPdf or (word and detector.looksLegacy(word, enc, context=bool(ctxEnc or isPdf))))
+		inLegacy = bool(ctxEnc or verdict is True or (word and detector.looksLegacy(word, enc, context=bool(ctxEnc or verdict is True))))
 
 		res = None
 
-		# 1. Direct glued Preeti digit key inside / next to Devanagari (e.g. बा६ -> बाट, रेक८ -> रेकड, यु४ -> युद्ध)
+		# 1. A digit is a digit. It stands for a Preeti letter (बा६ -> बाट, यु४ -> युद्ध) only where the
+		#    dictionary proves the word is that letter's word and not a word with a digit in it
 		if orig_char in devanagariRepair._GLUED_DIGIT_MAP:
-			in_deva = False
-			if word and len(word) > 1 and devanagariRepair.hasDevanagari(word):
-				p = word[char_off - 1] if char_off > 0 else ptext
-				n = word[char_off + 1] if char_off + 1 < len(word) else ntext
-				if devanagariRepair.hasDevanagari(p) or devanagariRepair.hasDevanagari(n):
-					in_deva = True
-			elif devanagariRepair.hasDevanagari(ptext) or devanagariRepair.hasDevanagari(ntext):
-				in_deva = True
-			if in_deva:
-				res = devanagariRepair._GLUED_DIGIT_MAP[orig_char]
+			if word and devanagariRepair.hasDevanagariLetters(word):
+				plan = devanagariRepair.gluedDigitPlan(word)
+				if plan and len(plan) == len(word) and 0 <= char_off < len(plan):
+					res = plan[char_off]
+				elif not orig_char.isascii():
+					res = orig_char
+			elif not orig_char.isascii():
+				res = orig_char  # a Devanagari digit among digits or punctuation
 
 		# 2. Preeti shifted number row symbols (% -> ५, ! -> १, @ -> २, etc.)
 		elif orig_char in devanagariRepair._PREETI_SHIFT_DIGIT_MAP:
-			if inLegacy or devanagariRepair.hasDevanagari(ptext) or devanagariRepair.hasDevanagari(ntext) or (word and devanagariRepair.hasDevanagari(word)):
-				res = devanagariRepair._PREETI_SHIFT_DIGIT_MAP[orig_char]
+			# only where the line reading itself turns this word into Nepali (a "!" or "%" after
+			# a Unicode word is punctuation, not a digit key)
+			res = devanagariRepair._PREETI_SHIFT_DIGIT_MAP[orig_char] if inLegacy else orig_char
 
 		# 3. Preeti colon: M -> :
 		elif orig_char == "M":
@@ -1573,8 +1574,6 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 					elif c_cur == ']' and p_cur == 'P': res = ''
 					elif c_cur == 'c' and n_cur == 'f': res = 'आ'
 					elif c_cur == 'f' and p_cur == 'c': res = ''
-					elif c_cur == 'o' and n_cur == 'f': res = 'ध'
-					elif c_cur == 'f' and p_cur == 'o': res = ''
 					elif c_cur == '|': res = '्र'
 					elif c_cur == '{': res = 'र्'
 					elif c_cur == ']': res = 'े'
@@ -1622,15 +1621,17 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				res = devanagariRepair.composeMatras(orig_char)
 
 		if res is not None:
+			# converter-internal markers must never reach the speech
+			res = res.replace("\ue001", "\u093f").replace("\ue002", "\u0930\u094d").replace("\ue003", "")
 			for idx, item in enumerate(fields):
 				if isinstance(item, str):
 					fields[idx] = res
 		return fields
 
-	def _lineTokenVerdict(self, info, c, ctx):
-		"""True if the word under `info` is converted when its line is read, False if reading the line
-		leaves it as it is (English, numbers), None if that cannot be told. Character and word
-		navigation use this so they always agree with line reading."""
+	def _lineToken(self, info, c, ctx):
+		"""(word as written, word as the line reading says it) for the word under `info`, or None
+		when that cannot be told. Character and word navigation use this so they always agree with
+		line reading."""
 		if not ctx:
 			return None
 		line, off = ctx
@@ -1652,17 +1653,24 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			orig, conv = cached
 			if orig.rstrip("\r\n") != line.rstrip("\r\n"):
 				return None
-			pos = off
 			toks = [m for m in re.finditer(r"\S+", orig)]
 			ctoks = conv.split()
 			if len(toks) != len(ctoks):
 				return None
 			for m, ct in zip(toks, ctoks):
-				if m.start() <= pos < m.end():
-					return ct != m.group(0)
+				if m.start() <= off < m.end():
+					return m.group(0), ct
 		except Exception:
 			log.debugWarning("Nepali Reader: could not decide the word for navigation", exc_info=True)
 		return None
+
+	def _lineTokenVerdict(self, info, c, ctx):
+		"""True if the word under `info` is converted when its line is read, False if reading the line
+		leaves it as it is (English, numbers), None if that cannot be told."""
+		tok = self._lineToken(info, c, ctx)
+		if tok is None:
+			return None
+		return tok[1] != tok[0]
 
 	def _wordLooksLegacy(self, word, c):
 		"""Fallback when the line cannot be examined: is this ASCII word Preeti?"""
@@ -1688,9 +1696,25 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			return self._resolveCharacter(info, formatConfig, c)
 
 		if unit == getattr(textInfos, "UNIT_WORD", "word") and rawText.strip() and rawText.isascii() and c["mode"] != "off":
-			# a word the line reading leaves as English stays English when read word by word
-			if self._lineTokenVerdict(info, c, self._lineContext(info)) is False:
-				return info.getTextWithFields(formatConfig)
+			# a word is read as the line reading reads it: English stays English, Preeti is converted
+			# (also a number such as !(*) or @)&@ that the word alone cannot show to be Preeti)
+			tok = self._lineToken(info, c, self._lineContext(info))
+			if tok is not None:
+				orig, conv = tok
+				if conv == orig:
+					return info.getTextWithFields(formatConfig)
+				if rawText.strip() == orig:
+					fields = list(info.getTextWithFields(formatConfig))
+					done = False
+					for i, f in enumerate(fields):
+						if isinstance(f, str):
+							if not done:
+								fields[i] = f.replace(orig, conv) if orig in f else conv
+								done = True
+							else:
+								fields[i] = ""
+					if done:
+						return fields
 
 		wantFont = c["useFontNames"] and c["mode"] != "off"
 		fc = formatConfig

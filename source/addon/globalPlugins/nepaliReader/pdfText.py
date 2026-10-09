@@ -37,7 +37,7 @@ NUKTA = "़"
 REPH = "र्"
 DEP_SIGNS = set("ऺऻािीुूृॄॅॆेैॉॊोौॎॏॕॖॗॢॣऀँंः़")
 INDEPENDENT = set(chr(c) for c in range(0x0904, 0x0915)) | set("ॠॡॲॳॴॵॶॷ")
-INDEX_VERSION = 16
+INDEX_VERSION = 17
 INFER = True
 
 
@@ -1396,10 +1396,10 @@ def _wordTexts(w):
 				if rep and rep != shownText:
 					return shownText, rep, None, None
 			return shownText, None, None, None
-	if isDeva(fixed) or isDeva(shownText):
-		rep = devanagariRepair.repair(fixed or shownText)
-		if rep and (rep != fixed or rep != shownText):
-			fixed = rep
+	# `fixed` is built from what the glyphs are (or from a checked dictionary word): it is exact,
+	# so it is only put into standard form, never "repaired" by guessing
+	if isDeva(fixed):
+		fixed = devanagariRepair.composeMatras(fixed)
 	# akshar of every glyph, then of every shown character
 	aks = aksharas(fixed)
 	charAk = []

@@ -22,6 +22,10 @@ All notable changes to the **Nepali Reader** NVDA add-on are documented here.
 - **1:1 Selection and Clipboard Copying Fidelity**: Guaranteed synchronized Unicode Devanagari copying (`Ctrl+C`, `Ctrl+A`) matching spoken text across browse mode and review cursors.
 - **PDF text is read exactly as written**: words rebuilt directly from the PDF (for example सुदुर, शम्शेर, वापत, शिव भक्त) are no longer "repaired" a second time by the speech filter, which had changed them (सदर, शमशेर, वापस, शिवभक्त).
 - **Preeti numbers typed with the number row** (for example `!(*)` for १९८०, `@)&*` for २०७८, `!$` for १४) are converted instead of being treated as bullets or symbols. English text such as (2024), 50% and #1 is unchanged.
+- **Digits and signs are read as shown**: reading a Devanagari number character by character (for example वि.सं. १९८०) spoke ज्ञ ढ ड instead of १ ९ ८, and a word such as ना२ख (a number plate) was rewritten as नाद्दख. A digit now becomes a letter only where the Nepali dictionary proves that the word is meant (बा६ is बाट, यु४ is युद्ध). Words on the web that end in ! or % (for example "गर्नुपर्छ!") were also changed (to गर्नुपर्छज्ञ); they are left as they are.
+- **Spellings are not "corrected"**: सुदुर is read as सुदुर (not सदर), and two real words with a space between them (प्रधान मन्त्री, चन्द्र शम्शेर) are no longer glued into one word. Words rebuilt from a PDF are not repaired a second time, so न.पा. stays न.पा.
+- **Word reading follows line reading for Preeti numbers**: a year such as @)&@ is spoken २०७२ when read word by word, as it is when read by line. A lone ( or ) between two Preeti words is the digit key and is read ९ or ०; brackets typed as - and _ and clause marks such as (क) are unchanged.
+- **Character reading**: ि is spoken as ि (an internal marker was reaching the speech), and the keys o and f in भयो (eof]) are no longer read together as ध.
 
 ## [1.1.6] - 2026-10-07
 

@@ -14,7 +14,8 @@ def check(name, got, want):
 lines = ["नेपालको सुदुर पश्चिमाञ्चल विकास क्षेत्रको डोटी",
          "चन्द्र शम्शेरले वापत एक दास शिव भक्त भनिन्थ्यो ।"]
 # repair damages these when it is allowed to guess (this is why exact text is protected)
-check('repair would change an unprotected line', DR.repair(lines[0], broken=True) != lines[0], True)
+# even without protection, a real spelling (सुदुर) and a real digit (ना२ख) are read as written
+check('repair keeps a spelling variant', DR.repair(lines[0], broken=True), lines[0])
 for l in lines: DR.markExact(l)
 for l in lines:
     check('repair leaves exact text: ' + l[:12], DR.repair(l, broken=True), l)

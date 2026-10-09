@@ -268,6 +268,11 @@ def _isWord(w):
 		return False
 
 
+def _isKeyWord(w):
+	"""A neighbouring word that is made of keys (letters), not a bracket or a bare symbol."""
+	return bool(w) and not w.isspace() and any(c.isalpha() and c.isascii() for c in w)
+
+
 def preetiFamilyToUnicode(text, font="preeti", _table=None):
 	table = _table or _PREETI_FAMILY_MAPS.get(font, PREETI_MAP)
 	if _table is None and "\xbf" in text and font in ("preeti", "kantipur", "himali", "sagarmatha", "fontasy"):
@@ -286,9 +291,14 @@ def preetiFamilyToUnicode(text, font="preeti", _table=None):
 	text = text.translate(_C1)
 	parts = re.split(r"(\s+)", text)
 	result = []
-	for word in parts:
+	for pi, word in enumerate(parts):
 		if not word or word.isspace():
 			result.append(word)
+			continue
+		# A "(" or ")" standing alone between two Preeti words is the digit key (Shift+9 = ९,
+		# Shift+0 = ०): Preeti's own brackets are the - and _ keys.
+		if word in ("(", ")") and 2 <= pi < len(parts) - 2 and _isKeyWord(parts[pi - 2]) and _isKeyWord(parts[pi + 2]):
+			result.append("\u096f" if word == "(" else "\u0966")
 			continue
 		# Standalone bullet / symbol / emoji: preserve without conversion
 		if word in BULLETS or (len(word) == 1 and word in "•●○■▪◦✓★→←–—…*+-#~※♦►") or any(ord(c) > 255 and not (0x0900 <= ord(c) <= 0x097F) and c not in table for c in word):

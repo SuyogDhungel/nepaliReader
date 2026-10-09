@@ -66,6 +66,14 @@ def hasDevanagari(text):
 	return bool(_DEVANAGARI.search(text))
 
 
+_DEVA_LETTER_ONLY = re.compile("[\u0900-\u0965\u0971-\u097f]")
+
+
+def hasDevanagariLetters(text):
+	"""Devanagari letters or signs; Devanagari digits and the danda alone do not count."""
+	return bool(_DEVA_LETTER_ONLY.search(text or ""))
+
+
 def lowWordRate(text, minWords=60, rate=0.5):
 	"""A Unicode text whose words are mostly not words at all (real text: 75-90% are words)."""
 	k, n = wordStats(text)
@@ -76,8 +84,6 @@ _HYBRID_BROKEN = re.compile(
 	r"ा[\u200b\u200c\u200d\ufeff\s]*[\]\}]|[" + _CONS + r"](?:\u094d[" + _CONS + r"])?[\u200b\u200c\u200d\ufeff\s]*[\]\}]|"
 	r"[" + _CONS + r"]\[|[" + _CONS + r"][\u00ac¬]|"
 	r"\u093e[\u200b\u200c\u200d\ufeff]*[\u0947\u0948]|"
-	r"(?:[\u0904-\u0939\u0958-\u095f\u093e-\u094d])[0-9\u0966-\u096f](?![0-9\u0966-\u096f])|"
-	r"(?<![0-9\u0966-\u096f])[0-9\u0966-\u096f](?=[\u0904-\u0939\u0958-\u095f\u093e-\u094d])|"
 	r"(?<!पु)(?<!\u0930\u094d)[" + _CONS + r"](?:[\u093e-\u094c\u0901-\u0903])?\u0930\u094d(?=\s|[।॥,.;:!?()\[\]{}\"\'\-\–\—]|$)|"
 	r"व्रम|व्रिया|व्रे|व्रा"
 )
@@ -87,7 +93,7 @@ def isBroken(text):
 	"""Fault marks that never occur in correct text: doubled vowel signs, replacement characters,
 	stray virama, symbols standing for ि. (A low share of real words is judged by the caller over
 	a whole document, see wordStats.)"""
-	return bool(_DOUBLED.search(text)) or bool(_GLUED_I.search(text)) or bool(_HYBRID_BROKEN.search(text))
+	return bool(_DOUBLED.search(text)) or bool(_GLUED_I.search(text)) or bool(_HYBRID_BROKEN.search(text)) or hasGluedDigitDamage(text)
 
 
 def repairGain(text):
@@ -160,35 +166,76 @@ _PREETI_SHIFT_DIGIT_MAP = {
 }
 _GLUED_DIGITS = r'[0-9\u0966-\u096f]'
 
+_GLUED_RE = re.compile(r'\S+')
+_MAX_GLUED = 3
+
+
+def gluedDigitPlan(word):
+	"""None, or one reading per character of `word`.
+
+	Digits typed on Preeti's number row stand for letters (6 = ट, 9 = ढ ...). A real digit
+	beside Devanagari letters ("ना२ख" on a number plate, "वर्षीय२५", "धारा ९") is a digit. So a digit
+	is read as a letter only when the word is NOT a dictionary word as written and IS one with
+	the letters in place of the digits. Nothing is guessed when the dictionary is not loaded."""
+	if not word or not neLexicon.isLoaded() or not _DIGITS.search(word):
+		return None
+	core = word.strip(_EDGE_PUNCT)
+	if not core or not _DEVANAGARI.search(core):
+		return None
+	lead = word.index(core)
+	if _known(core):
+		return None
+	cand = []
+	for k, ch in enumerate(core):
+		if ch not in _GLUED_DIGIT_MAP:
+			continue
+		prev = core[k - 1] if k else ""
+		nxt = core[k + 1] if k + 1 < len(core) else ""
+		if prev in _DIGIT_CHARS or nxt in _DIGIT_CHARS:
+			continue  # part of a number
+		if re.match(_DEVA_LETTERS, prev or " ") or re.match(_DEVA_LETTERS, nxt or " "):
+			cand.append(k)
+	if not cand or len(cand) > _MAX_GLUED:
+		return None
+	import itertools
+	for size in range(1, len(cand) + 1):
+		for pick in itertools.combinations(cand, size):
+			out = list(core)
+			for k in pick:
+				out[k] = _GLUED_DIGIT_MAP[core[k]]
+			if _known("".join(out)):
+				plan = [c for c in word[:lead]]
+				for k, ch in enumerate(core):
+					plan.append(out[k] if k in pick else ch)
+				plan.extend(word[lead + len(core):])
+				return plan
+	return None
+
+
+_DIGIT_CHARS = frozenset("0123456789\u0966\u0967\u0968\u0969\u096a\u096b\u096c\u096d\u096e\u096f")
+
+
+def hasGluedDigitDamage(text):
+	"""True when some word is a dictionary word only after a glued digit is read as its letter."""
+	for m in _GLUED_RE.finditer(text):
+		w = m.group(0)
+		if _DIGITS.search(w) and _DEVANAGARI.search(w) and gluedDigitPlan(w):
+			return True
+	return False
+
+
 def fixGluedDigits(text):
-	"""Fix Preeti digit keys mistakenly embedded inside Devanagari words without spaces."""
-	# Protect balanced parentheses e.g. (क), (१), (ङ१), (२०३०।६।४) so clause numbers are preserved
-	_p_saved = []
-	def _save_p(m):
-		_p_saved.append(m.group(0))
-		return "\ue002%d\ue003" % (len(_p_saved) - 1)
-	text = re.sub(r'\([^\r\n()]{1,60}\)', _save_p, text)
-
-	text = re.sub(
-		r'(' + _DEVA_LETTERS + r')(' + _GLUED_DIGITS + r')(?!' + _GLUED_DIGITS + r')',
-		lambda m: m.group(1) + _GLUED_DIGIT_MAP.get(m.group(2), m.group(2)),
-		text
-	)
-	text = re.sub(
-		r'(?<!' + _GLUED_DIGITS + r')(' + _GLUED_DIGITS + r')(' + _DEVA_LETTERS + r')',
-		lambda m: _GLUED_DIGIT_MAP.get(m.group(1), m.group(1)) + m.group(2),
-		text
-	)
-	# Glued Preeti shifted digits: % -> ५, ! -> १ etc. (parentheses () strictly excluded)
-	text = re.sub(
-		r'(' + _DEVA_LETTERS + r')([!@#$%^&*])(?!\S*[/0-9])',
-		lambda m: m.group(1) + _PREETI_SHIFT_DIGIT_MAP.get(m.group(2), m.group(2)),
-		text
-	)
-
-	for _idx, _orig in enumerate(_p_saved):
-		text = text.replace("\ue002%d\ue003" % _idx, _orig)
-	return text
+	"""Fix Preeti digit keys left inside Devanagari words. Only where the dictionary proves it
+	(see gluedDigitPlan); real digits, numbers, brackets and signs such as ! or % are never touched."""
+	if not _DIGITS.search(text) or not neLexicon.isLoaded():
+		return text
+	def fix(m):
+		w = m.group(0)
+		if not (_DIGITS.search(w) and _DEVANAGARI.search(w)):
+			return w
+		plan = gluedDigitPlan(w)
+		return "".join(plan) if plan else w
+	return _GLUED_RE.sub(fix, text)
 
 _BOUNDARY_OR_SFX = r'(?=\s|[।॥,.;:!?()\[\]{}"\'\-\–\—]|$|का|को|की|मा|ले|लाई|बाट|देखि|हरू|सँग)'
 _PAT_TRAILING_REPH = re.compile(r'(?<!\u0930\u094d)([' + _CONS + r'](?:[\u093e-\u094c\u0901-\u0903])?)\u0930\u094d' + _BOUNDARY_OR_SFX)
@@ -518,12 +565,46 @@ def isExact(text):
 	return seen
 
 
+def _aroundExact(text, fn):
+	"""When some words of `text` are exact (see markExact), repair only the stretches between them.
+	None when no word is exact."""
+	if not _EXACT:
+		return None
+	toks = re.split(r"(\s+)", text)
+	flags = [bool(t) and not t.isspace() and bool(_DEVANAGARI.search(t)) and (t in _EXACT or t.strip(_EXACT_STRIP) in _EXACT) for t in toks]
+	if not any(flags):
+		return None
+	out = []
+	run = []
+	def flush():
+		if run:
+			chunk = "".join(run)
+			core = chunk.strip()
+			if core:
+				lead = chunk[:len(chunk) - len(chunk.lstrip())]
+				trail = chunk[len(chunk.rstrip()):]
+				chunk = lead + fn(core) + trail
+			out.append(chunk)
+			del run[:]
+	for t, f in zip(toks, flags):
+		if f:
+			flush()
+			out.append(t)
+		else:
+			run.append(t)
+	flush()
+	return "".join(out)
+
+
 def cleanShuffled(text):
 	"""Fixes viewer / PDFium artifacts: leaked syllables, OCR misrecognitions, and fake-bold repeats."""
 	if not _DEVANAGARI.search(text):
 		return text
 	if isExact(text):
 		return text
+	mixed = _aroundExact(text, cleanShuffled)
+	if mixed is not None:
+		return mixed
 	# (repeated words are NOT removed here: "जय जय", "बिस्तारै बिस्तारै" are real; text a PDF
 	#  draws twice is removed by the PDF engine, which knows what the document contains)
 
@@ -730,6 +811,9 @@ def repair(text, broken=None):
 		return text
 	if isExact(text):
 		return text
+	mixed = _aroundExact(text, lambda t: repair(t, broken))
+	if mixed is not None:
+		return mixed
 	if broken is None:
 		broken = isBroken(text)
 	text = cleanShuffled(text)
@@ -790,6 +874,8 @@ def _fixWord(w):
 		return w if _known(w) else None  # numbers are never "repaired"
 	if _known(w):
 		return w
+	if isSpellingVariant(w):
+		return w  # सुदुर is not damaged सदर
 	if len(w) < 3 or len(w) > 30:
 		return None
 	if w in _fixCache:
@@ -886,12 +972,34 @@ def _readings(core, allowSwaps=True):
 	return r
 
 
+_VARIANT_PAIRS = (("\u093f", "\u0940"), ("\u0941", "\u0942"), ("\u0902", "\u0901"))
+
+
+def isSpellingVariant(w):
+	"""True if `w` is not a dictionary word but differs from one only in a short / long vowel sign
+	(ि ी, ु ू) or ं ँ. "सुदुर" for "सुदूर" is a spelling the writer chose, not damage."""
+	if not neLexicon.isLoaded() or not w or len(w) < 3:
+		return False
+	for a, b in _VARIANT_PAIRS:
+		for x, y in ((a, b), (b, a)):
+			if x not in w:
+				continue
+			if _known(w.replace(x, y)):
+				return True
+			for i, ch in enumerate(w):
+				if ch == x and _known(w[:i] + y + w[i + 1:]):
+					return True
+	return False
+
+
 def _readingsUncached(core, allowSwaps):
 	found = []
 	seen = set()
 	stripped = core.lstrip("".join(_SIGN_CHARS) + "\u094d")
 	if _known(core):
 		return core  # a real word is never changed
+	if isSpellingVariant(core) and not _DOUBLED.search(core) and not _GLUED_I.search(core):
+		return core  # the writer's own spelling of a real word: read as written
 	decoded = _decodeWord(core) if _DOC_SWAPS else None
 	if decoded:
 		return decoded  # this document's own pattern explains the word
@@ -910,6 +1018,13 @@ def _readingsUncached(core, allowSwaps):
 	return max(found, key=len)
 
 
+def _isRealPiece(piece):
+	core = _edges(piece)[1]
+	if not core or not _DEVANAGARI.search(core):
+		return True
+	return _known(core) or isSpellingVariant(core) or bool(_DIGITS.search(core))
+
+
 def _bestForm(pieces):
 	"""(score, text) for one group of pieces read as one word."""
 	g = _groupWord(pieces)
@@ -923,6 +1038,8 @@ def _bestForm(pieces):
 		return (-1.0, pieces[0])  # a vowel sign on its own: belongs to a neighbour
 	penalty = JOIN_COST * (len(pieces) - 1)
 	forced = len(pieces) > 1 and _CANNOT_START.match(_edges(pieces[1])[1] or " ")
+	if len(pieces) > 1 and not forced and all(_isRealPiece(p) for p in pieces):
+		return None  # every piece is already a word (or a spelling of one): the space is real
 	if forced:
 		penalty = -0.5  # the second piece cannot begin a word: joining is certainly right
 	best = None
