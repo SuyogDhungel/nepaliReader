@@ -20,6 +20,8 @@ All notable changes to the **Nepali Reader** NVDA add-on are documented here.
 - **Many Preeti Reading & Pronunciation Fixes**: Resolved orthographic syllable parsing and ligatures for complex Nepali clusters and vowel combinations.
 - **Literal Number & Clause Integrity**: Eliminated speculative word substitutions at sentence boundaries; genuine digits (`५` / `5`), numbered clauses, and legal section references remain intact as numbers without false-positive alterations.
 - **1:1 Selection and Clipboard Copying Fidelity**: Guaranteed synchronized Unicode Devanagari copying (`Ctrl+C`, `Ctrl+A`) matching spoken text across browse mode and review cursors.
+- **PDF text is read exactly as written**: words rebuilt directly from the PDF (for example सुदुर, शम्शेर, वापत, शिव भक्त) are no longer "repaired" a second time by the speech filter, which had changed them (सदर, शमशेर, वापस, शिवभक्त).
+- **Preeti numbers typed with the number row** (for example `!(*)` for १९८०, `@)&*` for २०७८, `!$` for १४) are converted instead of being treated as bullets or symbols. English text such as (2024), 50% and #1 is unchanged.
 
 ## [1.1.6] - 2026-10-07
 

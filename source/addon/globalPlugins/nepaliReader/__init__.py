@@ -1159,6 +1159,17 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		result_text = lead + " ".join(out) + trail
 		if devanagariRepair.hasDevanagari(result_text):
 			result_text = devanagariRepair.cleanShuffled(result_text)
+			# what the PDF itself says is final: nothing downstream may "repair" it again
+			goodToks = set()
+			allGood = True
+			for pc, good in pieces:
+				if not pc:
+					continue
+				if good:
+					goodToks.update(pc.split())
+				else:
+					allGood = False
+			devanagariRepair.markExact(" ".join(t for t in result_text.split() if allGood or t in goodToks))
 		return result_text
 
 

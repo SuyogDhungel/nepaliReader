@@ -230,6 +230,8 @@ def decide(text, encoding="preeti", context=False):
 		core = _core(t)
 		if not t or t.isspace() or any("\u0900" <= c <= "\u097f" for c in t):
 			result.append((t, False))
+		elif isPreetiSymbolNumber(t) and (wholeLine or legacy > 0):
+			result.append((t, True))
 		elif isNonLegacySymbolOrEmoji(t) or isNonLegacySymbolOrEmoji(core):
 			result.append((t, False))
 		elif _NUM_TOKEN.match(core) or _NUM_TOKEN.match(t):
@@ -250,6 +252,7 @@ def decide(text, encoding="preeti", context=False):
 			isBulletPrefix = (bool(re.match(r"^9[a-zA-Z]+0$", t)) or bool(_PREETI_LIST_TOKEN.match(t)) or (len(core) == 1 and core.islower() and (t[-1:] in "_).-/" or t[:1] in "([") and legacy > 0))
 			result.append((t, bool(
 				isBulletPrefix
+				or (legacy > 0 and isPreetiSymbolNumber(t))
 				or (sc is not None and (
 					(legacy > english and _strongAlone(t, sc, encoding))
 					or (sc >= MIXED_WORD and len(_core(t)) >= 3 and not isEnglishWord(_core(t))
@@ -305,6 +308,21 @@ paragraph|page|end of document|top|bottom|bold|italic|underline|not bold|not ita
 
 
 _NUM_TOKEN = re.compile(r"^[\$€₹#№]?\d+(?:[.,/:\-]\d+)*[%°]?$")
+# digits typed on Preeti's shifted number row: !(*) = १९८०, @)&* = २०७८ (a bracket pair around
+# symbols, as in (!) or (@), is a clause marker and is left to the converter)
+_PREETI_SYMNUM = re.compile(r"^[!@#$%^&*()]{2,}[.,]?$")
+
+
+def isPreetiSymbolNumber(t):
+	core = (t or "").strip()
+	if not _PREETI_SYMNUM.match(core):
+		return False
+	body = core.rstrip(".,")
+	if body[0] == "(" and body[-1] == ")":
+		return False
+	return True
+
+
 _PREETI_LIST_TOKEN = re.compile(r"^(?:[svu3ª][_\-]|[\(\[]?[svu3ª][\)\]./\-_]|9[svu3ª]0)$")
 _STANDALONE_BULLET = frozenset("•●○■▪◦✓★→←–—…*+-#~※♦►")
 
@@ -320,7 +338,7 @@ def forceDecide(text, protectEnglish=True):
 			out.append((t, False))
 			continue
 		core = _core(t)
-		if _PREETI_LIST_TOKEN.match(t):
+		if _PREETI_LIST_TOKEN.match(t) or isPreetiSymbolNumber(t):
 			out.append((t, True))
 			continue
 		if isNonLegacySymbolOrEmoji(t) or isNonLegacySymbolOrEmoji(core) or t in _STANDALONE_BULLET or core in _STANDALONE_BULLET:

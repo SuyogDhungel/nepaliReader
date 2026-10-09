@@ -486,9 +486,43 @@ def normalizeFilenameSlugs(text):
 	return ''.join(out)
 
 
+_EXACT = {}
+_EXACT_MAX = 400000
+_EXACT_STRIP = ".,;:!?()[]{}\"'‘’“”-–—।॥|/"
+
+
+def markExact(text):
+	"""Words rebuilt exactly from the document's own glyphs. They are final: no repair, clean-up or
+	guess may change them afterwards (it turned सुदुर into सदर and शम्शेर into शमशेर)."""
+	if not text:
+		return
+	if len(_EXACT) > _EXACT_MAX:
+		_EXACT.clear()
+	for tok in text.split():
+		if _DEVANAGARI.search(tok):
+			_EXACT[tok] = True
+			_EXACT[tok.strip(_EXACT_STRIP)] = True
+
+
+def isExact(text):
+	"""True when every Devanagari word of `text` was marked exact."""
+	if not _EXACT:
+		return False
+	seen = False
+	for tok in text.split():
+		if not _DEVANAGARI.search(tok):
+			continue
+		seen = True
+		if tok not in _EXACT and tok.strip(_EXACT_STRIP) not in _EXACT:
+			return False
+	return seen
+
+
 def cleanShuffled(text):
 	"""Fixes viewer / PDFium artifacts: leaked syllables, OCR misrecognitions, and fake-bold repeats."""
 	if not _DEVANAGARI.search(text):
+		return text
+	if isExact(text):
 		return text
 	# (repeated words are NOT removed here: "जय जय", "बिस्तारै बिस्तारै" are real; text a PDF
 	#  draws twice is removed by the PDF engine, which knows what the document contains)
@@ -693,6 +727,8 @@ def repair(text, broken=None):
 	"""Repair `text`. `broken`: True when the document is already known to have a broken
 	text layer (the caller remembers this per window); None = decide from this text."""
 	if not _DEVANAGARI.search(text):
+		return text
+	if isExact(text):
 		return text
 	if broken is None:
 		broken = isBroken(text)
