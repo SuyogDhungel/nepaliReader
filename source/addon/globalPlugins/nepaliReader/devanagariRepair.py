@@ -1686,3 +1686,53 @@ def finalClean(fixed, isWord=None):
 						out = out.replace(core, cand, 1)
 						break
 	return out if out != fixed else None
+
+
+# ---------------------------------------------------------------------------
+# Devanagari file names / titles shown as mojibake (UTF-8 bytes read as Windows-1252):
+# "à¤§à¤°à¥_à¤®" is धर्म. Bytes that Windows-1252 has no character for (0x81 0x8D 0x8F 0x90 0x9D)
+# are lost and shown as "_"; such a letter is filled in only where exactly one choice makes a
+# dictionary word, otherwise the word is left as it is.
+# ---------------------------------------------------------------------------
+
+_CP1252_TAIL = {}
+for _b in range(0x80, 0xC0):
+	try:
+		_CP1252_TAIL[bytes([_b]).decode("cp1252")] = _b
+	except UnicodeDecodeError:
+		pass
+_MOJI_RUN = re.compile("(?:\u00e0[\u00a4\u00a5][" + re.escape("".join(_CP1252_TAIL)) + "_])+")
+_LOST_BYTES = (0x81, 0x8D, 0x8F, 0x90, 0x9D)
+
+
+def decodeMojibake(text):
+	"""Devanagari read back from UTF-8 shown as Windows-1252 (see above), or `text` unchanged."""
+	if not text or "\u00e0" not in text:
+		return text
+
+	def run(m):
+		s = m.group(0)
+		chars = []
+		lost = []
+		for i in range(0, len(s), 3):
+			b2 = 0xA4 if s[i + 1] == "\u00a4" else 0xA5
+			b3 = _CP1252_TAIL.get(s[i + 2])
+			if b3 is None:
+				chars.append(None)
+				lost.append(b2)
+			else:
+				chars.append(bytes([0xE0, b2, b3]).decode("utf-8"))
+		if not lost:
+			return "".join(chars)
+		if len(lost) > 3 or not neLexicon.isLoaded():
+			return s
+		import itertools
+		found = set()
+		for combo in itertools.product(*[[bytes([0xE0, b2, b]).decode("utf-8") for b in _LOST_BYTES] for b2 in lost]):
+			it = iter(combo)
+			cand = "".join(c if c is not None else next(it) for c in chars)
+			if _known(cand):
+				found.add(cand)
+		return found.pop() if len(found) == 1 else s
+
+	return _MOJI_RUN.sub(run, text)

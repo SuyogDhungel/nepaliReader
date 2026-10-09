@@ -94,9 +94,15 @@ WEB_APPS = {
 	"chrome", "msedge", "firefox", "brave", "opera", "vivaldi", "iexplore", "msedgewebview2",
 	"whatsapp", "whatsapp.root", "discord", "telegram", "slack", "ms-teams", "teams", "messenger",
 	"signal", "viber", "skype", "zoom",
+	# other Chromium / Firefox browsers
+	"chromium", "thorium", "yandex", "arc", "duckduckgo", "librewolf", "waterfox", "floorp", "zen",
+	"palemoon", "maxthon",
 }
 
-PDF_APPS = {"acrord32", "acrobat", "foxitreader", "foxitpdfreader", "foxitphantompdf", "sumatrapdf", "pdfxedit", "nitropdf"}
+PDF_APPS = {
+	"acrord32", "acrord64", "acrobat", "foxitreader", "foxitpdfreader", "foxitpdfeditor", "foxitphantompdf",
+	"sumatrapdf", "pdfxedit", "pdfxcview", "nitropdf", "nitropdfreader", "pdfelement", "pdfgear", "drawboardpdf",
+}
 
 # Unicode Devanagari fonts: text in these is real Unicode (or plain English), never legacy
 UNICODE_DEVANAGARI_FONTS = (
@@ -279,7 +285,8 @@ class _ConvertingTextInfo:
 
 
 class _PlainTextInfo:
-	"""Wraps a TextInfo for speaking selections: .text gives the real (converted) text."""
+	"""Wraps a TextInfo for speaking selections: .text gives the real (converted) text, as reading
+	says it (a character as character reading, a word as word reading)."""
 
 	def __init__(self, info, plugin):
 		self.__dict__["_nrInfo"] = info
@@ -299,7 +306,7 @@ class _PlainTextInfo:
 		raw = info.text
 		if not raw or len(raw) > 5000:
 			return raw  # a very large selection is announced as it is (fast)
-		return self.__dict__["_nrPlugin"]._plainText(info)
+		return self.__dict__["_nrPlugin"]._selectionText(info)
 
 	def getTextWithFields(self, formatConfig=None):
 		if not isOn():
@@ -347,6 +354,21 @@ def _unwrap(info):
 	while isinstance(info, (_PlainTextInfo, _ConvertingTextInfo)):
 		info = info.__dict__["_nrInfo"]
 	return info
+
+
+_PLAIN_NUMBER = re.compile(r"^[/(]?[0-9]+(?:[.,:/\-][0-9]+)*[%)]?$|^[/(]?[0-9]*[.,/][0-9]+[%)]?$")
+
+_OWN_COPY = [False]
+
+
+def _ownCopy(text, notify=False):
+	"""Puts text the add-on has already made right on the clipboard: the api.copyToClip hook
+	passes it through untouched (looking it up or converting it a second time could change it)."""
+	_OWN_COPY[0] = True
+	try:
+		return api.copyToClip(text, notify=notify)
+	finally:
+		_OWN_COPY[0] = False
 
 
 def _formatCopy(formatConfig=None):
@@ -424,6 +446,8 @@ class _NepaliNormalizedObject(NVDAObjects.NVDAObject):
 				orig = None
 		if not orig or not isOn():
 			return orig
+		if "\u00e0" in orig:
+			orig = devanagariRepair.decodeMojibake(orig)
 		if devanagariRepair.hasDevanagari(orig):
 			return devanagariRepair.cleanShuffled(orig)
 		return orig
@@ -561,6 +585,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
 	def terminate(self):
 		self._unpatch()
+		try:
+			multilangIntegration.uninstall()
+		except Exception:
+			pass
 		self._removeMenu()
 		try:
 			NVDASettingsDialog.categoryClasses.remove(NepaliReaderSettingsPanel)
@@ -766,6 +794,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			if not item or item.isspace():
 				out.append(item)
 				continue
+			if "\u00e0" in item:
+				item = devanagariRepair.decodeMojibake(item)  # a Devanagari file name shown as à¤§à¤°...
 			text = item
 			# If it looks like legacy text (e.g. repeated table headers, cell labels, selection)
 			try:
@@ -775,7 +805,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				isPdf = False
 			inCtx = bool(ctxEnc or isPdf)
 			if mode != "off":
-				if len(text.strip()) <= 4 and (inCtx or not self._docState().isUnicodeDocument) and not detector.isEnglishWord(detector._core(text).lower()):
+				# a short piece (a table header, a cell) only in a Preeti document or a PDF, and never a
+				# plain number or page count ("/14", "100%", "1.5" are what they say)
+				if (len(text.strip()) <= 4 and inCtx and not _PLAIN_NUMBER.match(text.strip())
+						and not detector.isEnglishWord(detector._core(text).lower())):
 					conv_short = legacyFonts.convert(text.strip(), defaultEnc)
 					if conv_short and (devanagariRepair.hasDevanagari(conv_short) or conv_short in (":", "५", "१", "२", "३", "४", "६", "७", "८", "९", "०")):
 						if (neLexicon.isLoaded() and neLexicon.isWord(conv_short.strip(".,:;!?()[]{}"))) or any(ch in "!@#$%^&*()+=~`_{}[]\\|/<>?;'-" for ch in text) or conv_short in (":", "५", "१", "२", "३", "४", "६", "७", "८", "९", "०"):
@@ -824,16 +857,16 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 						# the PDF's own text: nothing may "repair" it a second time
 						diag.write("copy (pdf) %r -> %r" % (raw[:80], (central or "")[:80]))
 						if central != raw:
-							return api.copyToClip(textInfos.convertToCrlf(central), notify)
+							return _ownCopy(textInfos.convertToCrlf(central), notify)
 						return origCopy(_unwrap(info), notify)
 					if devanagariRepair.hasDevanagari(target):
 						cleaned = devanagariRepair.cleanShuffled(target)
 						if plugin._isPdfWindow(info.obj) or devanagariRepair.isBroken(target) or plugin._isBrokenDoc():
 							cleaned = devanagariRepair.repair(cleaned, broken=True)
 						if cleaned and cleaned != raw:
-							return api.copyToClip(textInfos.convertToCrlf(cleaned), notify)
+							return _ownCopy(textInfos.convertToCrlf(cleaned), notify)
 					elif text and text != raw:
-						return api.copyToClip(textInfos.convertToCrlf(text), notify)
+						return _ownCopy(textInfos.convertToCrlf(text), notify)
 			except Exception:
 				log.debugWarning("Nepali Reader: copy failed", exc_info=True)
 			return origCopy(_unwrap(info), notify)
@@ -857,7 +890,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 							if central is not None:
 								diag.write("copy (pdf cursor) %r -> %r" % (raw[:80], (central or "")[:80]))
 								if central != raw:
-									api.copyToClip(textInfos.convertToCrlf(central), notify=True)
+									_ownCopy(textInfos.convertToCrlf(central), notify=True)
 									return
 								return origCursorCopy(mgr, gesture)
 							if devanagariRepair.hasDevanagari(target):
@@ -865,7 +898,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 								if plugin._isPdfWindow(mgr) or devanagariRepair.isBroken(target) or plugin._isBrokenDoc():
 									cleaned = devanagariRepair.repair(cleaned, broken=True)
 								if cleaned and cleaned != raw:
-									api.copyToClip(textInfos.convertToCrlf(cleaned), notify=True)
+									_ownCopy(textInfos.convertToCrlf(cleaned), notify=True)
 									return
 							if not text or text == raw:
 								c = conf()
@@ -879,7 +912,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 								if c["repairUnicode"] and text and devanagariRepair.hasDevanagari(text):
 									text = devanagariRepair.repair(text, broken=True if (plugin._isPdfWindow(mgr) or plugin._isBrokenDoc()) else None)
 							if text and text != raw:
-								api.copyToClip(textInfos.convertToCrlf(text), notify=True)
+								_ownCopy(textInfos.convertToCrlf(text), notify=True)
 								return
 					except Exception:
 						log.debugWarning("Nepali Reader: cursor copy failed", exc_info=True)
@@ -895,7 +928,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
 			def copyToClip(text, notify=False):
 				try:
-					if isOn() and isinstance(text, str) and text:
+					if isOn() and not _OWN_COPY[0] and isinstance(text, str) and text:
 						viaIndex = plugin._pdfTextOfString(text)
 						if viaIndex is not None:
 							text = viaIndex.replace("\r\n", "\n").replace("\n", "\r\n") if "\n" in viaIndex else viaIndex
@@ -905,8 +938,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 								cleaned = devanagariRepair.repair(cleaned, broken=True)
 							if cleaned:
 								text = cleaned
-						elif conf()["mode"] != "off" and detector.looksLegacy(text, "preeti"):
-							conv = detector.convertMixed(text, legacyFonts.preetiFamilyToUnicode)
+						elif conf()["mode"] != "off" and plugin._inContext() and detector.looksLegacy(text, plugin._inContext(), context=True):
+							# (only in a Preeti document: other add-ons copy all kinds of text)
+							enc = plugin._inContext()
+							conv = detector.convertMixed(text, lambda t: legacyFonts.convert(t, enc) or t, encoding=enc, context=True)
 							if conv:
 								text = conv
 				except Exception:
@@ -924,77 +959,16 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			origSel = speechModule.speakSelectionChange
 
 			def speakSelectionChange(oldInfo, newInfo, speakSelected=True, speakUnselected=True, generalize=False, priority=None, *args, **kwargs):
+				rawOld, rawNew = _unwrap(oldInfo), _unwrap(newInfo)
 				if not isOn():
-					return origSel(_unwrap(oldInfo), _unwrap(newInfo), speakSelected, speakUnselected, generalize, priority, *args, **kwargs)
-				diag.write("selection change")
+					return origSel(rawOld, rawNew, speakSelected, speakUnselected, generalize, priority, *args, **kwargs)
+				# NVDA's own selection speech (selected / unselected / selected instead, a single
+				# character spelled), with every piece's text taken from the real text
 				try:
-					rawOld = _unwrap(oldInfo)
-					rawNew = _unwrap(newInfo)
-					if rawNew.isCollapsed and rawOld.isCollapsed:
-						return
-					startToStart = rawNew.compareEndPoints(rawOld, "startToStart")
-					startToEnd = rawNew.compareEndPoints(rawOld, "startToEnd")
-					endToStart = rawNew.compareEndPoints(rawOld, "endToStart")
-					endToEnd = rawNew.compareEndPoints(rawOld, "endToEnd")
-					selectedList = []
-					unselectedList = []
-
-					if speakSelected and rawOld.isCollapsed:
-						selectedList.append(rawNew.copy())
-					elif speakUnselected and rawNew.isCollapsed:
-						unselectedList.append(rawOld.copy())
-					else:
-						if startToEnd > 0 or endToStart < 0:
-							if speakSelected and not rawNew.isCollapsed:
-								selectedList.append(rawNew.copy())
-							if speakUnselected and not rawOld.isCollapsed:
-								unselectedList.append(rawOld.copy())
-						else:
-							if speakSelected and startToStart < 0 and not rawNew.isCollapsed:
-								tempInfo = rawNew.copy()
-								tempInfo.setEndPoint(rawOld, "endToStart")
-								selectedList.append(tempInfo)
-							if speakSelected and endToEnd > 0 and not rawNew.isCollapsed:
-								tempInfo = rawNew.copy()
-								tempInfo.setEndPoint(rawOld, "startToEnd")
-								selectedList.append(tempInfo)
-							if speakUnselected and startToStart > 0 and not rawOld.isCollapsed:
-								tempInfo = rawOld.copy()
-								tempInfo.setEndPoint(rawNew, "endToStart")
-								unselectedList.append(tempInfo)
-							if speakUnselected and endToEnd < 0 and not rawOld.isCollapsed:
-								tempInfo = rawOld.copy()
-								tempInfo.setEndPoint(rawNew, "startToEnd")
-								unselectedList.append(tempInfo)
-
-					parts = []
-					changed = False
-					for tInfo, isSel in [(t, True) for t in selectedList] + [(t, False) for t in unselectedList]:
-						if tInfo is None or tInfo.isCollapsed:
-							continue
-						raw = tInfo.text or ""
-						if not raw:
-							continue
-						conv = plugin._selectionText(tInfo)
-						if conv and conv != raw:
-							changed = True
-						parts.append((conv or raw, isSel))
-					hasSpoken = False
-					if changed:
-						from speech.commands import LangChangeCommand
-						for text, isSel in parts:
-							seq = [LangChangeCommand("ne"), text, LangChangeCommand(None)]
-							if isSel:
-								speechModule.speakTextSelected(seq, priority=priority)
-							else:
-								speechModule.speakSelectionMessage(_("%s unselected"), seq, priority=priority)
-							hasSpoken = True
-
-					if hasSpoken:
-						return
+					return origSel(_PlainTextInfo(rawOld, plugin), _PlainTextInfo(rawNew, plugin), speakSelected, speakUnselected, generalize, priority, *args, **kwargs)
 				except Exception:
-					log.debugWarning("Nepali Reader: speakSelectionChange hook error", exc_info=True)
-				return origSel(_unwrap(oldInfo), _unwrap(newInfo), speakSelected, speakUnselected, generalize, priority, *args, **kwargs)
+					diag.exception("selection speech")
+				return origSel(rawOld, rawNew, speakSelected, speakUnselected, generalize, priority, *args, **kwargs)
 
 			speechModule.speakSelectionChange = speakSelectionChange
 			self._patched2.append((speechModule, "speakSelectionChange", origSel, speakSelectionChange))
@@ -1578,29 +1552,47 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			fg = api.getForegroundObject()
 			rawTitle = (fg.name if fg else "") or ""
 			title = rawTitle.lower()
-			if ".pdf" in title:
-				return True
 			if app not in WEB_APPS:
-				return False
-			# a browser tab whose title is the PDF's own title: look at the document address
+				return ".pdf" in title
+			# a browser: decided once per tab and title (answers that say "no" are asked again after
+			# a few seconds, while a PDF may still be loading)
 			key = (fg.windowHandle if fg else None, title)
 			if not hasattr(self, "_pdfTabs"):
 				self._pdfTabs = _LRU(100)
+			now = time.monotonic()
 			cached = self._pdfTabs.get_(key)
-			if cached is None:
-				from . import pdfLocate
-				url = (pdfLocate._urlFromObject(obj) or "").lower()
-				cached = pdfLocate._isPdfUrl(url)
-				if not cached:
-					cached = self._isPdfViewerObj(obj)
-				if not cached and not url:
-					# (a page whose address is known and is not a PDF is never one)
-					cached = bool(pdfLocate.findFromTitle(rawTitle, getattr(fg, "processID", None)))
-				if cached:
-					self._pdfTabs.put(key, True)
-			return cached
+			if cached is not None and (cached[0] or now < cached[1]):
+				return cached[0]
+			from . import pdfLocate
+			url = (pdfLocate._urlFromObject(obj) or "").lower()
+			if url:
+				# the address decides: a web page whose title mentions a .pdf is not a PDF
+				res = pdfLocate._isPdfUrl(url) or self._isPdfViewerObj(obj)
+			else:
+				res = ".pdf" in title or self._isPdfViewerObj(obj)
+				if not res and not (cached is not None and cached[2]):
+					# last resort, from the title alone: it may search folders and read files, so it
+					# runs in the background and never holds up speech
+					self._lookUpTitleLater(key, rawTitle, getattr(fg, "processID", None))
+			self._pdfTabs.put(key, (res, now + 5.0, True))
+			return res
 		except Exception:
 			return False
+
+	def _lookUpTitleLater(self, key, title, pid):
+		from . import pdfLocate
+
+		def work():
+			try:
+				found = pdfLocate.findFromTitle(title, pid)
+			except Exception:
+				found = None
+			if found:
+				self._pdfTabs.put(key, (True, 0.0, True))
+				self._pdfMemo = None
+				diag.write("pdf window from its title: %r -> %r" % (title, found))
+
+		threading.Thread(target=work, name="NepaliReaderPdfTitle", daemon=True).start()
 
 	@staticmethod
 	def _isPdfViewerObj(obj):
@@ -2120,6 +2112,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		unicodeFont = False
 		for i, item in enumerate(fields):
 			if isinstance(item, str):
+				if item and "\u00e0" in item:
+					dec = devanagariRepair.decodeMojibake(item)
+					if dec != item:
+						fields[i] = item = dec
 				if item:
 					runs.append((i, item, "unicode" if unicodeFont else fontKnown, curEnc))
 			elif isinstance(item, textInfos.FieldCommand) and item.command == "formatChange":
@@ -2533,7 +2529,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				if self._isPdfWindow(src) or devanagariRepair.isBroken(target) or self._isBrokenDoc():
 					cleaned = devanagariRepair.repair(cleaned, broken=True)
 				if cleaned and cleaned != raw:
-					api.copyToClip(textInfos.convertToCrlf(cleaned), notify=True)
+					_ownCopy(textInfos.convertToCrlf(cleaned), notify=True)
 					return
 			if not new or new == raw:
 				c = conf()
@@ -2547,7 +2543,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				if c["repairUnicode"] and new and devanagariRepair.hasDevanagari(new):
 					new = devanagariRepair.repair(new, broken=True if (self._isPdfWindow(src) or self._isBrokenDoc()) else None)
 			if new and new != raw:
-				api.copyToClip(textInfos.convertToCrlf(new), notify=True)
+				_ownCopy(textInfos.convertToCrlf(new), notify=True)
 				return
 		gesture.send()
 		if focus is not None:
@@ -2573,12 +2569,16 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				if self._isPdfWindow(src) or devanagariRepair.isBroken(clip) or self._isBrokenDoc():
 					cleaned = devanagariRepair.repair(cleaned, broken=True)
 				if cleaned and cleaned != clip:
-					api.copyToClip(textInfos.convertToCrlf(cleaned))
+					_ownCopy(textInfos.convertToCrlf(cleaned))
 					return
-			if conf()["mode"] != "off" and detector.looksLegacy(clip, "preeti"):
-				conv = detector.convertMixed(clip, legacyFonts.preetiFamilyToUnicode)
+			# what another program copied is changed only in a Preeti document or a PDF (never a
+			# password, a code or an English text that merely looks like keys)
+			ctxEnc = self._inContext()
+			if conf()["mode"] != "off" and (ctxEnc or self._isPdfWindow(src)) and detector.looksLegacy(clip, ctxEnc or "preeti", context=True):
+				enc = ctxEnc or conf()["encoding"]
+				conv = detector.convertMixed(clip, lambda t: legacyFonts.convert(t, enc) or t, encoding=enc, context=True)
 				if conv and conv != clip:
-					api.copyToClip(textInfos.convertToCrlf(conv))
+					_ownCopy(textInfos.convertToCrlf(conv))
 		except Exception:
 			log.debugWarning("Nepali Reader: could not fix the copied text", exc_info=True)
 
@@ -2652,7 +2652,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		elif any(ch.isascii() and ch.isalpha() for ch in result):
 			# the user explicitly asked: convert everything except URLs and NVDA words
 			result = detector.convertTokens(detector.forceDecide(result), lambda s: legacyFonts.convert(s, encoding) or s)
-		api.copyToClip(result)
+		_ownCopy(result)
 		ui.message(result)
 
 	@script(

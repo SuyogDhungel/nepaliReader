@@ -101,5 +101,11 @@ for t in ['निर्माण कार्य', 'शर्मा र का�
 for t, want in [('पाठ्यव्रम', 'पाठ्यक्रम'), ('गनर्', 'गर्न'), ('प्राधिcकरण', 'प्राधिकरण'), ('गाउँपा)लका', 'गाउँपालिका'),
 		('जोखि8म', 'जोखिम'), ('रेकडर्', 'रेकर्ड'), ('सं&ा', 'संा')]:
 	check('broken repaired: ' + t, DR.repair(t, broken=True), want)
+
+# Devanagari file names shown as mojibake (UTF-8 read as Windows-1252)
+check('mojibake title', DR.decodeMojibake('à¤¨à¥‡à¤ªà¤¾à¤² à¤°à¤¾à¤·à¥_à¤Ÿà¥_à¤°.pdf'), 'नेपाल राष्ट्र.pdf')
+check('mojibake lost byte proven', DR.decodeMojibake('1632_à¤§à¤°à¥_à¤® x'), '1632_धर्म x')
+check('mojibake lost byte unproven stays', DR.decodeMojibake('à¤¸à¤¸à¥_à¤_à¥_à¤¤'), 'à¤¸à¤¸à¥_à¤_à¥_à¤¤')
+check('French stays', DR.decodeMojibake('café à la carte'), 'café à la carte')
 print('FAILED' if bad else 'ALL OK', bad)
 sys.exit(1 if bad else 0)

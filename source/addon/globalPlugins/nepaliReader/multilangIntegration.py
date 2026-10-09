@@ -138,6 +138,24 @@ def _active():
 		return True
 
 
+_restore = []
+
+
+def uninstall():
+	"""Puts MultiLang back as it was (the add-on is being turned off or removed)."""
+	global _installed, _orig_addDetectedLanguageCommands, _orig_getSynth
+	while _restore:
+		owner, name, orig, new = _restore.pop()
+		try:
+			if getattr(owner, name, None) is new:
+				setattr(owner, name, orig)
+		except Exception:
+			pass
+	_installed = False
+	_orig_addDetectedLanguageCommands = None
+	_orig_getSynth = None
+
+
 def install():
 	"""Hooks MultiLang if installed or active so Nepali language and TTS voices are properly handled."""
 	global _installed, _orig_addDetectedLanguageCommands, _orig_getSynth
@@ -228,6 +246,7 @@ def install():
 							yield command
 
 				ld.addDetectedLanguageCommands = nepali_addDetectedLanguageCommands
+				_restore.append((ld, "addDetectedLanguageCommands", _orig_addDetectedLanguageCommands, nepali_addDetectedLanguageCommands))
 				log.info("Nepali Reader: Successfully hooked MultiLang languageDetection for Nepali support")
 
 		# Patch MultiLang SynthDriver._getSynth
@@ -315,12 +334,14 @@ def install():
 					return _orig_getSynth(self, lang)
 
 				driver_cls._getSynth = nepali_getSynth
+				_restore.append((driver_cls, "_getSynth", _orig_getSynth, nepali_getSynth))
 				log.info("Nepali Reader: Successfully hooked MultiLang SynthDriver._getSynth for Nepali voice routing")
 
-		# Auto-configure MultiLang settings if present in NVDA configuration
+		# Auto-configure MultiLang settings if present in NVDA configuration (only while Nepali mode
+		# is on: switched off, the add-on changes nothing)
 		try:
 			import config
-			if "speech" in config.conf and "MultiLang" in config.conf["speech"]:
+			if _active() and "speech" in config.conf and "MultiLang" in config.conf["speech"]:
 				ml_conf = config.conf["speech"]["MultiLang"]
 				changed = False
 				if ml_conf.get("devanagariVoice") != "ne":
