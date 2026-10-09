@@ -866,7 +866,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			def copyToClip(text, notify=False):
 				try:
 					if isOn() and isinstance(text, str) and text:
-						if devanagariRepair.hasDevanagari(text):
+						viaIndex = plugin._pdfTextOfString(text)
+						if viaIndex is not None:
+							text = viaIndex.replace("\r\n", "\n").replace("\n", "\r\n") if "\n" in viaIndex else viaIndex
+						elif devanagariRepair.hasDevanagari(text):
 							cleaned = devanagariRepair.cleanShuffled(text)
 							if devanagariRepair.isBroken(text) or plugin._isBrokenDoc():
 								cleaned = devanagariRepair.repair(cleaned, broken=True)
@@ -893,6 +896,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			def speakSelectionChange(oldInfo, newInfo, speakSelected=True, speakUnselected=True, generalize=False, priority=None, *args, **kwargs):
 				if not isOn():
 					return origSel(_unwrap(oldInfo), _unwrap(newInfo), speakSelected, speakUnselected, generalize, priority, *args, **kwargs)
+				diag.write("selection change")
 				try:
 					rawOld = _unwrap(oldInfo)
 					rawNew = _unwrap(newInfo)
@@ -1026,6 +1030,26 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				return None
 			return self._plainText(info)
 		except Exception:
+			diag.exception("central text")
+			return None
+
+	def _pdfTextOfString(self, text):
+		"""The real text of a plain string that is being copied out of a PDF viewer (other
+		add-ons copy the raw text themselves): found through the index, or None."""
+		try:
+			if not isOn() or not isinstance(text, str) or not text.strip():
+				return None
+			obj = api.getFocusObject()
+			if obj is None or not self._isPdfWindow(obj):
+				return None
+			idx = self._pdfIndex(obj)
+			if idx is None:
+				return None
+			new = self._indexText(None, idx, text)
+			diag.write("copy (string) %r -> %r" % (text[:80], (new or "")[:80]))
+			return new
+		except Exception:
+			diag.exception("pdf string text")
 			return None
 
 	def _plainText(self, info):

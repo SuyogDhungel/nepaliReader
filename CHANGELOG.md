@@ -35,6 +35,7 @@ All notable changes to the **Nepali Reader** NVDA add-on are documented here.
 - **Rebuilt PDF words**: the overlay key m after प or भ draws फ or झ (आप्mना is आफ्ना, बुभ्mदा is बुझ्दा, गिरप्mतार is गिरफ्तार), a stray reph in समेतलार्ई is dropped, and an extra halant that makes a word unknown is removed when the word then is a known one (कार्य्विधिको is कार्यविधिको).
 - **Selecting by word or character in a PDF**: the spoken "selected" text of Ctrl+Shift+Arrow used its own conversion that ignored the PDF's real text (मलुका, संवरमा, सम्बन्ि). It now uses the same text as line reading and copy.
 - **Copy in PDFs**: text taken from the PDF's own words is no longer "repaired" a second time when copied. Copy, selection and index misses are written to the diagnostic log.
+- **Copy by other add-ons (ClipSpeak, clipboard add-ons)**: when another add-on copies the raw viewer text of a PDF itself, the text is now looked up in the PDF's real text instead of being guessed (संशोन, संवरमा).
 - **Quiet releases**: the automatic update check only notifies when the GitHub release notes contain the word [notify]. Releases without it are still found by "Check for updates...", and the next [notify] release carries every earlier fix.
 
 ## [1.1.6] - 2026-10-07
