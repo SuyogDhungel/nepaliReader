@@ -8,6 +8,7 @@
 # speaks text under the caret / review cursor, say all and browse mode. Menus, dialogs,
 # buttons and NVDA's own messages never pass through it.
 
+import bisect
 import ctypes
 import hashlib
 import os
@@ -49,7 +50,7 @@ CONF_SPEC = {
 	"enabled": "boolean(default=True)",
 	"pdfFile": "boolean(default=True)",
 	"mode": "option('off', 'auto', 'always', default='auto')",
-	"encoding": "option('preeti', 'kantipur', 'sagarmatha', 'himali', 'pcs', 'krutidev', default='preeti')",
+	"encoding": "option('preeti', 'kantipur', 'sagarmatha', 'himali', 'fontasy', 'pcs', 'krutidev', default='preeti')",
 	"autoDetectKruti": "boolean(default=True)",
 	"useFontNames": "boolean(default=True)",
 	"repairUnicode": "boolean(default=True)",
@@ -75,7 +76,8 @@ ENCODING_LABELS = OrderedDict([
 	("preeti", "Preeti"),
 	("kantipur", "Kantipur"),
 	("sagarmatha", "Sagarmatha"),
-	("himali", "Fontasy Himali"),
+	("himali", "Himali (Himalb, Himalli)"),
+	("fontasy", "Fontasy Himali"),
 	("pcs", "PCS Nepali"),
 	("krutidev", "Kruti Dev (Hindi)"),
 ])
@@ -347,6 +349,30 @@ def _unwrap(info):
 	return info
 
 
+def _formatCopy(formatConfig=None):
+	"""A plain dict of document formatting settings. NVDA's own settings section cannot be given
+	to dict() (it iterates its keys only), so it is copied item by item."""
+	src = formatConfig if formatConfig is not None else config.conf["documentFormatting"]
+	if isinstance(src, dict):
+		return dict(src)
+	try:
+		return dict(src.items())
+	except Exception:
+		pass
+	try:
+		return {k: src[k] for k in src}
+	except Exception:
+		return {}
+
+
+def _isEnglishOutside(idx, piece):
+	for tok in (piece or "").split():
+		core = tok.strip(".,;:!?()[]{}\"'")
+		if len(core) >= 3 and core.isascii() and core.isalpha() and detector.isEnglishWord(core.lower()) and not idx.knows(core):
+			return True
+	return False
+
+
 class _PdfState:
 	"""The PDF file behind one viewer window, and its rebuilt text."""
 
@@ -436,6 +462,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			self._patchCopyAndSelection()
 		except Exception:
 			log.error("Nepali Reader: could not hook copying", exc_info=True)
+		try:
+			self._patchWordUnits()
+		except Exception:
+			log.debugWarning("Nepali Reader: could not hook word units", exc_info=True)
 		NVDASettingsDialog.categoryClasses.append(NepaliReaderSettingsPanel)
 		self._menu = None
 		try:
@@ -937,74 +967,28 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 								tempInfo.setEndPoint(rawNew, "startToEnd")
 								unselectedList.append(tempInfo)
 
+					parts = []
+					changed = False
+					for tInfo, isSel in [(t, True) for t in selectedList] + [(t, False) for t in unselectedList]:
+						if tInfo is None or tInfo.isCollapsed:
+							continue
+						raw = tInfo.text or ""
+						if not raw:
+							continue
+						conv = plugin._selectionText(tInfo)
+						if conv and conv != raw:
+							changed = True
+						parts.append((conv or raw, isSel))
 					hasSpoken = False
-					for tInfo in selectedList:
-						if tInfo is not None and not tInfo.isCollapsed:
-							raw = tInfo.text or ""
-							if raw:
-								conv = None
-								central = plugin._centralText(tInfo)
-								if central is not None:
-									conv = central
-									diag.write("select (pdf) %r -> %r" % (raw[:80], (central or "")[:80]))
-								elif devanagariRepair.hasDevanagari(raw):
-									conv = devanagariRepair.cleanShuffled(raw)
-									if plugin._isPdfWindow(tInfo.obj) or devanagariRepair.isBroken(raw):
-										conv = devanagariRepair.repair(conv, broken=True)
-								else:
-									conv = plugin._plainText(tInfo)
-									if not conv or conv == raw:
-										c = conf()
-										ctxEnc = plugin._inContext()
-										defaultEnc = ctxEnc or c["encoding"]
-										if c["mode"] != "off" and not plugin._docState().isUnicodeDocument:
-											isPdf = plugin._isPdfWindow(tInfo.obj)
-											inCtx = bool(ctxEnc or isPdf)
-											if inCtx:
-												c_mixed = detector.convertMixed(raw, lambda t: legacyFonts.convert(t, defaultEnc) or t, encoding=defaultEnc, context=inCtx)
-												if c_mixed and c_mixed != raw:
-													conv = c_mixed
-										if c["repairUnicode"] and conv and devanagariRepair.hasDevanagari(conv):
-											conv = devanagariRepair.repair(conv, broken=True)
-								if conv and conv != raw:
-									from speech.commands import LangChangeCommand
-									seq = [LangChangeCommand("ne"), conv, LangChangeCommand(None)]
-									speechModule.speakTextSelected(seq, priority=priority)
-									hasSpoken = True
-
-					for tInfo in unselectedList:
-						if tInfo is not None and not tInfo.isCollapsed:
-							raw = tInfo.text or ""
-							if raw:
-								conv = None
-								central = plugin._centralText(tInfo)
-								if central is not None:
-									conv = central
-									diag.write("select (pdf) %r -> %r" % (raw[:80], (central or "")[:80]))
-								elif devanagariRepair.hasDevanagari(raw):
-									conv = devanagariRepair.cleanShuffled(raw)
-									if plugin._isPdfWindow(tInfo.obj) or devanagariRepair.isBroken(raw):
-										conv = devanagariRepair.repair(conv, broken=True)
-								else:
-									conv = plugin._plainText(tInfo)
-									if not conv or conv == raw:
-										c = conf()
-										ctxEnc = plugin._inContext()
-										defaultEnc = ctxEnc or c["encoding"]
-										if c["mode"] != "off" and not plugin._docState().isUnicodeDocument:
-											isPdf = plugin._isPdfWindow(tInfo.obj)
-											inCtx = bool(ctxEnc or isPdf)
-											if inCtx:
-												c_mixed = detector.convertMixed(raw, lambda t: legacyFonts.convert(t, defaultEnc) or t, encoding=defaultEnc, context=inCtx)
-												if c_mixed and c_mixed != raw:
-													conv = c_mixed
-										if c["repairUnicode"] and conv and devanagariRepair.hasDevanagari(conv):
-											conv = devanagariRepair.repair(conv, broken=True)
-								if conv and conv != raw:
-									from speech.commands import LangChangeCommand
-									seq = [LangChangeCommand("ne"), conv, LangChangeCommand(None)]
-									speechModule.speakSelectionMessage(_("%s unselected"), seq, priority=priority)
-									hasSpoken = True
+					if changed:
+						from speech.commands import LangChangeCommand
+						for text, isSel in parts:
+							seq = [LangChangeCommand("ne"), text, LangChangeCommand(None)]
+							if isSel:
+								speechModule.speakTextSelected(seq, priority=priority)
+							else:
+								speechModule.speakSelectionMessage(_("%s unselected"), seq, priority=priority)
+							hasSpoken = True
 
 					if hasSpoken:
 						return
@@ -1018,6 +1002,187 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			self._patched2.append((speech, "speakSelectionChange", origSel, speakSelectionChange))
 		except Exception:
 			log.debugWarning("Nepali Reader: could not hook selection speech", exc_info=True)
+
+	def _patchWordUnits(self):
+		"""Word navigation and word selection (Ctrl+Arrow, Ctrl+Shift+Arrow) step over whole words:
+		a PDF word the viewer breaks into pieces (मलु कु ी; Preeti btf{ split at its { key) is one
+		word, as the page shows it."""
+		plugin = self
+		local = threading.local()
+		owners = []
+		try:
+			import textInfos.offsets as tio
+			owners.append(tio.OffsetsTextInfo)
+		except Exception:
+			pass
+		try:
+			import virtualBuffers
+			owners.append(virtualBuffers.VirtualBufferTextInfo)
+		except Exception:
+			pass
+
+		def make(orig):
+			def _getWordOffsets(ti, offset):
+				if getattr(local, "busy", False):
+					return orig(ti, offset)
+				local.busy = True
+				try:
+					res = orig(ti, offset)
+					if not isOn():
+						return res
+					try:
+						new = plugin._realWordOffsets(ti, offset, res)
+					except Exception:
+						diag.exception("word offsets")
+						new = None
+					return new if new is not None else res
+				finally:
+					local.busy = False
+			return _getWordOffsets
+
+		for owner in owners:
+			orig = owner.__dict__.get("_getWordOffsets")
+			if orig is None:
+				continue
+			new = make(orig)
+			setattr(owner, "_getWordOffsets", new)
+			self._patched2.append((owner, "_getWordOffsets", orig, new))
+
+	def _realWordOffsets(self, ti, offset, res):
+		"""(start, end) of the whole real word at `offset`, or None to keep the viewer's word."""
+		start, end = res[0], res[1]
+		lineStart, lineEnd = ti._getLineOffsets(offset)
+		if not (lineStart <= offset < lineEnd) or lineEnd - lineStart > 4000:
+			return None
+		lineText = ti._getTextRange(lineStart, lineEnd)
+		if not lineText or len(lineText) != lineEnd - lineStart:
+			return None  # offsets are not one per character (characters outside the BMP)
+		rel = offset - lineStart
+		if lineText[rel].isspace():
+			return None
+		idx = self._readyIndex(getattr(ti, "obj", None))
+		if idx is not None:
+			span = self._indexWordSpan(idx, lineText, rel)
+		else:
+			span = self._legacyWordSpan(lineText, rel)
+		if span is None:
+			return None
+		ns = min(start, lineStart + span[0])
+		ne = max(end, lineStart + span[1])
+		if (ns, ne) == (start, end):
+			return None
+		return (ns, ne)
+
+	def _indexWordSpan(self, idx, lineText, rel):
+		"""The word of the PDF's real text that the character at `rel` of the viewer's line belongs
+		to, as (start, end) in the line (with its trailing spaces), or None."""
+		cache = getattr(self, "_wordSpans", None)
+		if cache is None:
+			cache = self._wordSpans = _LRU(64)
+		ck = (id(idx), lineText)
+		spans = cache.get_(ck)
+		if spans is None:
+			spans = []
+			key = pdfText.matchKey(lineText)
+			p = idx._find(key) if key else -1
+			if p >= 0:
+				starts = idx.starts
+				cur = s0 = last = None
+				q = p
+				for i, ch in enumerate(lineText):
+					k = pdfText.keyOf(ch)
+					if not k:
+						continue
+					wi = bisect.bisect_right(starts, q) - 1
+					q += len(k)
+					if wi != cur:
+						if cur is not None:
+							spans.append((s0, last + 1))
+						cur, s0 = wi, i
+					last = i
+				if cur is not None:
+					spans.append((s0, last + 1))
+			cache.put(ck, spans)
+		for s, e in spans:
+			if s <= rel < e:
+				while e < len(lineText) and lineText[e] in " \t\xa0":
+					e += 1
+				return (s, e)
+		return None
+
+	def _legacyWordSpan(self, lineText, rel):
+		"""A Preeti word that NVDA breaks at one of its sign keys (btf{, a'em\\g'): the whole word
+		between spaces, or None for anything else (English keeps NVDA's own words)."""
+		c = conf()
+		if c["mode"] == "off":
+			return None
+		s = rel
+		while s > 0 and not lineText[s - 1].isspace():
+			s -= 1
+		e = rel
+		while e < len(lineText) and not lineText[e].isspace():
+			e += 1
+		run = lineText[s:e]
+		if len(run) > 40 or not run.isascii() or run.isalnum() or not any(ch.isalpha() for ch in run):
+			return None
+		core = detector._core(run)
+		if not core or detector.isEnglishWord(core.lower()):
+			return None
+		ctxEnc = self._inContext()
+		if not ctxEnc and not detector.looksLegacy(run, c["encoding"], context=False):
+			return None
+		while e < len(lineText) and lineText[e] in " \t\xa0":
+			e += 1
+		return (s, e)
+
+	def _selectionText(self, info):
+		"""What a selected or unselected piece says: a character as character reading says it, a
+		word as word reading says it, more as line reading (the PDF's real text when known)."""
+		info = _unwrap(info)
+		raw = info.text or ""
+		if not raw or raw.isspace():
+			return raw
+		for unit in (textInfos.UNIT_CHARACTER, getattr(textInfos, "UNIT_WORD", "word")):
+			try:
+				u = info.copy()
+				u.collapse()
+				u.expand(unit)
+				same = u.compareEndPoints(info, "startToStart") == 0 and u.compareEndPoints(info, "endToEnd") == 0
+			except Exception:
+				same = False
+			if same:
+				try:
+					fields = self._convertFields(info, None, unit=unit)
+					text = "".join(f for f in fields if isinstance(f, str))
+					diag.write("select %s %r -> %r" % (unit, raw[:60], text[:60]))
+					return text
+				except Exception:
+					diag.exception("selection by %s" % unit)
+				break
+		central = self._centralText(info)
+		if central is not None:
+			diag.write("select (pdf) %r -> %r" % (raw[:80], central[:80]))
+			return central
+		if devanagariRepair.hasDevanagari(raw):
+			conv = devanagariRepair.cleanShuffled(raw)
+			if self._isPdfWindow(info.obj) or devanagariRepair.isBroken(raw):
+				conv = devanagariRepair.repair(conv, broken=True)
+			return conv
+		conv = self._plainText(info)
+		if not conv or conv == raw:
+			c = conf()
+			ctxEnc = self._inContext()
+			defaultEnc = ctxEnc or c["encoding"]
+			if c["mode"] != "off" and not self._docState().isUnicodeDocument:
+				inCtx = bool(ctxEnc or self._isPdfWindow(info.obj))
+				if inCtx:
+					c_mixed = detector.convertMixed(raw, lambda t: legacyFonts.convert(t, defaultEnc) or t, encoding=defaultEnc, context=inCtx)
+					if c_mixed and c_mixed != raw:
+						conv = c_mixed
+			if c["repairUnicode"] and conv and devanagariRepair.hasDevanagari(conv):
+				conv = devanagariRepair.repair(conv, broken=True)
+		diag.write("select %r -> %r" % (raw[:80], (conv or "")[:80]))
+		return conv
 
 	def _centralText(self, info):
 		"""In a PDF whose real text is known, the one text every way of reading (line, word,
@@ -1137,6 +1302,20 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			diag.write("pdf: waited %.1f s for the first pages (%s)" % (time.monotonic() - t0, st.status))
 		return st.index if st.status == "ready" else None
 
+	def _readyIndex(self, obj):
+		"""The PDF index of the foreground window if it is already built (never starts or waits)."""
+		try:
+			if not conf()["pdfFile"] or not self._ready:
+				return None
+			st = self._pdfs.get_(self._foregroundKey())
+			if st is None or st.status != "ready":
+				return None
+			if obj is not None and not self._isPdfWindow(obj):
+				return None
+			return st.index
+		except Exception:
+			return None
+
 	def _buildPdf(self, st, url, title, pid):
 		from . import pdfLocate
 		try:
@@ -1239,6 +1418,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 					pieces = idx.spanAt(lineText, offset, len(info.text or text))
 		if pieces is None:
 			pieces = idx.lookup(text)
+		if pieces and any(not ok and _isEnglishOutside(idx, pc) for pc, ok in pieces):
+			# an English word the document does not have: this is the viewer's own text (a "Fit to
+			# page" button), not the page - a short word of it must not be read as Preeti (to = तय)
+			pieces = None
 		if not pieces or not any(ok for _p, ok in pieces):
 			try:
 				diag.write("index miss: %r key=%r" % (text[:90], key[:60]))
@@ -1257,8 +1440,15 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 					if cand and (devanagariRepair.hasDevanagari(cand) and (neLexicon.isWord(cand.strip(".,:;!?()")) or detector.wordScore(piece, "preeti") >= 3.0)):
 						piece = cand
 			out.append(piece)
-		lead = text[: len(text) - len(text.lstrip())]
-		trail = text[len(text.rstrip()):]
+		# spaces and signs the index has no letters for (a ▪ bullet) stay as the viewer shows them
+		i = 0
+		while i < len(text) and (text[i].isspace() or not pdfText.keyOf(text[i])):
+			i += 1
+		j = len(text)
+		while j > i and (text[j - 1].isspace() or not pdfText.keyOf(text[j - 1])):
+			j -= 1
+		lead = text[:i]
+		trail = text[j:]
 		result_text = lead + " ".join(out) + trail
 		if devanagariRepair.hasDevanagari(result_text):
 			# what the PDF itself says is final: nothing downstream may "repair" it again (the
@@ -1740,9 +1930,12 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		line, off = ctx
 		try:
 			raw = _unwrap(info)
+			if self._readyIndex(raw.obj) is not None:
+				# a PDF whose real text is known: words come from it, not from lining up tokens
+				return None
 			li = raw.copy()
 			li.expand(textInfos.UNIT_LINE)
-			fc = dict(config.conf["documentFormatting"])
+			fc = _formatCopy()
 			fc["reportFontName"] = True
 			fields = li.getTextWithFields(fc)
 			orig = "".join(f for f in fields if isinstance(f, str))
@@ -1761,6 +1954,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			if len(toks) != len(ctoks):
 				return None
 			for m, ct in zip(toks, ctoks):
+				t = m.group(0)
+				if ct != t and not any(ch.isascii() or "\u0900" <= ch <= "\u097f" for ch in t):
+					return None  # the tokens do not line up (a bullet or sign left out of the reading)
 				if m.start() <= off < m.end():
 					return m.group(0), ct
 		except Exception:
@@ -1822,7 +2018,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		wantFont = c["useFontNames"] and c["mode"] != "off"
 		fc = formatConfig
 		if wantFont:
-			fc = dict(formatConfig or config.conf["documentFormatting"])
+			fc = _formatCopy(formatConfig or None)
 			fc["reportFontName"] = True
 		fields = info.getTextWithFields(fc)
 		try:

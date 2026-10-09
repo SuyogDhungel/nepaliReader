@@ -13,6 +13,14 @@ All notable changes to the **Nepali Reader** NVDA add-on are documented here.
 - **Integrated GitHub Auto-Updater**: Built-in automatic update engine checking GitHub releases. Users receive update notifications with one-click background download and installation without needing external websites or manual downloads. Added a manual "Check for updates..." item under NVDA's Tools menu and a toggle in Nepali Reader settings.
 
 ### Fixed
+- **Fontasy Himali** (FONTASY_HIMALI_TT) now has its own layout: its digit keys are Nepali digits and Shift+digit keys are letters, the other way round from Preeti, and ' / " are ू / ु. PDFs in this font read correctly (लिमिटेडको, काठमाडौं, हुनेछ, १., (मिति २०६५।१२।३०)) instead of लिमि६े८को, का७मा८ौं, हूने५, ज्ञ. Himalb and Himalli keep the Preeti layout. Settings list both.
+- A hyphen or bracket that a PDF draws in a standard font inside a Preeti word (प्रबन्ध-पत्र, भू-उपग्रह) is kept as it shows, not turned into a bracket.
+- **Whole words**: Ctrl+Arrow and Ctrl+Shift+Arrow step over whole words in PDFs (Brave, Chrome, Edge, Acrobat). A word the viewer breaks into pieces (मलु कु ी in Unicode PDFs; Preeti btf{, a'em\g' split at a sign key) is read and selected once as the whole word (मुलुकी, दर्ता, बुझ्नु) instead of in overlapping pieces. Preeti words in other documents get the same treatment; English keeps NVDA's own words.
+- **Selection speaks what reading says**: a selected character is spoken exactly as character reading says it, a selected word as word reading says it, and longer selections as line reading. Selecting no longer read raw Preeti or broken Unicode, because NVDA's formatting settings could not be copied and the conversion stopped with an error.
+- Preeti ;+3 is read संघ (it was read as a number).
+- Bullets such as ▪ are kept in selections and copies of PDF text.
+- The PDF viewer's own buttons are no longer looked up in the PDF (Fit to page was read "Fit तय page").
+- Real words in file names and titles are no longer changed (बैङ्क-ऐन was read ऐंन).
 - Unicode PDFs: selecting with Ctrl+Shift+Arrow and copying with Ctrl+C now give the same corrected text as line and word reading (looked up straight in the PDF's rebuilt text).
 - **Copy in browse mode when Nepali mode is off**: Ctrl+C now always uses NVDA's own browse mode copy, so copying works with the add-on switched off (by Roshan Gautam). Conflict with ClipSpeak resolved.
 - **Fully inactive when switched off**: The MultiLang language hooks now do nothing while Nepali mode is off (menu or shortcut), so MultiLang behaves exactly as without the add-on.

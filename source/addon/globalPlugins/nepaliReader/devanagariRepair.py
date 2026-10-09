@@ -526,7 +526,10 @@ def normalizeFilenameSlugs(text):
 	tokens = re.split(r'([_\s\-./\\]+)', text)
 	out = []
 	for t in tokens:
-		if re.search(r'^[\u0900-\u097f]+$', t) and not re.search(r'[०-९0-9]', t):
+		if (re.search(r'^[\u0900-\u097f]+$', t) and not re.search(r'[०-९0-9]', t)
+				and not re.search(r'[\u0900-\u0903\u093a-\u094f\u0955-\u0957\u0962\u0963]', t)
+				and not neLexicon.isWord(t)):
+			# only a token stripped of all its signs is a slug (ऐन, बैङ्क are words as written)
 			out.append(resolveSlugToken(t))
 		else:
 			out.append(t)

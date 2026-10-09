@@ -37,7 +37,7 @@ NUKTA = "़"
 REPH = "र्"
 DEP_SIGNS = set("ऺऻािीुूृॄॅॆेैॉॊोौॎॏॕॖॗॢॣऀँंः़")
 INDEPENDENT = set(chr(c) for c in range(0x0904, 0x0915)) | set("ॠॡॲॳॴॵॶॷ")
-INDEX_VERSION = 23
+INDEX_VERSION = 24
 INFER = True
 
 
@@ -804,9 +804,9 @@ class DocIndex:
 				cl = devanagariRepair.finalClean(fixed, _wordCheck)
 				if cl is not None:
 					fixed, amap = cl, None
-			if fixed and ")" in fixed and enc != "krutidev":
+			if fixed and ")" in fixed and enc not in ("krutidev", "fontasy"):
 				fixed = legacyFonts._DECIMAL_ZERO.sub("\u0966", fixed)  # ६.)% is ६.०%
-			if fixed and enc != "krutidev" and "%" in fixed:
+			if fixed and enc not in ("krutidev", "fontasy") and "%" in fixed:
 				m = _KEYS_PERCENT.match(fixed)
 				if m:  # "#%" is ३% (Preeti digit key, then a percent sign from another font)
 					fixed = "".join(legacyFonts._LONE_DIGIT_KEYS[c] for c in m.group(1)) + m.group(2)
@@ -1191,6 +1191,13 @@ class DocIndex:
 		self.words[i] = (fixed, m, enc, key)
 		return m
 
+	def knows(self, token):
+		"""True if `token` is a word of this document as the viewer shows it (converted or not)."""
+		ks = getattr(self, "_keySet", None)
+		if ks is None:
+			ks = self._keySet = {w[3].translate(_NORM) for w in self.words}
+		return matchKey(token) in ks
+
 	def spanAt(self, lineText, offset, length):
 		"""Real text for `length` characters at `offset` of the viewer's line (character / word
 		navigation): list of (piece, certain) or None."""
@@ -1349,8 +1356,27 @@ def _wordTexts(w):
 		if not non_legacy_text or all(c in "()[]{}<>'\"“”‘’.,;:!?-_/\\•* " for c in non_legacy_text):
 			enc = next(iter(legacy_encs))
 			raw = keyOf(shownText)
-			fixed = legacyFonts.convert(raw, enc) or raw
-			if enc != "krutidev" and raw in legacyFonts._LONE_DIGIT_KEYS:
+			if non_legacy_text and keyOf(non_legacy_text) and enc != "krutidev":
+				# punctuation drawn in a standard font (the hyphen of प्रबन्ध-पत्र in Times) is
+				# exactly what it shows; only the runs in the legacy font are keys
+				parts = []
+				run = []
+				for s0 in segs:
+					if s0[0].legacy:
+						run.append("".join(t for c, t in s0[1]))
+						continue
+					if run:
+						rk = keyOf("".join(run))
+						parts.append((legacyFonts.convert(rk, enc) or rk) if rk else "")
+						run = []
+					parts.append(keyOf("".join(t for c, t in s0[1])))
+				if run:
+					rk = keyOf("".join(run))
+					parts.append((legacyFonts.convert(rk, enc) or rk) if rk else "")
+				fixed = "".join(parts)
+			else:
+				fixed = legacyFonts.convert(raw, enc) or raw
+			if enc not in ("krutidev", "fontasy") and raw in legacyFonts._LONE_DIGIT_KEYS:
 				fixed = legacyFonts._LONE_DIGIT_KEYS[raw]  # the Shift+digit keys of a Preeti font draw the digits
 			return shownText, fixed, None, enc
 	toks = []      # (text, glyph number)

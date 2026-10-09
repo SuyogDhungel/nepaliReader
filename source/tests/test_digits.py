@@ -61,11 +61,20 @@ check('Preeti year by word', word(line, line.index('@')), '२०७२')
 check('Preeti year by character', ''.join(chars(line)[line.index('@'):line.index('@') + 4]), '२०७२')
 line = 'Section 9 (a) of the Act, call (01) 4411234'
 check('English numbers by character', ''.join(chars(line)), line)
-print('FAILED' if bad else 'ALL OK', bad)
-sys.exit(1 if bad else 0)
-
 # Preeti overlay key m after प / भ, stray reph, extra halant (rebuilt PDF words)
 for w, want in [('आप्mना', 'आफ्ना'), ('बुभ्mदा', 'बुझ्दा'), ('समेतलार्ई', 'समेतलाई'), ('कार्य्विधिको', 'कार्यविधिको'), ('mobile', None), ('हुनेछ।', None)]:
     got = DR.finalClean(w, neLexicon.isWord)
     check('finalClean ' + w, got, want)
-print('ALL OK', bad)
+
+# Fontasy Himali: digit keys are digits, Shift+digits are letters, ' and " are ू and ु
+from nepaliReader import legacyFonts as LF
+for k, want in [('lnld^]*sf]', 'लिमिटेडको'), ('1= sDkgLsf]', '१. कम्पनीको'), ("b'/;+rf/", 'दूरसंचार'), ('x"g]%', 'हुनेछ'),
+		('sf&df*f}+ j*f g+=11', 'काठमाडौं वडा नं.११'), ('-ldlt 2065.12.30_', '(मिति २०६५।१२।३०)'), ('p@]Zo', 'उद्देश्य'), ('P)^]gf', 'एण्टेना')]:
+	check('Fontasy ' + k, LF.convert(k, 'fontasy'), want)
+check('Fontasy font name', LF.encodingForFontName('FPKWHC+FONTASY_HIMALI_TT'), 'fontasy')
+check('Himalb is Preeti layout', LF.encodingForFontName('ABCDEE+Himalb'), 'himali')
+check('Preeti ;+3 is संघ', LF.convert(';+3 ;+:yf', 'preeti'), 'संघ संस्था')
+check('Preeti year', LF.convert('@)&( ;fn', 'preeti'), '२०७९ साल')
+check('real words in a file name stay', DR.cleanShuffled('१.नेपाल-राष्ट्र-बैङ्क-ऐन-२०५८.pdf'), '१.नेपाल-राष्ट्र-बैङ्क-ऐन-२०५८.pdf')
+print('FAILED' if bad else 'ALL OK', bad)
+sys.exit(1 if bad else 0)
