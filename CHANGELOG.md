@@ -26,6 +26,9 @@ All notable changes to the **Nepali Reader** NVDA add-on are documented here.
 - **Spellings are not "corrected"**: सुदुर is read as सुदुर (not सदर), and two real words with a space between them (प्रधान मन्त्री, चन्द्र शम्शेर) are no longer glued into one word. Words rebuilt from a PDF are not repaired a second time, so न.पा. stays न.पा.
 - **Word reading follows line reading for Preeti numbers**: a year such as @)&@ is spoken २०७२ when read word by word, as it is when read by line. A lone ( or ) between two Preeti words is the digit key and is read ९ or ०; brackets typed as - and _ and clause marks such as (क) are unchanged.
 - **Character reading**: ि is spoken as ि (an internal marker was reaching the speech), and the keys o and f in भयो (eof]) are no longer read together as ध.
+- **PDF digits and bullets**: a lone ( or ) in a Preeti PDF line (for example "९ जना रानी") is read ९ or ०; the Courier "o" bullet is read as ○; a lone 5 in a Preeti line is छ; the keys ÷ and § stay inside words (दुईपट्टी, आदिवासी/जनजाति).
+- **Character reading in PDFs**: digit and sign keys inside Preeti words (for example the 8 in चा8) now read as the letter they are (ड), matching line reading.
+- **Quiet releases**: the automatic update check only notifies when the GitHub release notes contain the word [notify]. Releases without it are still found by "Check for updates...", and the next [notify] release carries every earlier fix.
 
 ## [1.1.6] - 2026-10-07
 

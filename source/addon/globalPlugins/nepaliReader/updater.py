@@ -349,9 +349,15 @@ def checkUpdate(manual=False, configRef=None):
 					addonUrl = asset.get("browser_download_url")
 					break
 
+			# Quiet releases: unless the release notes carry the marker [notify], the automatic check
+			# stays silent (the Check for updates command still offers it). Publishing a release with
+			# [notify] later delivers every earlier quiet fix too, because it is the newest build.
+			if not manual and "[notify]" not in body.lower():
+				return
+
 			if remoteVer > currentVer and addonUrl:
 				def promptUser():
-					plainNotes = stripMarkdown(body)
+					plainNotes = stripMarkdown(re.sub(r"(?i)\[notify\]", "", body)).strip()
 					notes = plainNotes[:800] + ("..." if len(plainNotes) > 800 else "")
 					msg = _(
 						"An update for Nepali Reader is available!\n\n"

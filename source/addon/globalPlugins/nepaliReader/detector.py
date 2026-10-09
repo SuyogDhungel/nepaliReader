@@ -46,8 +46,14 @@ _A11Y_GLUED_BEFORE = re.compile(
 _PAREN_NUM_AFTER = re.compile(r'([^\s\(\[\{])(\([0-9]+\)|\[[0-9]+\])')
 _PAREN_NUM_BEFORE = re.compile(r'(\([0-9]+\)|\[[0-9]+\])([^\s\)\]\}])')
 _BULLET_SYMS = '•‣⁃▪▫○●★☆✓✔►◄→←↑↓↔⇒⇐◆◇◈◉◎§¶※†‡©®™°±×÷≠≤≥∞≈‰➢➤✦✧❖▲▼◀▶'
-_BULLET_GLUED_BEFORE = re.compile(r'([' + _BULLET_SYMS + r'])([^\s' + _BULLET_SYMS + r'])')
-_BULLET_GLUED_AFTER = re.compile(r'([^\s' + _BULLET_SYMS + r'])([' + _BULLET_SYMS + r'])')
+# these are also letters of the Preeti keyboard (÷ is "/", § is ट्ट, ‰ is झ्, • is ड्ड ...): inside a
+# word they belong to the word, so they never split it and never mark it as "not Preeti"
+_PREETI_KEY_SYMS = '•§¶†‡©®™°±×÷‰'
+_PURE_BULLETS = ''.join(c for c in _BULLET_SYMS if c not in _PREETI_KEY_SYMS)
+_BULLET_GLUED_BEFORE = re.compile(r'([' + _PURE_BULLETS + r'])([^\s' + _PURE_BULLETS + r'])')
+_BULLET_GLUED_AFTER = re.compile(r'([^\s' + _PURE_BULLETS + r'])([' + _PURE_BULLETS + r'])')
+_DOT_BULLET_BEFORE = re.compile(r'(?<![A-Za-z0-9])(•)([^\s•])')
+_DOT_BULLET_AFTER = re.compile(r'([^\s•A-Za-z0-9])(•)')
 
 
 def cleanGluedTokens(s):
@@ -59,6 +65,8 @@ def cleanGluedTokens(s):
 	s = _PAREN_NUM_BEFORE.sub(r'\1 \2', s)
 	s = _BULLET_GLUED_BEFORE.sub(r'\1 \2', s)
 	s = _BULLET_GLUED_AFTER.sub(r'\1 \2', s)
+	s = _DOT_BULLET_BEFORE.sub(r'\1 \2', s)
+	s = _DOT_BULLET_AFTER.sub(r'\1 \2', s)
 	return s
 
 
@@ -166,10 +174,12 @@ def _strongAlone(token, sc, encoding):
 def isNonLegacySymbolOrEmoji(t):
 	if not t:
 		return False
-	if any(ord(c) > 255 and not (0x0900 <= ord(c) <= 0x097F) for c in t):
+	if any(ord(c) > 255 and not (0x0900 <= ord(c) <= 0x097F) and c not in legacyFonts.PREETI_MAP for c in t):
 		return True
-	if any(c in _BULLET_SYMS for c in t):
+	if any(c in _PURE_BULLETS for c in t):
 		return True
+	if any(c in _PREETI_KEY_SYMS for c in t) and not any(c.isalnum() for c in t):
+		return True  # a bare sign such as § or ÷ standing alone is a sign, not a word
 	if t in _STANDALONE_BULLET:
 		return True
 	return False
@@ -234,6 +244,9 @@ def decide(text, encoding="preeti", context=False):
 			result.append((t, True))
 		elif isNonLegacySymbolOrEmoji(t) or isNonLegacySymbolOrEmoji(core):
 			result.append((t, False))
+		elif core == "5" and (wholeLine or (legacy > 0 and english == 0)) and encoding != "krutidev":
+			# in a Preeti line a lone 5 is the very common verb छ (the key 5), not the number five
+			result.append((t, True))
 		elif _NUM_TOKEN.match(core) or _NUM_TOKEN.match(t):
 			result.append((t, False))
 		elif wholeLine:
@@ -310,7 +323,7 @@ paragraph|page|end of document|top|bottom|bold|italic|underline|not bold|not ita
 _NUM_TOKEN = re.compile(r"^[\$€₹#№]?\d+(?:[.,/:\-]\d+)*[%°]?$")
 # digits typed on Preeti's shifted number row: !(*) = १९८०, @)&* = २०७८ (a bracket pair around
 # symbols, as in (!) or (@), is a clause marker and is left to the converter)
-_PREETI_SYMNUM = re.compile(r"^[!@#$%^&*()]{2,}[.,]?$")
+_PREETI_SYMNUM = re.compile(r"^[!@#$%^&*()\u00f7]{2,}[.,]?$")
 
 
 def isPreetiSymbolNumber(t):

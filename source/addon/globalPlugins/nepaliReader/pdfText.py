@@ -37,7 +37,7 @@ NUKTA = "़"
 REPH = "र्"
 DEP_SIGNS = set("ऺऻािीुूृॄॅॆेैॉॊोौॎॏॕॖॗॢॣऀँंः़")
 INDEPENDENT = set(chr(c) for c in range(0x0904, 0x0915)) | set("ॠॡॲॳॴॵॶॷ")
-INDEX_VERSION = 17
+INDEX_VERSION = 18
 INFER = True
 
 
@@ -1148,6 +1148,13 @@ class DocIndex:
 		if hi - lo == 1:
 			if enc:
 				conv = legacyFonts.convert(key[lo], enc)
+				if conv and conv.isascii() and key[lo].isascii() and lo < len(fixed) and not fixed.isascii():
+					# a lone digit/sign key is a letter inside a Preeti word: take it from the word
+					pre = legacyFonts.convert(key[:lo], enc) or "" if lo else ""
+					whole = legacyFonts.convert(key[:lo + 1], enc) or ""
+					if whole.startswith(pre) and whole[len(pre):] and not whole[len(pre):].isascii():
+						return (whole[len(pre):], True)
+					return (fixed[min(amap[lo], len(aks) - 1)] if False else aks[min(amap[lo], len(aks) - 1)], True)
 				return (conv or key[lo], True)
 			if lo < len(fixed):
 				return (fixed[lo], True)
@@ -1319,6 +1326,8 @@ def _wordTexts(w):
 	shownText = "".join(shown)
 	if not keyOf(shownText):
 		return shownText, None, None, None
+	if shownText.strip() == "o" and segs and all("courier" in s0[0].baseFont.lower() for s0 in segs):
+		return shownText, "\u25cb", None, None  # Word's "o" list bullet (Courier New) is a hollow circle
 	# a word in a legacy font (possibly with punctuation in a standard font like Times or Arial)
 	legacy_encs = {s[0].legacy for s in segs if s[0].legacy}
 	if len(legacy_encs) == 1:
@@ -1327,6 +1336,8 @@ def _wordTexts(w):
 			enc = next(iter(legacy_encs))
 			raw = keyOf(shownText)
 			fixed = legacyFonts.convert(raw, enc) or raw
+			if raw in ("(", ")") and enc != "krutidev":
+				fixed = "\u096f" if raw == "(" else "\u0966"  # the keys Shift+9 and Shift+0 of a Preeti font draw ९ and ०
 			return shownText, fixed, None, enc
 	toks = []      # (text, glyph number)
 	charGlyph = []  # for each shown (key) character: its glyph number
