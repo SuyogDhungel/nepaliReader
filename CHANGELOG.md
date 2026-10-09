@@ -33,6 +33,7 @@ All notable changes to the **Nepali Reader** NVDA add-on are documented here.
 - **First words of a PDF**: the first line read while a PDF is still being opened was spoken from a guess (मलुकी ... संवरमा). The add-on now waits up to 3 seconds, once, for the first pages instead of guessing.
 - **Character reading of repaired PDF text**: stepping through a broken Unicode word now reads the repaired syllable for the whole unit NVDA steps over (प्रारम्िाः reads प्रा र म्भः), not a single letter picked by position.
 - **Rebuilt PDF words**: the overlay key m after प or भ draws फ or झ (आप्mना is आफ्ना, बुभ्mदा is बुझ्दा, गिरप्mतार is गिरफ्तार), a stray reph in समेतलार्ई is dropped, and an extra halant that makes a word unknown is removed when the word then is a known one (कार्य्विधिको is कार्यविधिको).
+- **Selecting by word or character in a PDF**: the spoken "selected" text of Ctrl+Shift+Arrow used its own conversion that ignored the PDF's real text (मलुका, संवरमा, सम्बन्ि). It now uses the same text as line reading and copy.
 - **Quiet releases**: the automatic update check only notifies when the GitHub release notes contain the word [notify]. Releases without it are still found by "Check for updates...", and the next [notify] release carries every earlier fix.
 
 ## [1.1.6] - 2026-10-07

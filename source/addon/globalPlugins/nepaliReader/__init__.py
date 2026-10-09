@@ -925,7 +925,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 							raw = tInfo.text or ""
 							if raw:
 								conv = None
-								if devanagariRepair.hasDevanagari(raw):
+								central = plugin._centralText(tInfo)
+								if central is not None:
+									conv = central
+								elif devanagariRepair.hasDevanagari(raw):
 									conv = devanagariRepair.cleanShuffled(raw)
 									if plugin._isPdfWindow(tInfo.obj) or devanagariRepair.isBroken(raw):
 										conv = devanagariRepair.repair(conv, broken=True)
@@ -955,7 +958,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 							raw = tInfo.text or ""
 							if raw:
 								conv = None
-								if devanagariRepair.hasDevanagari(raw):
+								central = plugin._centralText(tInfo)
+								if central is not None:
+									conv = central
+								elif devanagariRepair.hasDevanagari(raw):
 									conv = devanagariRepair.cleanShuffled(raw)
 									if plugin._isPdfWindow(tInfo.obj) or devanagariRepair.isBroken(raw):
 										conv = devanagariRepair.repair(conv, broken=True)
@@ -992,6 +998,19 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			self._patched2.append((speech, "speakSelectionChange", origSel, speakSelectionChange))
 		except Exception:
 			log.debugWarning("Nepali Reader: could not hook selection speech", exc_info=True)
+
+	def _centralText(self, info):
+		"""In a PDF whose real text is known, the one text every way of reading (line, word,
+		character, selection, copy) shares: what the index says. None when there is no index."""
+		try:
+			info = _unwrap(info)
+			if not isOn() or not self._isPdfWindow(info.obj):
+				return None
+			if self._pdfIndex(info.obj) is None:
+				return None
+			return self._plainText(info)
+		except Exception:
+			return None
 
 	def _plainText(self, info):
 		"""The real text of a TextInfo (Preeti converted, PDF text rebuilt), as plain text."""
