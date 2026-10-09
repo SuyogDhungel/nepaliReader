@@ -1,13 +1,13 @@
 # Nepali Reader for NVDA
 
-[![Download Add-on](https://img.shields.io/badge/Download-nepaliReader--1.1.4.nvda--addon-brightgreen?style=for-the-badge&logo=nvda)](https://github.com/SuyogDhungel/nepaliReader/releases/download/v1.1.4/nepaliReader-1.1.4.nvda-addon)
+[![Download Add-on](https://img.shields.io/badge/Download-nepaliReader--1.1.7.nvda--addon-brightgreen?style=for-the-badge&logo=nvda)](https://github.com/SuyogDhungel/nepaliReader/releases/download/v1.1.7/nepaliReader-1.1.7.nvda-addon)
 [![License: GPL v2](https://img.shields.io/badge/License-GPL%20v2-blue.svg)](LICENSE)
 [![NVDA Compatibility](https://img.shields.io/badge/NVDA-2024.1%20to%202026.2-purple.svg)](https://www.nvaccess.org/)
 
 **Nepali Reader** is a free, open-source NVDA screen reader add-on created to solve the long-standing Devanagari reading issues faced by blind and visually impaired computer users in Nepal.
 
 > [!TIP]
-> **Recommendation**: Keep Nepali Mode OFF (`NVDA + Alt + N`) when working in English documents, browsing English websites, or programming. Toggle it ON when reading Nepali documents, gazettes, or PDFs.
+> **Recommendation**: Keep Nepali Mode OFF (`NVDA + Ctrl + Shift + Space`) when working in English documents, browsing English websites, or programming. Toggle it ON when reading Nepali documents, gazettes, or PDFs.
 
 ---
 
@@ -26,8 +26,8 @@ Screen reader users in Nepal regularly encounter two major barriers when reading
 ## 📥 How to Download and Install
 
 1. Download the add-on file:
-   👉 [**Click here to download nepaliReader-1.1.4.nvda-addon**](https://github.com/SuyogDhungel/nepaliReader/releases/download/v1.1.4/nepaliReader-1.1.4.nvda-addon)
-2. Once downloaded, open your **Downloads** folder and press **Enter** on `nepaliReader-1.1.4.nvda-addon`.
+   👉 [**Click here to download nepaliReader-1.1.7.nvda-addon**](https://github.com/SuyogDhungel/nepaliReader/releases/download/v1.1.7/nepaliReader-1.1.7.nvda-addon)
+2. Once downloaded, open your **Downloads** folder and press **Enter** on `nepaliReader-1.1.7.nvda-addon`.
 3. NVDA will ask: *"Are you sure you want to install this add-on?"* — Press **Yes** (`Alt + Y`).
 4. When prompted to restart NVDA, select **Yes**.
 5. That is all! Nepali Reader activates automatically upon startup.
@@ -64,11 +64,10 @@ You can control all features directly through the NVDA menu using your keyboard:
 
 | Shortcut | What It Does |
 |---|---|
-| **`NVDA + Alt + N`** *(or `NVDA + Ctrl + Shift + Space`)* | **Toggle Nepali Mode**: Quickly turns reading conversion on or off. NVDA will announce *"Nepali mode on"* or *"Nepali mode off"*. `NVDA + Alt + N` is recommended for laptop users. |
-| **`Ctrl + C`** | **Smart Copy**: While Nepali mode is active, copying selected text automatically places clean, standard Unicode Devanagari onto your clipboard (ready to paste into Word, Facebook, or messaging apps). |
-| **`NVDA + Alt + U`** | **Convert and Read**: Converts whatever text is currently selected (or on the clipboard) to Unicode and speaks it aloud. |
-| **`NVDA + Alt + P`** | **Legacy Font Mode**: Cycles font conversion between *Automatic* (default), *Always Convert*, and *Off*. |
-| **`NVDA + Alt + Shift + P`** | **Default Font Family**: Switches the default legacy font between Preeti, Kantipur, Sagarmatha, Himali, and PCS. |
+| **`NVDA + Ctrl + Shift + Space`** | **Toggle Nepali Mode**: turns reading conversion on or off. NVDA announces *"Nepali mode on"* or *"Nepali mode off"*. This is the only shortcut the add-on adds. |
+| **`Ctrl + C`** | **Smart Copy**: while Nepali mode is on, copying selected text puts clean Unicode Devanagari on the clipboard. |
+
+The other commands (convert selected text, legacy font mode, default font family) have no key by default. Use the NVDA menu, Tools, Nepali Reader, or assign a key yourself as described below.
 
 ---
 
@@ -86,7 +85,7 @@ If any shortcut conflicts with another add-on or if you prefer different keys, y
    * *Default legacy font family*
 5. Select the action you wish to change.
 6. Press **`Alt + A`** (or Tab to the **Add** button and press Enter).
-7. Press the exact key combination you want to use on your keyboard (for example, `NVDA + Shift + N`).
+7. Press the exact key combination you want to use on your keyboard (any free combination).
 8. Select whether to use this shortcut for `all layouts` or your current keyboard layout and press **Enter**.
 9. Tab to the **OK** button and press Enter to save your new shortcut.
 

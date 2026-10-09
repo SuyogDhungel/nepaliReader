@@ -16,6 +16,7 @@ class Sect(dict):
     def dict(self): return dict(self)
 conf={'nepaliReader':Sect(enabled=True,pdfFile=True,mode='auto',encoding='preeti',autoDetectKruti=True,useFontNames=True,repairUnicode=True,switchLanguage=True,convertSpelling=True,visualCheck=True,webFontOnly=True,lastOnMode='auto',tesseractPath='',ocrLanguages='nep+hin+eng'),'documentFormatting':Sect(reportFontName=False)}
 mod('addonHandler', initTranslation=lambda: None)
+mod('NVDAObjects', NVDAObject=type('NVDAObject',(),{}))
 class Spec(dict): pass
 mod('config', conf=type('C',(dict,),{'spec':Spec()})(conf))
 state={'font':None,'fg':1,'app':'acrord32','title':'notice.pdf - Adobe Acrobat','line':'', 'pixels':None}
@@ -35,7 +36,7 @@ class Info:
         p=state['pixels']
         return [Rect(0,0,p[1],p[2])] if p else []
     def getTextWithFields(self,fc): return [FieldCommand('formatChange',{'font-name':state['font']})] if state['font'] else []
-mod('textInfos', FieldCommand=FieldCommand, FormatField=FormatField, UNIT_CHARACTER='character', UNIT_LINE='line', POSITION_SELECTION='sel')
+mod('textInfos', FieldCommand=FieldCommand, FormatField=FormatField, UNIT_CHARACTER='character', UNIT_LINE='line', UNIT_WORD='word', UNIT_PARAGRAPH='paragraph', POSITION_SELECTION='sel')
 mod('api', getForegroundObject=lambda: types.SimpleNamespace(windowHandle=state['fg'], name=state['title']), getFocusObject=lambda: types.SimpleNamespace(windowClassName='X', appModule=types.SimpleNamespace(appName=state['app'])), getCaretPosition=lambda: Info(), getReviewPosition=lambda: Info(), getClipData=lambda: '', copyToClip=lambda t: None)
 mod('globalPluginHandler', GlobalPlugin=type('GP',(),{'__init__':lambda s,*a,**k:None,'terminate':lambda s:None}))
 mod('gui', guiHelper=None); mod('gui.guiHelper')

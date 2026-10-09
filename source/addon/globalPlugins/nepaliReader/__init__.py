@@ -12,6 +12,7 @@ import ctypes
 import hashlib
 import os
 import pickle
+import re
 import threading
 import time
 import zlib
@@ -461,7 +462,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			# Translators: reminder spoken on NVDA startup
 			ui.message(_(
 				"Nepali Reader active. "
-				"Recommendation: Keep Nepali mode off (NVDA+Alt+N / NVDA+Ctrl+N) when typing in English or navigating system menus, "
+				"Recommendation: Keep Nepali mode off (NVDA+Ctrl+Shift+Space) when typing in English or navigating system menus, "
 				"and turn it on when reading Nepali documents or PDFs."
 			))
 
@@ -562,14 +563,14 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		toolsMenu = gui.mainFrame.sysTrayIcon.toolsMenu
 		menu = wx.Menu()
 		# Translators: menu item that turns the add-on on or off
-		self._onOffItem = menu.AppendCheckItem(wx.ID_ANY, _("&Nepali mode (NVDA+Alt+N / NVDA+Ctrl+N / NVDA+Ctrl+Shift+Space)"))
+		self._onOffItem = menu.AppendCheckItem(wx.ID_ANY, _("&Nepali mode (NVDA+Ctrl+Shift+Space)"))
 		self._onOffItem.Check(isOn())
 		gui.mainFrame.sysTrayIcon.Bind(wx.EVT_MENU, self._onMenuToggle, self._onOffItem)
 		# Translators: menu item
-		item = menu.Append(wx.ID_ANY, _("Convert selected text or clipboard (NVDA+Alt+U)"))
+		item = menu.Append(wx.ID_ANY, _("Convert selected text or clipboard"))
 		gui.mainFrame.sysTrayIcon.Bind(wx.EVT_MENU, lambda e: wx.CallLater(300, self.script_convertSelection, None), item)
 		# Translators: menu item
-		item = menu.Append(wx.ID_ANY, _("&Settings... (NVDA+Ctrl+L)"))
+		item = menu.Append(wx.ID_ANY, _("&Settings..."))
 		gui.mainFrame.sysTrayIcon.Bind(wx.EVT_MENU, self._onMenuSettings, item)
 		# Translators: menu item to check for updates
 		itemUpdate = menu.Append(wx.ID_ANY, _("&Check for updates..."))
@@ -732,6 +733,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		mode = c["mode"]
 		repair = c["repairUnicode"]
 		switchLang = c["switchLanguage"]
+		if any(type(x).__name__ == "CharacterModeCommand" for x in speechSequence):
+			# character by character speech (arrow keys, typing echo) is resolved from the document
+			# text itself in _resolveCharacter; English letters must stay English here
+			return speechSequence
 		ctxEnc = self._inContext()
 		defaultEnc = ctxEnc or c["encoding"]
 		out = []
@@ -756,7 +761,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				isPdf = False
 			inCtx = bool(ctxEnc or isPdf)
 			if mode != "off":
-				if len(text.strip()) <= 4 and (inCtx or not self._docState().isUnicodeDocument):
+				if len(text.strip()) <= 4 and (inCtx or not self._docState().isUnicodeDocument) and not detector.isEnglishWord(detector._core(text).lower()):
 					conv_short = legacyFonts.convert(text.strip(), defaultEnc)
 					if conv_short and (devanagariRepair.hasDevanagari(conv_short) or conv_short in (":", "५", "१", "२", "३", "४", "६", "७", "८", "९", "०")):
 						if (neLexicon.isLoaded() and neLexicon.isWord(conv_short.strip(".,:;!?()[]{}"))) or any(ch in "!@#$%^&*()+=~`_{}[]\\|/<>?;'-" for ch in text) or conv_short in (":", "५", "१", "२", "३", "४", "६", "७", "८", "९", "०"):
@@ -1449,6 +1454,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 							if isinstance(item, str):
 								fields[i] = chAt
 						return fields
+					if chAt and chAt.isascii() and orig_char.isascii() and chAt == orig_char:
+						# English letter, digit or sign: the PDF itself says it is not Preeti
+						return fields
 
 		ctx = self._lineContext(info)
 		word = None
@@ -1472,6 +1480,13 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				if w_cand and 0 <= w_off < len(w_cand) and w_cand[w_off] not in (" ", "\t", "\r", "\n", "।", "॥"):
 					word = w_cand.strip()
 					char_off = min(w_off, max(0, len(word) - 1))
+
+		if orig_char.isascii() and not orig_char.isspace():
+			verdict = self._lineTokenVerdict(info, c, ctx)
+			if verdict is False:
+				return fields
+			if verdict is None and word and word.isascii() and not self._wordLooksLegacy(word, c):
+				return fields
 
 		ptext = ""
 		ntext = ""
@@ -1617,6 +1632,55 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 					fields[idx] = res
 		return fields
 
+	def _lineTokenVerdict(self, info, c, ctx):
+		"""True if the word under `info` is converted when its line is read, False if reading the line
+		leaves it as it is (English, numbers), None if that cannot be told. Character and word
+		navigation use this so they always agree with line reading."""
+		if not ctx:
+			return None
+		line, off = ctx
+		try:
+			raw = _unwrap(info)
+			li = raw.copy()
+			li.expand(textInfos.UNIT_LINE)
+			fc = dict(config.conf["documentFormatting"])
+			fc["reportFontName"] = True
+			fields = li.getTextWithFields(fc)
+			orig = "".join(f for f in fields if isinstance(f, str))
+			key = ("tokverdict", orig, self._inContext(), c["mode"], c["encoding"])
+			cached = self._cache.get_(key)
+			if cached is None:
+				out = self._convertFieldList(li, list(fields), c, unit=textInfos.UNIT_LINE)
+				conv = "".join(f for f in out if isinstance(f, str))
+				cached = (orig, conv)
+				self._cache.put(key, cached)
+			orig, conv = cached
+			if orig.rstrip("\r\n") != line.rstrip("\r\n"):
+				return None
+			pos = off
+			toks = [m for m in re.finditer(r"\S+", orig)]
+			ctoks = conv.split()
+			if len(toks) != len(ctoks):
+				return None
+			for m, ct in zip(toks, ctoks):
+				if m.start() <= pos < m.end():
+					return ct != m.group(0)
+		except Exception:
+			log.debugWarning("Nepali Reader: could not decide the word for navigation", exc_info=True)
+		return None
+
+	def _wordLooksLegacy(self, word, c):
+		"""Fallback when the line cannot be examined: is this ASCII word Preeti?"""
+		try:
+			core = detector._core(word)
+			if not core or not any(ch.isascii() and ch.isalpha() for ch in core):
+				return False
+			if detector.isEnglishWord(core.lower()):
+				return False
+			return detector.looksLegacy(word, self._inContext() or c["encoding"], context=bool(self._inContext()))
+		except Exception:
+			return True
+
 	def _convertFieldsInner(self, info, formatConfig, c, unit=None):
 		try:
 			rawText = info.text or ""
@@ -1627,6 +1691,11 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
 		if unit == textInfos.UNIT_CHARACTER:
 			return self._resolveCharacter(info, formatConfig, c)
+
+		if unit == getattr(textInfos, "UNIT_WORD", "word") and rawText.strip() and rawText.isascii() and c["mode"] != "off":
+			# a word the line reading leaves as English stays English when read word by word
+			if self._lineTokenVerdict(info, c, self._lineContext(info)) is False:
+				return info.getTextWithFields(formatConfig)
 
 		wantFont = c["useFontNames"] and c["mode"] != "off"
 		fc = formatConfig
@@ -2090,13 +2159,13 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		# Translators: input help for a command
 		description=_("Turns Nepali mode on or off (reading Preeti, Kruti Dev and damaged Nepali PDFs correctly)"),
 		category=CATEGORY,
-		gestures=["kb:NVDA+control+shift+space", "kb:NVDA+alt+n", "kb:NVDA+control+n"],
+		gesture="kb:NVDA+control+shift+space",
 	)
 	def script_toggleNepaliMode(self, gesture):
 		on = self._toggleEnabled()
 		tones.beep(880 if on else 330, 50)
 		# Translators: announced when Nepali mode is switched on or off
-		ui.message(_("Nepali mode on. Turn off with NVDA+Alt+N or NVDA+Ctrl+N for English typing or menus.") if on else _("Nepali mode off"))
+		ui.message(_("Nepali mode on. Turn off with NVDA+Ctrl+Shift+Space for English typing or menus.") if on else _("Nepali mode off"))
 
 	@script(
 		# Translators: input help for a command
@@ -2180,7 +2249,6 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		# Translators: input help for a command
 		description=_("Cycles legacy Nepali/Hindi font reading between automatic, always convert and off"),
 		category=CATEGORY,
-		gesture="kb:NVDA+alt+p",
 	)
 	def script_cycleMode(self, gesture):
 		c = conf()
@@ -2199,7 +2267,6 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		# Translators: input help for a command
 		description=_("Cycles the default legacy font: Preeti, Kantipur, Sagarmatha, Himali, PCS Nepali, Kruti Dev"),
 		category=CATEGORY,
-		gesture="kb:NVDA+alt+shift+p",
 	)
 	def script_cycleEncoding(self, gesture):
 		c = conf()
@@ -2217,7 +2284,6 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			"to Unicode, copies the result to the clipboard and reads it"
 		),
 		category=CATEGORY,
-		gesture="kb:NVDA+alt+u",
 	)
 	def script_convertSelection(self, gesture):
 		text = ""
@@ -2256,7 +2322,6 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		# Translators: input help for a command
 		description=_("Opens Nepali Reader settings dialog"),
 		category=CATEGORY,
-		gesture="kb:NVDA+control+l",
 	)
 	def script_openSettings(self, gesture):
 		import gui
@@ -2273,11 +2338,11 @@ class NepaliReaderSettingsPanel(SettingsPanel):
 		c = conf()
 		helper = guiHelper.BoxSizerHelper(self, sizer=settingsSizer)
 		# Translators: settings label
-		self.enabledCheck = helper.addItem(wx.CheckBox(self, label=_("Nepali mode (NVDA+Alt+N, NVDA+Ctrl+N or NVDA+Ctrl+Shift+Space)")))
+		self.enabledCheck = helper.addItem(wx.CheckBox(self, label=_("Nepali mode (NVDA+Ctrl+Shift+Space)")))
 		self.enabledCheck.SetValue(isOn())
 		# Translators: guidance note in settings dialog
 		helper.addItem(wx.StaticText(self, label=_(
-			"Recommendation: Keep Nepali mode disabled (NVDA+Alt+N / NVDA+Ctrl+N) when working in English documents, "
+			"Recommendation: Keep Nepali mode disabled (NVDA+Ctrl+Shift+Space) when working in English documents, "
 			"programming, or navigating system menus. Enable it when reading Nepali text or PDFs."
 		)))
 		# Translators: settings label

@@ -2,23 +2,17 @@
 
 All notable changes to the **Nepali Reader** NVDA add-on are documented here.
 
-## [2.0] - 2026-10-09
+## [1.1.7] - 2026-10-09
+
+### Changed
+- **One shortcut only**: `NVDA + Ctrl + Shift + Space` turns Nepali mode on or off. All other default shortcuts were removed (the commands stay in NVDA's Input gestures dialog, where a key can be assigned if wanted). `Ctrl + C` still copies clean Unicode text.
+
+### Fixed
+- **English stays English when reading character by character or word by word** in documents that mix Preeti and English (Word, Notepad, browsers, PDFs). Before, an English letter was spoken as a Nepali letter. Character and word reading now follow exactly what line reading decides for the same word; in PDFs the document's own letter is used. Typing echo and spelling are never converted.
 
 ### Added
-- **New Shortcut Gestures**:
-  - `NVDA + Ctrl + N`: Quickly toggle Nepali mode on or off.
-  - `NVDA + Ctrl + L`: Open Nepali Reader Settings directly.
-- **In-App Auto-Updater with Live Progress Bar**:
-  - Responsive download progress dialog with live percentage indicator (`Connecting to server...` to `Downloading update... X%`).
-  - Seamless automatic handoff to NVDA's official Add-on Installation dialog on completion without manual intervention.
-  - Prioritized IPv4 connection to prevent 20–30 second ISP/IPv6 network timeouts on local internet connections.
-  - Clean plain-text release notes formatting for screen readers.
-- **Project Authorship**:
-  - Co-authored and maintained by **Suyog Dhungel** and **Roshan Gautam**.
-
-## [1.1.7] - 2026-10-08
-
-### Added
+- **In-App Update Progress**: update download with a live progress dialog (`Connecting to server...`, `Downloading update, please wait... X%`), cancel support, IPv4-first connection for slow ISP routes, automatic hand-off to NVDA's own add-on install dialog, and plain-text release notes for screen readers (by Roshan Gautam).
+- **Project Authorship**: maintained by Suyog Dhungel and Roshan Gautam.
 - **Integrated GitHub Auto-Updater**: Built-in automatic update engine checking GitHub releases. Users receive update notifications with one-click background download and installation without needing external websites or manual downloads. Added a manual "Check for updates..." item under NVDA's Tools menu and a toggle in Nepali Reader settings.
 
 ### Fixed
