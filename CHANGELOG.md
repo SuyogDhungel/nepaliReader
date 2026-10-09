@@ -29,6 +29,7 @@ All notable changes to the **Nepali Reader** NVDA add-on are documented here.
 - **PDF digits and bullets**: a lone ( or ) in a Preeti PDF line (for example "९ जना रानी") is read ९ or ०; the Courier "o" bullet is read as ○; a lone 5 in a Preeti line is छ; the keys ÷ and § stay inside words (दुईपट्टी, आदिवासी/जनजाति).
 - **Character reading in PDFs**: digit and sign keys inside Preeti words (for example the 8 in चा8) now read as the letter they are (ड), matching line reading.
 - **Decimals in PDFs**: ६.)% is read ६.०% (a ")" after a digit and a point is the digit key for ०).
+- **Lone digit keys and mojibake**: a lone # ! @ $ ^ & * between Preeti words is the digit it draws (साउन # गते is साउन ३ गते), "#%" is ३%, and UTF-8 text shown through a Latin code page (à¤§à¤°...) such as a window title or address is left as it is instead of turning into Devanagari garbage.
 - **Quiet releases**: the automatic update check only notifies when the GitHub release notes contain the word [notify]. Releases without it are still found by "Check for updates...", and the next [notify] release carries every earlier fix.
 
 ## [1.1.6] - 2026-10-07

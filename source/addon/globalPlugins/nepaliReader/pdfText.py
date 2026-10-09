@@ -37,7 +37,7 @@ NUKTA = "़"
 REPH = "र्"
 DEP_SIGNS = set("ऺऻािीुूृॄॅॆेैॉॊोौॎॏॕॖॗॢॣऀँंः़")
 INDEPENDENT = set(chr(c) for c in range(0x0904, 0x0915)) | set("ॠॡॲॳॴॵॶॷ")
-INDEX_VERSION = 19
+INDEX_VERSION = 21
 INFER = True
 
 
@@ -719,6 +719,9 @@ def _words(glyphs, page):
 
 # ---------------------------------------------------------------- the document index
 
+_KEYS_PERCENT = re.compile(r"^([!@#$^&*()]+)(%[,.)]*)$")
+
+
 class DocIndex:
 	"""What the viewer shows -> the real text, for one PDF."""
 
@@ -799,6 +802,10 @@ class DocIndex:
 				fixed = "महत्त्व राख्ने"
 			if fixed and ")" in fixed and enc != "krutidev":
 				fixed = legacyFonts._DECIMAL_ZERO.sub("\u0966", fixed)  # ६.)% is ६.०%
+			if fixed and enc != "krutidev" and "%" in fixed:
+				m = _KEYS_PERCENT.match(fixed)
+				if m:  # "#%" is ३% (Preeti digit key, then a percent sign from another font)
+					fixed = "".join(legacyFonts._LONE_DIGIT_KEYS[c] for c in m.group(1)) + m.group(2)
 			key = keyOf(shown)
 			if not key:
 				continue
@@ -1338,8 +1345,8 @@ def _wordTexts(w):
 			enc = next(iter(legacy_encs))
 			raw = keyOf(shownText)
 			fixed = legacyFonts.convert(raw, enc) or raw
-			if raw in ("(", ")") and enc != "krutidev":
-				fixed = "\u096f" if raw == "(" else "\u0966"  # the keys Shift+9 and Shift+0 of a Preeti font draw ९ and ०
+			if enc != "krutidev" and raw in legacyFonts._LONE_DIGIT_KEYS:
+				fixed = legacyFonts._LONE_DIGIT_KEYS[raw]  # the Shift+digit keys of a Preeti font draw the digits
 			return shownText, fixed, None, enc
 	toks = []      # (text, glyph number)
 	charGlyph = []  # for each shown (key) character: its glyph number

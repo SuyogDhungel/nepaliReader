@@ -185,6 +185,9 @@ def isNonLegacySymbolOrEmoji(t):
 	return False
 
 
+_MOJIBAKE = re.compile(r"\u00e0[\u00a4\u00a5]")
+
+
 def decide(text, encoding="preeti", context=False):
 	"""Return a list of (token, isLegacy) covering `text` (whitespace tokens included, never legacy).
 
@@ -197,6 +200,9 @@ def decide(text, encoding="preeti", context=False):
 	  fragments (single words, characters) lean towards legacy unless they look English.
 	"""
 	text = cleanGluedTokens(text)
+	if _MOJIBAKE.search(text):
+		# UTF-8 Devanagari shown through a Latin code page (à¤§à¤°...): not Preeti, left as it is
+		return [(t, False) for t in re.split(r"(\s+)", text)]
 	if not context and _looksLikeCode(text):
 		return [(t, False) for t in re.split(r"(\s+)", text)]
 	tokens = re.split(r"(\s+)", text)
@@ -345,6 +351,8 @@ def forceDecide(text, protectEnglish=True):
 	and (if protectEnglish) words NVDA itself speaks."""
 	if not protectEnglish and text.strip().lower() in NVDA_PHRASES:
 		return [(text, False)]
+	if _MOJIBAKE.search(text):
+		return [(t, False) for t in re.split(r"(\s+)", text)]
 	out = []
 	for t in re.split(r"(\s+)", text):
 		if not t or t.isspace():
