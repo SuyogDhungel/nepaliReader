@@ -227,11 +227,64 @@ def install():
 				def nepali_getSynth(self, lang):
 					"""Ensures that when MultiLang switches to Nepali ('ne'),
 					the selected synthesizer is set to its Nepali voice rather than defaulting to English."""
-					synth = _orig_getSynth(self, lang)
 					if lang and lang.startswith("ne"):
-						settings = self._settings[lang]
-						# If no custom NVDA profile is assigned, select the best Nepali voice
-						if settings.profile is None and synth.isSupported("voice"):
+						settings = getattr(self, "_settings", {}).get(lang)
+						synth = None
+						if settings is not None:
+							try:
+								synth = _orig_getSynth(self, lang)
+							except Exception:
+								synth = None
+
+						# If synth has no Nepali capability (e.g. default Eloquence or SAPI5):
+						cur_has_ne = False
+						if synth is not None and synth.isSupported("voice"):
+							cur_voice = getattr(synth, "voice", "")
+							vlang = ""
+							if cur_voice and getattr(synth, "availableVoices", None) and cur_voice in synth.availableVoices:
+								vlang = (getattr(synth.availableVoices[cur_voice], "language", "") or "").lower()
+							if vlang.startswith("ne") or findNepaliVoice(synth):
+								cur_has_ne = True
+
+						if not cur_has_ne:
+							# Look for a synthesizer in MultiLang or NVDA that actually supports Nepali
+							best_driver_name = findBestNepaliSynth()
+							alt_synth = None
+							synths_dict = getattr(self, "_synths", None)
+							if synths_dict is not None:
+								if best_driver_name in synths_dict:
+									alt_synth = synths_dict[best_driver_name]
+								elif "espeak" in synths_dict:
+									alt_synth = synths_dict["espeak"]
+								elif "Hear2ReadNG" in synths_dict:
+									alt_synth = synths_dict["Hear2ReadNG"]
+
+								if alt_synth is None:
+									# Dynamically initialize eSpeak / Hear2Read into MultiLang's synths pool
+									try:
+										import synthDriverHandler
+										for s_name in (best_driver_name, "Hear2ReadNG", "espeak"):
+											try:
+												drv = synthDriverHandler.getSynthDriver(s_name)
+												if drv:
+													synths_dict[s_name] = drv
+													alt_synth = drv
+													log.info("Nepali Reader: Initialized %s into MultiLang synth pool" % s_name)
+													break
+											except Exception:
+												continue
+									except Exception:
+										pass
+							if alt_synth is not None:
+								synth = alt_synth
+
+						if synth is None:
+							try:
+								synth = _orig_getSynth(self, lang)
+							except Exception:
+								synth = getattr(self, "_defaultSynth", None)
+
+						if synth is not None and (settings is None or getattr(settings, "profile", None) is None) and synth.isSupported("voice"):
 							cur_voice = getattr(synth, "voice", "")
 							vlang = ""
 							if cur_voice and getattr(synth, "availableVoices", None) and cur_voice in synth.availableVoices:
@@ -244,7 +297,8 @@ def install():
 										log.debug("Nepali Reader: Set MultiLang synth %s voice to Nepali: %s" % (synth.name, ne_voice))
 									except Exception:
 										pass
-					return synth
+						return synth
+					return _orig_getSynth(self, lang)
 
 				driver_cls._getSynth = nepali_getSynth
 				log.info("Nepali Reader: Successfully hooked MultiLang SynthDriver._getSynth for Nepali voice routing")
@@ -261,12 +315,16 @@ def install():
 				# Check language settings
 				if "languages" in ml_conf:
 					langs = ml_conf["languages"]
-					if "ne" not in langs or not langs["ne"].get("synth"):
+					if "ne" not in langs or not (isinstance(langs.get("ne"), dict) and langs["ne"].get("synth")):
 						best_synth = findBestNepaliSynth()
 						langs["ne"] = {"synth": best_synth, "profile": None, "sendLang": True}
 						changed = True
 				if changed:
-					log.info("Nepali Reader: Auto-configured MultiLang speech settings for Nepali")
+					try:
+						config.conf.save()
+					except Exception:
+						pass
+					log.info("Nepali Reader: Auto-configured MultiLang speech settings for Nepali and saved config")
 		except Exception:
 			pass
 

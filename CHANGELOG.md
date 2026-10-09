@@ -2,6 +2,20 @@
 
 All notable changes to the **Nepali Reader** NVDA add-on are documented here.
 
+## [2.0] - 2026-10-09
+
+### Added
+- **New Shortcut Gestures**:
+  - `NVDA + Ctrl + N`: Quickly toggle Nepali mode on or off.
+  - `NVDA + Ctrl + L`: Open Nepali Reader Settings directly.
+- **In-App Auto-Updater with Live Progress Bar**:
+  - Responsive download progress dialog with live percentage indicator (`Connecting to server...` to `Downloading update... X%`).
+  - Seamless automatic handoff to NVDA's official Add-on Installation dialog on completion without manual intervention.
+  - Prioritized IPv4 connection to prevent 20–30 second ISP/IPv6 network timeouts on local internet connections.
+  - Clean plain-text release notes formatting for screen readers.
+- **Project Authorship**:
+  - Co-authored and maintained by **Suyog Dhungel** and **Roshan Gautam**.
+
 ## [1.1.7] - 2026-10-08
 
 ### Added

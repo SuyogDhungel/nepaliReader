@@ -461,7 +461,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			# Translators: reminder spoken on NVDA startup
 			ui.message(_(
 				"Nepali Reader active. "
-				"Recommendation: Keep Nepali mode off (NVDA+Alt+N) when typing in English or navigating system menus, "
+				"Recommendation: Keep Nepali mode off (NVDA+Alt+N / NVDA+Ctrl+N) when typing in English or navigating system menus, "
 				"and turn it on when reading Nepali documents or PDFs."
 			))
 
@@ -562,14 +562,14 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		toolsMenu = gui.mainFrame.sysTrayIcon.toolsMenu
 		menu = wx.Menu()
 		# Translators: menu item that turns the add-on on or off
-		self._onOffItem = menu.AppendCheckItem(wx.ID_ANY, _("&Nepali mode (NVDA+Alt+N / NVDA+Ctrl+Shift+Space)"))
+		self._onOffItem = menu.AppendCheckItem(wx.ID_ANY, _("&Nepali mode (NVDA+Alt+N / NVDA+Ctrl+N / NVDA+Ctrl+Shift+Space)"))
 		self._onOffItem.Check(isOn())
 		gui.mainFrame.sysTrayIcon.Bind(wx.EVT_MENU, self._onMenuToggle, self._onOffItem)
 		# Translators: menu item
 		item = menu.Append(wx.ID_ANY, _("Convert selected text or clipboard (NVDA+Alt+U)"))
 		gui.mainFrame.sysTrayIcon.Bind(wx.EVT_MENU, lambda e: wx.CallLater(300, self.script_convertSelection, None), item)
 		# Translators: menu item
-		item = menu.Append(wx.ID_ANY, _("&Settings..."))
+		item = menu.Append(wx.ID_ANY, _("&Settings... (NVDA+Ctrl+L)"))
 		gui.mainFrame.sysTrayIcon.Bind(wx.EVT_MENU, self._onMenuSettings, item)
 		# Translators: menu item to check for updates
 		itemUpdate = menu.Append(wx.ID_ANY, _("&Check for updates..."))
@@ -605,10 +605,20 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			c["mode"] = c["lastOnMode"]
 		self._cache.clear()
 		self._clearContext()
-		if not newVal:
+		if newVal:
+			if not getattr(self, "_speechFilterRegistered", False):
+				self._registerSpeechFilter()
+		else:
 			self._docs.clear()
 			self._pdfs.clear()
 			devanagariRepair.setDocumentSwaps([], None)
+			if getattr(self, "_speechFilterRegistered", False):
+				try:
+					import speech
+					speech.filter_speechSequence.unregister(self._filterSpeechSequence)
+				except Exception:
+					pass
+				self._speechFilterRegistered = False
 		self._syncMenu()
 		return newVal
 
@@ -755,13 +765,15 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 					conv = detector.convertMixed(text, lambda t: legacyFonts.convert(t, defaultEnc) or t, encoding=defaultEnc, context=inCtx)
 					if conv != text:
 						text = conv
+						if len(text.split()) >= 2 and mode == "auto":
+							self._setContext(defaultEnc)
 			if devanagariRepair.hasDevanagari(text) or any(ch in "%M" for ch in text):
 				text = devanagariRepair.cleanShuffled(text)
-				if repair and devanagariRepair.isBroken(text):
+				if repair and (isPdf or self._isBrokenDoc() or devanagariRepair.isBroken(text)):
 					text = devanagariRepair.repair(text, broken=True)
 
 			if switchLang and LangChangeCommand and devanagariRepair.hasDevanagari(text):
-				if len(text) == 1 or any(type(x).__name__ == "CharacterModeCommand" for x in speechSequence):
+				if any(type(x).__name__ == "CharacterModeCommand" for x in speechSequence):
 					out.append(text)
 					continue
 				isNe = multilangIntegration.isNepaliDevanagari(text)
@@ -1284,8 +1296,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 					cached = self._isPdfViewerObj(obj)
 				if not cached:
 					cached = bool(pdfLocate.findFromTitle(rawTitle, getattr(fg, "processID", None)))
-				if cached or len(title) > 6:
-					self._pdfTabs.put(key, cached)
+				if cached:
+					self._pdfTabs.put(key, True)
 			return cached
 		except Exception:
 			return False
@@ -1304,16 +1316,18 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				if any(marker in name or marker in val or marker in desc for marker in (
 					"pdf is inaccessible", "add text annotations", "save to google drive",
 					"application/pdf", "finished loading pdf", "rotate counterclockwise",
-					"fit to page", "fit to width", "zoom in", "zoom out"
+					"fit to page", "fit to width", "zoom in", "zoom out",
+					"chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai", "pdf viewer", "pdf plugin"
 				)):
 					return True
 				try:
 					ia = getattr(o, "IAccessibleObject", None)
 					if ia:
 						accName = (ia.accName(getattr(o, "IAccessibleChildID", 0)) or "").lower()
-						if any(marker in accName for marker in (
+						accVal = (ia.accValue(getattr(o, "IAccessibleChildID", 0)) or "").lower()
+						if any(marker in accName or marker in accVal for marker in (
 							"pdf is inaccessible", "add text annotations", "finished loading pdf",
-							"rotate counterclockwise", "fit to page"
+							"rotate counterclockwise", "fit to page", "application/pdf", "pdf viewer"
 						)):
 							return True
 				except Exception:
@@ -2076,13 +2090,13 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		# Translators: input help for a command
 		description=_("Turns Nepali mode on or off (reading Preeti, Kruti Dev and damaged Nepali PDFs correctly)"),
 		category=CATEGORY,
-		gestures=["kb:NVDA+control+shift+space", "kb:NVDA+alt+n"],
+		gestures=["kb:NVDA+control+shift+space", "kb:NVDA+alt+n", "kb:NVDA+control+n"],
 	)
 	def script_toggleNepaliMode(self, gesture):
 		on = self._toggleEnabled()
 		tones.beep(880 if on else 330, 50)
 		# Translators: announced when Nepali mode is switched on or off
-		ui.message(_("Nepali mode on. Turn off with NVDA+Alt+N for English typing or menus.") if on else _("Nepali mode off"))
+		ui.message(_("Nepali mode on. Turn off with NVDA+Alt+N or NVDA+Ctrl+N for English typing or menus.") if on else _("Nepali mode off"))
 
 	@script(
 		# Translators: input help for a command
@@ -2238,6 +2252,16 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		api.copyToClip(result)
 		ui.message(result)
 
+	@script(
+		# Translators: input help for a command
+		description=_("Opens Nepali Reader settings dialog"),
+		category=CATEGORY,
+		gesture="kb:NVDA+control+l",
+	)
+	def script_openSettings(self, gesture):
+		import gui
+		wx.CallAfter(gui.mainFrame.popupSettingsDialog, NVDASettingsDialog, NepaliReaderSettingsPanel)
+
 
 
 
@@ -2249,11 +2273,11 @@ class NepaliReaderSettingsPanel(SettingsPanel):
 		c = conf()
 		helper = guiHelper.BoxSizerHelper(self, sizer=settingsSizer)
 		# Translators: settings label
-		self.enabledCheck = helper.addItem(wx.CheckBox(self, label=_("Nepali mode (NVDA+Alt+N or NVDA+Ctrl+Shift+Space)")))
+		self.enabledCheck = helper.addItem(wx.CheckBox(self, label=_("Nepali mode (NVDA+Alt+N, NVDA+Ctrl+N or NVDA+Ctrl+Shift+Space)")))
 		self.enabledCheck.SetValue(isOn())
 		# Translators: guidance note in settings dialog
 		helper.addItem(wx.StaticText(self, label=_(
-			"Recommendation: Keep Nepali mode disabled (NVDA+Alt+N) when working in English documents, "
+			"Recommendation: Keep Nepali mode disabled (NVDA+Alt+N / NVDA+Ctrl+N) when working in English documents, "
 			"programming, or navigating system menus. Enable it when reading Nepali text or PDFs."
 		)))
 		# Translators: settings label

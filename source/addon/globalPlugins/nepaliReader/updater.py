@@ -5,6 +5,7 @@
 import json
 import os
 import re
+import socket
 import tempfile
 import threading
 import time
@@ -53,6 +54,45 @@ def parseVersion(verStr):
 	return tuple(nums[:3])
 
 
+def stripMarkdown(text):
+	"""Converts GitHub Markdown release notes into clean plain text for screen readers."""
+	if not text:
+		return ""
+	# 1. Normalize line breaks
+	s = text.replace("\r\n", "\n").replace("\r", "\n")
+	# 2. Remove fenced code blocks
+	s = re.sub(r'```[a-zA-Z0-9_-]*\n(.*?)```', r'\1', s, flags=re.DOTALL)
+	# 3. Remove inline code backticks: `code` -> code
+	s = re.sub(r'`([^`]+)`', r'\1', s)
+	# 4. Remove HTML tags: <br>, <b>, etc.
+	s = re.sub(r'<[^>]+>', '', s)
+	# 5. Remove markdown images and links: ![alt](url) -> alt, [text](url) -> text
+	s = re.sub(r'!\[([^\]]*)\]\([^)]+\)', r'\1', s)
+	s = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', s)
+	# 6. Remove bold/italics markers: **text**, __text__, *text*, _text_
+	s = re.sub(r'\*\*([^*]+)\*\*', r'\1', s)
+	s = re.sub(r'__([^_]+)__', r'\1', s)
+	s = re.sub(r'\*([^*]+)\*', r'\1', s)
+	s = re.sub(r'(?<!\w)_([^_]+)_(?!\w)', r'\1', s)
+	# 7. Process lines: strip header hashes (### Header -> Header), standardize bullets, remove blockquotes/rules
+	lines = []
+	for line in s.split("\n"):
+		# Skip horizontal rules
+		if re.match(r'^\s*[-*_]{3,}\s*$', line):
+			continue
+		# Strip blockquote '>'
+		line = re.sub(r'^\s*>\s*', '', line)
+		# Strip leading header hashes
+		line = re.sub(r'^\s*#{1,6}\s*', '', line)
+		# Convert markdown bullets (- , * , + ) to a clean bullet character
+		line = re.sub(r'^\s*[-*+]\s+', '• ', line)
+		lines.append(line.rstrip())
+	# 8. Collapse 3+ consecutive newlines to 2
+	result = "\n".join(lines)
+	result = re.sub(r'\n{3,}', '\n\n', result).strip()
+	return result
+
+
 def getCurrentVersion():
 	"""Reads current installed version from addon manifest."""
 	try:
@@ -64,76 +104,220 @@ def getCurrentVersion():
 	return (1, 1, 7)
 
 
-def _downloadAndInstall(url, newVerStr):
-	"""Downloads the .nvda-addon package and triggers NVDA's installer."""
+def launchInstaller(destPath):
+	"""Hands off the downloaded .nvda-addon package to NVDA's installation dialog."""
 	try:
-		progressDialog = wx.ProgressDialog(
-			_("Updating Nepali Reader"),
-			_("Downloading Nepali Reader {version}...").format(version=newVerStr),
-			maximum=100,
-			parent=gui.mainFrame,
-			style=wx.PD_APP_MODAL | wx.PD_AUTO_HIDE
-		)
+		import ui
+		ui.message(_("Download complete. Opening add-on installation dialog..."))
 	except Exception:
-		progressDialog = None
+		pass
 
+	launched = False
+	# 1. Try NVDA's internal gui.addonGui on main thread
 	try:
-		req = urllib.request.Request(url, headers={"User-Agent": "NepaliReader-NVDA-Addon"})
-		with urllib.request.urlopen(req, timeout=30) as resp:
-			totalSize = int(resp.headers.get("Content-Length", 0))
-			downloaded = 0
-			tempFile = tempfile.NamedTemporaryFile(suffix=".nvda-addon", delete=False)
-			try:
-				blockSize = 8192
-				while True:
-					chunk = resp.read(blockSize)
-					if not chunk:
-						break
-					tempFile.write(chunk)
-					downloaded += len(chunk)
-					if progressDialog and totalSize > 0:
-						pct = min(99, int((downloaded / totalSize) * 100))
-						wx.CallAfter(progressDialog.Update, pct)
-				tempFile.flush()
-				tempFile.close()
-			finally:
-				if progressDialog:
-					wx.CallAfter(progressDialog.Destroy)
+		import gui.addonGui
+		if hasattr(gui.addonGui, "installAddon") and hasattr(addonHandler, "AddonBundle"):
+			bundle = addonHandler.AddonBundle(destPath)
+			gui.addonGui.installAddon(bundle)
+			launched = True
+	except Exception:
+		launched = False
 
-			def installOnMainThread():
-				try:
-					if hasattr(addonHandler, "installAddonPackage"):
-						addonHandler.installAddonPackage(tempFile.name)
-					elif hasattr(addonHandler, "installAddon"):
-						addonHandler.installAddon(tempFile.name)
-				except Exception:
-					log.error("Nepali Reader: installation failed", exc_info=True)
-					gui.messageBox(
-						_("Could not install update package. Please try downloading manually from GitHub."),
-						_("Nepali Reader Update"),
-						wx.OK | wx.ICON_ERROR
-					)
-				finally:
-					try:
-						os.remove(tempFile.name)
-					except Exception:
-						pass
-
-			wx.CallAfter(installOnMainThread)
-	except Exception as e:
-		if progressDialog:
+	# 2. Universal Windows file handler (triggers NVDA's native install dialog)
+	if not launched:
+		try:
+			os.startfile(destPath)
+			launched = True
+		except Exception:
 			try:
-				wx.CallAfter(progressDialog.Destroy)
+				import subprocess
+				subprocess.Popen(["cmd", "/c", "start", "", destPath], shell=True)
+				launched = True
 			except Exception:
 				pass
+
+	if not launched:
+		gui.messageBox(
+			_("Update package downloaded to:\n{path}\n\nPlease open this file to install.").format(path=destPath),
+			_("Nepali Reader Update"),
+			wx.OK | wx.ICON_INFORMATION
+		)
+
+
+def _downloadAndInstall(url, newVerStr, progressDialog, cancelFlag):
+	"""Downloads the .nvda-addon package in the background while updating the progress dialog."""
+	tempDir = tempfile.gettempdir()
+	destPath = os.path.join(tempDir, f"nepaliReader-{newVerStr}.nvda-addon")
+
+	def updateDialog(pct, text):
+		if cancelFlag.is_set() or not progressDialog:
+			return
+		try:
+			res = progressDialog.Update(pct, text)
+			userCancelled = False
+			if hasattr(progressDialog, "WasCancelled") and progressDialog.WasCancelled():
+				userCancelled = True
+			elif isinstance(res, tuple) and not res[0]:
+				userCancelled = True
+			elif res is False:
+				userCancelled = True
+			if userCancelled:
+				cancelFlag.set()
+		except Exception:
+			pass
+
+	def updatePulse(text):
+		if cancelFlag.is_set() or not progressDialog:
+			return
+		try:
+			res = progressDialog.Pulse(text)
+			userCancelled = False
+			if hasattr(progressDialog, "WasCancelled") and progressDialog.WasCancelled():
+				userCancelled = True
+			elif isinstance(res, tuple) and not res[0]:
+				userCancelled = True
+			elif res is False:
+				userCancelled = True
+			if userCancelled:
+				cancelFlag.set()
+		except Exception:
+			pass
+
+	# Prefer IPv4 over IPv6 to avoid the common 21-second TCP connect timeout
+	# on Windows with certain ISPs in Nepal where IPv6 routes to GitHub/AWS are dropped.
+	orig_getaddrinfo = socket.getaddrinfo
+
+	def ipv4_first_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+		try:
+			res = orig_getaddrinfo(host, port, family, type, proto, flags)
+			# Put AF_INET (IPv4) ahead of AF_INET6
+			return sorted(res, key=lambda x: 0 if x[0] == socket.AF_INET else 1)
+		except Exception:
+			return orig_getaddrinfo(host, port, family, type, proto, flags)
+
+	try:
+		socket.getaddrinfo = ipv4_first_getaddrinfo
+		req = urllib.request.Request(url, headers={"User-Agent": "NepaliReader-NVDA-Addon"})
+		with urllib.request.urlopen(req, timeout=45) as resp:
+			try:
+				totalSize = int(resp.headers.get("Content-Length", 0) or 0)
+			except Exception:
+				totalSize = 0
+
+			downloaded = 0
+			lastPct = -1
+			chunkSize = 32768  # 32 KB chunks
+
+			with open(destPath, "wb") as f:
+				while True:
+					if cancelFlag.is_set():
+						break
+					chunk = resp.read(chunkSize)
+					if not chunk:
+						break
+					if cancelFlag.is_set():
+						break
+					f.write(chunk)
+					downloaded += len(chunk)
+
+					if totalSize > 0:
+						pct = int((downloaded / totalSize) * 100)
+						pct = min(max(pct, 0), 99)
+						if pct != lastPct:
+							lastPct = pct
+							msg = _("Downloading update, please wait... {pct}%").format(pct=pct)
+							wx.CallAfter(updateDialog, pct, msg)
+					else:
+						mb = downloaded / (1024 * 1024)
+						msg = _("Downloading update, please wait... {mb:.1f} MB").format(mb=mb)
+						wx.CallAfter(updatePulse, msg)
+
+					# Micro-pace streaming slightly (10ms) so NVDA can cleanly announce/beep
+					# progress bar changes instead of flashing from 0% to 100% in an instant.
+					time.sleep(0.01)
+
+		if cancelFlag.is_set():
+			try:
+				if os.path.exists(destPath):
+					os.remove(destPath)
+			except Exception:
+				pass
+
+			def handleCancel():
+				if progressDialog:
+					try:
+						progressDialog.Hide()
+					except Exception:
+						pass
+					try:
+						progressDialog.Close()
+					except Exception:
+						pass
+					try:
+						progressDialog.Destroy()
+					except Exception:
+						pass
+				try:
+					import ui
+					ui.message(_("Update download cancelled."))
+				except Exception:
+					pass
+
+			wx.CallAfter(handleCancel)
+			return
+
+		# Download completed successfully!
+		def finish():
+			if progressDialog:
+				try:
+					progressDialog.Hide()
+				except Exception:
+					pass
+				try:
+					progressDialog.Close()
+				except Exception:
+					pass
+				try:
+					progressDialog.Destroy()
+				except Exception:
+					pass
+
+			wx.CallLater(100, launchInstaller, destPath)
+
+		wx.CallAfter(finish)
+
+	except Exception as e:
 		log.error("Nepali Reader: update download failed", exc_info=True)
-		def notifyFail():
-			gui.messageBox(
-				_("Failed to download update: {err}").format(err=str(e)),
-				_("Nepali Reader Update"),
-				wx.OK | wx.ICON_ERROR
-			)
-		wx.CallAfter(notifyFail)
+		try:
+			if os.path.exists(destPath):
+				os.remove(destPath)
+		except Exception:
+			pass
+
+		def notifyFail(errMsg):
+			if progressDialog:
+				try:
+					progressDialog.Hide()
+				except Exception:
+					pass
+				try:
+					progressDialog.Close()
+				except Exception:
+					pass
+				try:
+					progressDialog.Destroy()
+				except Exception:
+					pass
+			if not cancelFlag.is_set():
+				gui.messageBox(
+					_("Failed to download update: {err}\nPlease check your internet connection.").format(err=errMsg),
+					_("Nepali Reader Update"),
+					wx.OK | wx.ICON_ERROR
+				)
+
+		wx.CallAfter(notifyFail, str(e))
+	finally:
+		socket.getaddrinfo = orig_getaddrinfo
 
 
 def checkUpdate(manual=False, configRef=None):
@@ -147,8 +331,11 @@ def checkUpdate(manual=False, configRef=None):
 					"Accept": "application/vnd.github.v3+json"
 				}
 			)
-			with urllib.request.urlopen(req, timeout=12) as resp:
+			with urllib.request.urlopen(req, timeout=10) as resp:
 				data = json.loads(resp.read().decode("utf-8"))
+
+			if configRef is not None:
+				configRef["lastUpdateCheck"] = time.time()
 
 			tag = data.get("tag_name", "")
 			body = (data.get("body", "") or "").strip()
@@ -164,7 +351,8 @@ def checkUpdate(manual=False, configRef=None):
 
 			if remoteVer > currentVer and addonUrl:
 				def promptUser():
-					notes = body[:600] + ("..." if len(body) > 600 else "")
+					plainNotes = stripMarkdown(body)
+					notes = plainNotes[:800] + ("..." if len(plainNotes) > 800 else "")
 					msg = _(
 						"An update for Nepali Reader is available!\n\n"
 						"Installed Version: {cur}\n"
@@ -182,9 +370,24 @@ def checkUpdate(manual=False, configRef=None):
 						wx.YES_NO | wx.ICON_QUESTION
 					)
 					if res == wx.YES:
+						progressDialog = None
+						try:
+							progressDialog = wx.ProgressDialog(
+								_("Nepali Reader Update"),
+								_("Connecting to server, please wait..."),
+								maximum=100,
+								parent=gui.mainFrame if (gui and hasattr(gui, "mainFrame")) else None,
+								style=wx.PD_CAN_ABORT | wx.PD_AUTO_HIDE | wx.PD_SMOOTH
+							)
+							progressDialog.CentreOnScreen()
+						except Exception as dlgErr:
+							log.debugWarning("Failed to create wx.ProgressDialog: %s" % dlgErr)
+							progressDialog = None
+
+						cancelFlag = threading.Event()
 						threading.Thread(
 							target=_downloadAndInstall,
-							args=(addonUrl, tag),
+							args=(addonUrl, tag, progressDialog, cancelFlag),
 							name="NepaliReaderDownloader",
 							daemon=True
 						).start()
@@ -214,15 +417,12 @@ def checkUpdate(manual=False, configRef=None):
 
 
 def startAutoUpdateCheck(configRef):
-	"""Runs a delayed background check on startup once per day."""
+	"""Runs a fast, non-blocking background check on every startup and restart."""
 	def delayedCheck():
-		time.sleep(12)  # Delay so NVDA finishes loading without any interruption
+		# 4-second delay so NVDA finishes loading audio and GUI smoothly
+		time.sleep(4)
 		try:
-			now = time.time()
-			last = configRef.get("lastUpdateCheck", 0.0)
-			if now - last >= CHECK_INTERVAL_SECONDS:
-				configRef["lastUpdateCheck"] = now
-				checkUpdate(manual=False, configRef=configRef)
+			checkUpdate(manual=False, configRef=configRef)
 		except Exception:
 			pass
 

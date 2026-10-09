@@ -147,7 +147,7 @@ If any shortcut conflicts with another add-on or if you prefer different keys, y
 Distributed under the **GNU General Public License v2.0 (GPL-2.0)**. See [LICENSE](LICENSE) for details.
 
 ## 🤝 Project & Support
-* **Author & Maintainer**: Suyog Dhungel (<dhungelsuyog13@gmail.com>)
+* **Authors & Maintainers**: Suyog Dhungel (<dhungelsuyog13@gmail.com>), Roshan Gautam (<mr.pawittra@gmail.com>)
 * **Project**: Nepali Reader for NVDA
 * **GitHub Repository**: [https://github.com/SuyogDhungel/nepaliReader](https://github.com/SuyogDhungel/nepaliReader)
 * **Feedback & Issues**: Please report issues or suggest improvements by opening an [Issue](https://github.com/SuyogDhungel/nepaliReader/issues) on GitHub.
