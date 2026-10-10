@@ -152,6 +152,16 @@ _FONT_DIFFS["sumod"] = {
 	"ˆ": "", "„": "", "…": "", "\xb8": "",
 }
 
+# Himalaya TT Font ("Himalaya", "HIMALAYATTFONT"): the Preeti layout, but its digit keys draw
+# the Nepali digits, ! draws ङ्ग, and three glyphs sit on control codes 1-3 (ङ्ग, त्, ङ्ग), which a
+# PDF gives as \x01-\x03 (they are passed on as Ł ł Ń so that they survive): checked against the
+# glyphs embedded in two real PDFs (अङ्ग, जङ्गली, महत्व, प्रसङ्गले on the page)
+_FONT_DIFFS["himalaya"] = {
+	"1": "१", "2": "२", "3": "३", "4": "४", "5": "५", "6": "६", "7": "७", "8": "८", "9": "९", "0": "०",
+	"!": "ङ्ग", "\u0141": "ङ्ग", "\u0142": "त्", "\u0143": "ङ्ग",
+}
+HIMALAYA_CONTROLS = str.maketrans({"\x01": "\u0141", "\x02": "\u0142", "\x03": "\u0143"})
+
 _PREETI_FAMILY_MAPS = {"preeti": PREETI_MAP}
 for _name, _diff in _FONT_DIFFS.items():
 	_m = dict(PREETI_MAP)
@@ -161,7 +171,7 @@ _PREETI_FAMILY_MAPS["gorkhapatra"] = PREETI_MAP
 _PREETI_FAMILY_MAPS["ganess"] = PREETI_MAP
 _PREETI_FAMILY_MAPS["nayanepal"] = PREETI_MAP
 # fonts typed exactly like Preeti (the Preeti-only typing rules below apply to them too)
-_PREETI_TYPED = ("preeti", "sumod")
+_PREETI_TYPED = ("preeti", "sumod", "himalaya")
 PREETI_TYPED = _PREETI_TYPED
 
 
@@ -215,8 +225,8 @@ def _applyModifier(s):
 		del out[i]
 		# look back for the base this 'm' modifies
 		j = i - 1
-		while j >= 0 and out[j] in SIGNS:
-			j -= 1
+		while j >= 0 and (out[j] in SIGNS or out[j] == _REPH):
+			j -= 1  # (a reph typed between: k{m is र्फ, as in मार्फत)
 		# त्र / त्त / व्र + m  ->  क्र / क्त
 		if j >= 2 and out[j - 1] == HALANT and out[j - 2] in ("त", "व") and out[j] in ("र", "त"):
 			out[j - 2] = "क"
@@ -263,6 +273,8 @@ def _placeReph(s):
 		j = r - 1
 		while j >= 0 and s[j] in SIGNS:
 			j -= 1
+		if j >= 1 and s[j] == HALANT and s[j - 1] in CONSONANTS:
+			j -= 1  # a reph on a half letter (k"J{ पूर्व्)
 		if j >= 0 and (s[j] in CONSONANTS or s[j] == NUKTA):
 			start = _clusterStart(s, j)
 			s = s[:start] + "र" + HALANT + s[start:r] + s[r + 1:]
@@ -328,14 +340,15 @@ def _isKeyWord(w):
 	return bool(w) and not w.isspace() and any(c.isalpha() and c.isascii() for c in w)
 
 
-def preetiFamilyToUnicode(text, font="preeti", _table=None):
+def preetiFamilyToUnicode(text, font="preeti", _table=None, bf=None):
 	table = _table or _PREETI_FAMILY_MAPS.get(font, PREETI_MAP)
 	if _table is None and "\xbf" in text and font in ("preeti", "kantipur", "himali", "sagarmatha", "sumod"):
 		parts = re.split(r"(\s+)", text)
 		if len(parts) > 1:
-			return "".join(preetiFamilyToUnicode(p, font) if p and not p.isspace() else p for p in parts)
+			return "".join(preetiFamilyToUnicode(p, font, bf=bf) if p and not p.isspace() else p for p in parts)
 		first = None
-		for sub in _BF_CHOICES:
+		# (bf: what ¿ stands for in this document, when its other words show it)
+		for sub in ((bf,) + tuple(x for x in _BF_CHOICES if x != bf)) if bf else _BF_CHOICES:
 			out = preetiFamilyToUnicode(text, font, _bfTable(font, sub))
 			if first is None:
 				first = out
@@ -363,7 +376,7 @@ def preetiFamilyToUnicode(text, font="preeti", _table=None):
 				continue
 			result.append(_preetiWord(word, table, font))
 			continue
-		if word in _LONE_DIGIT_KEYS and 2 <= pi < len(parts) - 2 and _isKeyWord(parts[pi - 2]) and _isKeyWord(parts[pi + 2]):
+		if word in _LONE_DIGIT_KEYS and not (font == "himalaya" and word == "!") and 2 <= pi < len(parts) - 2 and _isKeyWord(parts[pi - 2]) and _isKeyWord(parts[pi + 2]):
 			result.append(_LONE_DIGIT_KEYS[word])
 			continue
 		# Standalone bullet / symbol / emoji: preserve without conversion
@@ -389,7 +402,7 @@ def preetiFamilyToUnicode(text, font="preeti", _table=None):
 		if m_num and m_num.group(2) != "5":
 			# (a lone "5" is the very common verb छ, not a number)
 			lead, mid, trail = m_num.group(1), m_num.group(2), m_num.group(3)
-			result.append(lead + (mid.translate(_DIGIT_MAP) if font == "himali" else mid) + trail)
+			result.append(lead + (mid.translate(_DIGIT_MAP) if font in ("himali", "himalaya") else mid) + trail)
 			continue
 		# In Preeti typing / OCR, 9 and 0 at word boundaries enclosing letters/words
 		# represent unshifted bracket keys ( ) rather than consonants ढ and ण्.
@@ -454,6 +467,10 @@ def preetiFamilyToUnicode(text, font="preeti", _table=None):
 def _preetiWord(word, table, font):
 	"""One word of Preeti-family keys, mapped and put into Unicode order."""
 	s = "".join(table.get(ch, ch) for ch in word)
+	# half letter + reph + ा draws the full letter with its reph: J{f is र्व (इसापूर्व)
+	s = s.replace(HALANT + _REPH + "ा", _REPH)
+	# half letter + ि + ा draws the full letter with ी: :lf is सी (हिसी as the page shows it)
+	s = s.replace(HALANT + _I + "ा", "ी")
 	s = s.replace(HALANT + "ा", "")  # half letter + ा = full letter
 	s = _applyModifier(s)
 	s = s.replace("इ" + _REPH, "ई")
@@ -588,6 +605,7 @@ _FONT_NAME_PATTERNS = [
 	(re.compile(r"kantipur", re.I), "kantipur"),
 	(re.compile(r"sagarmatha", re.I), "sagarmatha"),
 	(re.compile(r"fontasy", re.I), "fontasy"),
+	(re.compile(r"himalaya", re.I), "himalaya"),
 	(re.compile(r"himal", re.I), "himali"),
 	(re.compile(r"pcs\s*nepali", re.I), "pcs"),
 	(re.compile(r"sumod", re.I), "sumod"),
@@ -597,8 +615,8 @@ _FONT_NAME_PATTERNS = [
 	(re.compile(r"kruti\s*dev|krutidev|k010|kruti", re.I), "krutidev"),
 ]
 
-ENCODINGS = ("preeti", "kantipur", "sagarmatha", "himali", "fontasy", "pcs", "sumod", "krutidev")
-NEPALI_ENCODINGS = ("preeti", "kantipur", "sagarmatha", "himali", "fontasy", "pcs", "sumod")
+ENCODINGS = ("preeti", "kantipur", "sagarmatha", "himali", "himalaya", "fontasy", "pcs", "sumod", "krutidev")
+NEPALI_ENCODINGS = ("preeti", "kantipur", "sagarmatha", "himali", "himalaya", "fontasy", "pcs", "sumod")
 
 
 def encodingForFontName(fontName):
@@ -621,17 +639,31 @@ _COLON = re.compile("(?<=्)ः|ः(?=\\s*[–—\\-(])|^ः$")
 _DECIMAL_ZERO = re.compile(r"(?<=[\u0966-\u096f][.,])\)(?=%|[\u0966-\u096f]|\s|$)")
 
 
-def convert(text, encoding="preeti"):
+# a visarga at the end of a word: the same key is the colon of a label or heading ("भत्ता:",
+# "आधार:"); it is a visarga only in words that have one (अतः, पुनः, प्रायः, दुःख)
+_FINAL_VISARGA = re.compile("([\u0900-\u097f]+)ः(?=[\\s,;.।)\\]\"'’”]|$)")
+
+
+def _visargaOrColon(m):
+	w = m.group(1)
+	if _isWord(w + "ः") or not _isWord(w):
+		return m.group(0)
+	return w + ":"
+
+
+def convert(text, encoding="preeti", bf=None):
 	if encoding == "krutidev":
 		return krutiDevToUnicode(text)
 	# (a "." between digits draws a danda in Preeti and is kept as the danda the page shows)
-	out = preetiFamilyToUnicode(text, encoding)
+	out = preetiFamilyToUnicode(text, encoding, bf=bf)
 	if "ॅ" in out:
 		# "‘" draws ॅ in Preeti but a quote in many Preeti-layout fonts (Nagarik ...): a sign
 		# with no letter before it is the quote
 		out = _LONE_CANDRA.sub("‘", out)
 	if "ः" in out:
 		out = _COLON.sub(":", out)
+		if "ः" in out:
+			out = _FINAL_VISARGA.sub(_visargaOrColon, out)
 	if ")" in out:
 		# a ")" right after a Nepali digit and a point is the digit key for ० (६.)% is ६.०%)
 		out = _DECIMAL_ZERO.sub("\u0966", out)

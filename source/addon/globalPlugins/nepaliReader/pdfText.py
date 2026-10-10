@@ -843,6 +843,11 @@ class DocIndex:
 		# fonts with no legacy name whose text reads as Preeti/Kruti Dev
 		if detector is not None:
 			_detectLegacyFonts(realFonts, allWords, detector)
+		if isWord is not None:
+			try:
+				_bfPreferences(realFonts, allWords, isWord)
+			except Exception:
+				pass
 		idx = cls()
 		idx._fill(allWords, pause)
 		idx.stats = {"pages": len(pages), "words": len(idx.words), "fixed": idx.fixedWords,
@@ -1413,17 +1418,18 @@ def _wordTexts(w):
 		return shownText, "\u25cb", None, None  # Word's "o" list bullet (Courier New) is a hollow circle
 	# a word in a legacy font (possibly with punctuation in a standard font like Times or Arial)
 	legacy_encs = {s[0].legacy for s in segs if s[0].legacy}
-	keysOf = lambda s0, t: t
+	keysOf = lambda s0, t: t.translate(legacyFonts.HIMALAYA_CONTROLS) if s0.legacy == "himalaya" else t
 	if len(legacy_encs) > 1 and legacy_encs <= set(legacyFonts.PREETI_TYPED):
 		# a word typed partly in Preeti and partly in a font typed like it (Sumod-Acharya): its
 		# keys are rewritten as the Preeti keys and it is converted as one word, so a ि or reph
 		# typed in one font lands on the letters of the other (k|f;l + ª\s is प्रासङ्कि)
-		keysOf = lambda s0, t: legacyFonts.asPreetiKeys(t, s0.legacy) if s0.legacy else t
+		keysOf = lambda s0, t: legacyFonts.asPreetiKeys(t.translate(legacyFonts.HIMALAYA_CONTROLS) if s0.legacy == "himalaya" else t, s0.legacy) if s0.legacy else t
 		legacy_encs = {"preeti"}
 	if len(legacy_encs) == 1:
 		non_legacy_text = "".join(t for s in segs if not s[0].legacy for c, t in s[1])
 		if not non_legacy_text or all(c in "()[]{}<>'\"“”‘’.,;:!?-_/\\•* " for c in non_legacy_text):
 			enc = next(iter(legacy_encs))
+			bf = next((getattr(s0[0], "bf", None) for s0 in segs if s0[0].legacy), None)
 			raw = keyOf("".join(keysOf(s0[0], t) for s0 in segs for c, t in s0[1]))
 			if non_legacy_text and keyOf(non_legacy_text) and enc != "krutidev":
 				# punctuation drawn in a standard font (the hyphen of प्रबन्ध-पत्र in Times) is
@@ -1436,16 +1442,16 @@ def _wordTexts(w):
 						continue
 					if run:
 						rk = keyOf("".join(run))
-						parts.append((legacyFonts.convert(rk, enc) or rk) if rk else "")
+						parts.append((legacyFonts.convert(rk, enc, bf=bf) or rk) if rk else "")
 						run = []
 					parts.append(keyOf("".join(t for c, t in s0[1])))
 				if run:
 					rk = keyOf("".join(run))
-					parts.append((legacyFonts.convert(rk, enc) or rk) if rk else "")
+					parts.append((legacyFonts.convert(rk, enc, bf=bf) or rk) if rk else "")
 				fixed = "".join(parts)
 			else:
-				fixed = legacyFonts.convert(raw, enc) or raw
-			if enc not in ("krutidev", "fontasy") and raw in legacyFonts._LONE_DIGIT_KEYS:
+				fixed = legacyFonts.convert(raw, enc, bf=bf) or raw
+			if enc not in ("krutidev", "fontasy", "himalaya") and raw in legacyFonts._LONE_DIGIT_KEYS:
 				fixed = legacyFonts._LONE_DIGIT_KEYS[raw]  # the Shift+digit keys of a Preeti font draw the digits
 			return shownText, fixed, None, enc
 	toks = []      # (text, glyph number)
@@ -1458,7 +1464,9 @@ def _wordTexts(w):
 	for font, items in segs:
 		if font.legacy:
 			raw = "".join(t for c, t in items)
-			conv = legacyFonts.convert(keyOf(raw), font.legacy) or raw
+			if font.legacy == "himalaya":
+				raw = raw.translate(legacyFonts.HIMALAYA_CONTROLS)
+			conv = legacyFonts.convert(keyOf(raw), font.legacy, bf=getattr(font, "bf", None)) or raw
 			toks.append((conv, gi))
 			plainToks.append((conv, gi))
 			for c, t in items:
@@ -1617,6 +1625,36 @@ _JUNK_SIGNS = set("0123456789<>@#$%^&*~`|\\=+_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh
 def _isDevaSign(ch):
 	"""A Devanagari letter or sign (not a digit, not a danda)."""
 	return "\u0900" <= ch <= "\u0963" or "\u0971" <= ch <= "\u097f"
+
+
+def _bfPreferences(fonts, allWords, isWord):
+	"""What the ¿ key draws in each Preeti-family font of this document: रू in Preeti, but many
+	PDFs (and fonts) give ु or रु for it. The words of the document decide: the reading that
+	makes the most dictionary words, when it clearly wins."""
+	byFont = {}
+	for w in allWords:
+		gl = w.glyphs
+		f = gl[0][0] if gl else None
+		if f is None or not f.legacy or f.legacy == "krutidev" or any(g[0] is not f for g in gl):
+			continue
+		raw = "".join(f.text(g[1]) for g in gl)
+		if "\xbf" in raw:
+			byFont.setdefault(id(f), (f, set()))[1].add(keyOf(raw))
+	for f, words in byFont.values():
+		if len(words) < 3:
+			continue
+		score = {}
+		for sub in legacyFonts._BF_CHOICES:
+			n = 0
+			tab = legacyFonts._bfTable(f.legacy, sub)
+			for raw in words:
+				out = legacyFonts.preetiFamilyToUnicode(raw, f.legacy, tab).strip(_PUNCT)
+				if out and isWord(out):
+					n += 1
+			score[sub] = n
+		ranked = sorted(score.items(), key=lambda x: -x[1])
+		if ranked[0][1] >= 3 and ranked[0][1] >= 2 * ranked[1][1]:
+			f.bf = ranked[0][0]
 
 
 def _shapeKey(f, c):
