@@ -107,5 +107,18 @@ check('mojibake title', DR.decodeMojibake('à¤¨à¥‡à¤ªà¤¾à¤² à¤�
 check('mojibake lost byte proven', DR.decodeMojibake('1632_à¤§à¤°à¥_à¤® x'), '1632_धर्म x')
 check('mojibake lost byte unproven stays', DR.decodeMojibake('à¤¸à¤¸à¥_à¤_à¥_à¤¤'), 'à¤¸à¤¸à¥_à¤_à¥_à¤¤')
 check('French stays', DR.decodeMojibake('café à la carte'), 'café à la carte')
+
+# text a PDF draws twice for a bold look is read once (नेपाल पर्यटन बोर्ड ऐन heading in Brave)
+from nepaliReader import pdfText as PT
+class _Doc(PT.DocIndex):
+	def __init__(s, B): s.B = B
+_d = _Doc("g]kfnko{6gaf]8{sf]:yfkgf/Joj:yfug{ag]sf]P]gkl/R5]b-!k|f/lDes")  # (B holds keys folded by _NORM: – is -)
+check('drop repeat exact', _d._dropRepeats("g]kfn ko{6g af]8{sf] g]kfn ko{6g af]8{sf]"), "g]kfn ko{6g af]8{sf]")
+check('drop repeat glued to the next text', _d._dropRepeats("kl/R5]b – kl/R5]b –!"), "kl/R5]b – !")
+check('drop repeat cut by the line end', _d._dropRepeats("g]kfn ko{6g af]8{sf] :yfkgf / Joj:yf ug{ ag]sf] P]g g]kfn ko{6g af]8{sf] :yfkgf / Joj:yf ug{ ag]sf]"),
+	"g]kfn ko{6g af]8{sf] :yfkgf / Joj:yf ug{ ag]sf] P]g")
+_d2 = _Doc("kmkmlkmlkmkm/fd/fd/fdkm")
+check('a real repeat stays', _d2._dropRepeats("/fd /fd /fd"), "/fd /fd /fd")
+check('glyph name variant', PT._glyphNameToText('eight.alt'), '8')
 print('FAILED' if bad else 'ALL OK', bad)
 sys.exit(1 if bad else 0)

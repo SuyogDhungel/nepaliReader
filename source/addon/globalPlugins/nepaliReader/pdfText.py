@@ -214,6 +214,10 @@ def _glyphNameToText(n):
 	m = re.match(r"^u([0-9A-Fa-f]{4,6})$", n)
 	if m:
 		return chr(int(m.group(1), 16))
+	if "." in n[1:]:
+		# a variant of a glyph ("eight.alt", "uni0938.half"): its text is the text of the name
+		# before the period, as PDF viewers read it
+		return _glyphNameToText(n[:n.index(".", 1)])
 	return ""
 
 
@@ -389,7 +393,9 @@ class PdfFont:
 			return "•"
 		if "symbol" in base and code in (167, 180, 197):
 			return "•"
-		if self.legacy == "preeti" and code == 0x0b:
+		if self.legacy == "preeti" and code == 0x0b and code not in getattr(self, "glyphNames", {}):
+			# (only when the PDF does not name the glyph: a subset font numbers its glyphs anew,
+			# and its code 11 can be any key - "eight", the ड of बोर्ड)
 			return "\xbf"
 		t = self.encodingMap.get(code, chr(code))
 		if ("wingdings" in base or "webdings" in base or "symbol" in base) and t and ord(t) < 32:
@@ -1173,17 +1179,42 @@ class DocIndex:
 		i = 0
 		while i < len(toks):
 			done = False
-			for L in range(min((len(toks) - i) // 2, 20), 0, -1):
-				a = toks[i:i + L]
-				if a != toks[i + L:i + 2 * L]:
-					continue
-				one = matchKey("".join(a))
+			for L in range(min(len(toks) - i - 1, 20), 0, -1):
+				one = matchKey("".join(toks[i:i + L]))
 				if len(one) < 3 or (L == 1 and len(one) < 4):
 					continue
-				if B.find(one + one) < 0 and B.find(one) >= 0:
-					del toks[i + L:i + 2 * L]
-					changed = done = True
+				# the copy that follows: the same letters, possibly split into words differently,
+				# glued to the next text ("परिच्छेद – परिच्छेद –१": the १ is drawn once), or cut
+				# off by the end of the line (the viewer put its last word on the next line)
+				acc = ""
+				j = i + L
+				cut = None  # (token index, characters of it that belong to the copy)
+				while j < len(toks) and len(acc) < len(one):
+					k = matchKey(toks[j])
+					if one.startswith(acc + k):
+						acc += k
+						j += 1
+						continue
+					rest = one[len(acc):]
+					if acc and k.startswith(rest) and keyOf(toks[j]) == toks[j]:
+						cut = (j, len(rest))
+						acc += rest
 					break
+				if acc == one:
+					pass
+				elif cut is None and j == len(toks) and len(acc) >= 6 and len(acc) * 2 >= len(one) and j - (i + L) >= 2:
+					pass
+				else:
+					continue
+				if B.find(one + acc) >= 0 or B.find(one) < 0:
+					continue  # the document itself has it twice, or this is not the document's text
+				if cut is not None:
+					toks[cut[0]] = toks[cut[0]][cut[1]:]
+					del toks[i + L:cut[0]]
+				else:
+					del toks[i + L:j]
+				changed = done = True
+				break
 			if not done:
 				i += 1
 		return " ".join(toks) if changed else text
