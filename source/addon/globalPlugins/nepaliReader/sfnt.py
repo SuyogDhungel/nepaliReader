@@ -401,6 +401,9 @@ class Font:
 			subs = self._gsubSubtables(b)
 		except Exception:
 			return s
+		# ligatures first in every round: a reph made from र + ् must not take the text of a
+		# single substitution that also leads to it (Rajdhani's reph would read ृ)
+		subs = [x for x in subs if x[0] == 4] + [x for x in subs if x[0] != 4]
 		for _round in range(12):
 			changed = False
 			for typ, data, below in subs:

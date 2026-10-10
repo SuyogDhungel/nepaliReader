@@ -836,7 +836,8 @@ class DocIndex:
 				pause()
 		if isWord is not None and INFER:
 			try:
-				_inferFonts(realFonts, allWords, isWord, deadline + 60, pause)
+				# (the quick index of the first pages must be ready at once: a short look only)
+				_inferFonts(realFonts, allWords, isWord, (time.monotonic() + 0.5) if maxPages else deadline + 60, pause)
 			except Exception:
 				pass
 		# fonts with no legacy name whose text reads as Preeti/Kruti Dev
@@ -1721,6 +1722,8 @@ def _inferFonts(fonts, allWords, isWord, deadline, pause=None):
 	# (glyph inference is a help, never worth a long wait: a few seconds for a short document,
 	# at most 20 seconds for a book)
 	deadline = min(deadline, time.monotonic() + max(2.0, min(20.0, 1.0 + len(allWords) / 800.0)))
+	if deadline <= time.monotonic():
+		return
 	# the most used fonts first: if time runs out, the rare ones are left
 	for base, flist in sorted(groups.items(), key=lambda kv: -sum(sum(f.used.values()) for f in kv[1])):
 		if time.monotonic() > deadline:
