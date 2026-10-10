@@ -68,6 +68,7 @@ All notable changes to the **Nepali Reader** NVDA add-on are documented here.
 - **Copy by other add-ons (ClipSpeak, clipboard add-ons)**: when another add-on copies the raw viewer text of a PDF itself, the text is now looked up in the PDF's real text instead of being guessed (संशोन, संवरमा).
 - **Bold headings drawn twice**: PDFs that draw a heading twice for a bold look (नेपाल पर्यटन बोर्ड ऐन in Brave) had the heading read twice, also when the second copy was split differently ("परिच्छेद – परिच्छेद –१") or its last word went to the next line. It is read once, as the page shows it.
 - **Renumbered Preeti glyphs**: in a PDF whose Preeti font numbers its glyphs anew, the ड of बोर्ड was read रू (बोर्रूको); the name the PDF gives each glyph is now used.
+- **Saved PDF indexes**: the add-on saves what it rebuilds from each PDF (in the NVDA settings folder, under nepaliReader) so a PDF opens at once the next time. Indexes made by an older version of the add-on, which are never read again, are now deleted; at most 60 recent ones stay.
 - **Quiet releases**: the automatic update check only notifies when the GitHub release notes contain the word [notify]. Releases without it are still found by "Check for updates...", and the next [notify] release carries every earlier fix.
 
 ## [1.1.6] - 2026-10-07

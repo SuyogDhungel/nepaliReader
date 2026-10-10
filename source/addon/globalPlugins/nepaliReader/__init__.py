@@ -1373,7 +1373,11 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				try:
 					os.makedirs(cdir, exist_ok=True)
 					old = sorted((os.path.getmtime(os.path.join(cdir, n)), n) for n in os.listdir(cdir) if n.startswith("pdf_"))
-					for _t, n in old[:-60]:
+					# indexes made by an older version of the add-on are never read again; of the
+					# current ones the 60 most recent stay
+					cur = "_%d.idx" % pdfText.INDEX_VERSION
+					stale = [n for _t, n in old if not n.endswith(cur)]
+					for n in stale + [n for _t, n in [x for x in old if x[1].endswith(cur)][:-60]]:
 						try:
 							os.remove(os.path.join(cdir, n))
 						except OSError:
