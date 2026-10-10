@@ -698,6 +698,24 @@ def _isSpace(font, code, span=None):
 	return False
 
 
+# (not ः: Preeti's M is also the colon; not ्: some producers start a glyph with it)
+_TRAILING = set("\u093e\u0940\u0941\u0942\u0943\u0944\u0945\u0946\u0947\u0948\u0949\u094a\u094b\u094c\u0901\u0902")
+
+
+def _isTrailingSign(font, code):
+	"""A glyph that can only follow a letter (a vowel sign after its consonant, ं, ्), so it never
+	begins a word however far it is drawn from the letter before (ि is drawn first: not this)."""
+	t = font.text(code)
+	if not t:
+		return False
+	if font.legacy:
+		if font.legacy == "krutidev":
+			return False
+		v = legacyFonts.keyTable(font.legacy).get(t[0])
+		return bool(v) and v[0] in _TRAILING
+	return t[0] in _TRAILING
+
+
 def _words(glyphs, page):
 	"""Group drawn glyphs into lines and words (by position), in drawing order."""
 	# Deduplicate fake-bold overprinting (same font & code drawn within <= 0.8 pt)
@@ -764,7 +782,7 @@ def _words(glyphs, page):
 				if cur.glyphs:
 					words.append(cur)
 					cur = Word((page, False))
-		elif u - endU > 0.2 * size or is_bullet or prev_is_bullet:
+		elif (u - endU > 0.2 * size and not (cur.glyphs and _isTrailingSign(font, code))) or is_bullet or prev_is_bullet:
 			if cur.glyphs:
 				words.append(cur)
 				cur = Word((page, False))
@@ -871,6 +889,14 @@ class DocIndex:
 				cl = devanagariRepair.finalClean(fixed, _wordCheck)
 				if cl is not None:
 					fixed, amap = cl, None
+			if fixed is None and _wordCheck is not None and "र्" in shown:
+				# some producers write each reph cluster's text twice over (ActualText "गर्नन",
+				# "अन्तर्गगत" for the गर्न, अन्तर्गत the page draws): the doubled letter goes
+				# when that makes the dictionary word and the doubled form is none
+				dd = _REPH_DOUBLE.sub(r"\1", shown)
+				core = dd.strip(_PUNCT)
+				if dd != shown and core and _wordCheck(core) and not _wordCheck(shown.strip(_PUNCT)):
+					fixed = dd
 			if fixed and ")" in fixed and enc not in ("krutidev", "fontasy"):
 				fixed = legacyFonts._DECIMAL_ZERO.sub("\u0966", fixed)  # ६.)% is ६.०%
 			if fixed and enc not in ("krutidev", "fontasy") and "%" in fixed:
@@ -1655,6 +1681,9 @@ def _bfPreferences(fonts, allWords, isWord):
 		ranked = sorted(score.items(), key=lambda x: -x[1])
 		if ranked[0][1] >= 3 and ranked[0][1] >= 2 * ranked[1][1]:
 			f.bf = ranked[0][0]
+
+
+_REPH_DOUBLE = re.compile("(र्([\u0915-\u0939]))\\2")
 
 
 def _shapeKey(f, c):
