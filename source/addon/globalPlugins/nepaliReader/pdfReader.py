@@ -642,7 +642,7 @@ class Document:
 				return
 			seen.add(id(node))
 			inh = dict(inherited)
-			for k in ("Resources", "MediaBox", "Rotate"):
+			for k in ("Resources", "MediaBox", "CropBox", "Rotate"):
 				if k in node:
 					inh[k] = node[k]
 			kids = self.resolve(node.get("Kids"))

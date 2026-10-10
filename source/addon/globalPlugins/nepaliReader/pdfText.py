@@ -15,6 +15,8 @@ import bisect
 import math
 import re
 import time
+import unicodedata
+import zlib
 
 try:
 	from . import glyphRefs
@@ -37,7 +39,7 @@ NUKTA = "़"
 REPH = "र्"
 DEP_SIGNS = set("ऺऻािीुूृॄॅॆेैॉॊोौॎॏॕॖॗॢॣऀँंः़")
 INDEPENDENT = set(chr(c) for c in range(0x0904, 0x0915)) | set("ॠॡॲॳॴॵॶॷ")
-INDEX_VERSION = 24
+INDEX_VERSION = 25
 INFER = True
 
 
@@ -272,14 +274,17 @@ class PdfFont:
 		self.legacy = legacyFonts.encodingForFontName(self.baseFont)
 		self.used = {}         # code -> count
 		self.truth = {}        # code -> real text (from the glyph)
+		self.weak = set()      # codes whose truth only the embedded subset's tables give
 		self.gidOf = {}
 		self.symbolic = False
+		self.widthScale = 1.0
 		desc = None
 		if self.cid:
 			df = r(fdict.get("DescendantFonts"))
 			d0 = r(df[0]) if isinstance(df, list) and df else {}
 			d0 = d0 if isinstance(d0, dict) else {}
-			self.dw = float(r(d0.get("DW")) or 1000)
+			dw = r(d0.get("DW"))
+			self.dw = float(dw) if isinstance(dw, (int, float)) else 1000.0  # (a DW of 0 is 0, not missing)
 			w = r(d0.get("W")) or []
 			i = 0
 			while i < len(w):
@@ -312,6 +317,15 @@ class PdfFont:
 					if isinstance(v, (int, float)):
 						self.widths[fc + k] = float(v)
 			desc = r(fdict.get("FontDescriptor"))
+			self.glyphNames = {}
+			if self.subtype == "Type3":
+				# (each glyph is drawn by its own little program: the same program is the same glyph
+				# in every one of a book's many Type3 fonts)
+				self._t3 = (doc, r(fdict.get("CharProcs")), self.glyphNames)
+				# Type3 widths are in glyph space: FontMatrix turns them into text space (usually 0.001)
+				fm = r(fdict.get("FontMatrix"))
+				if isinstance(fm, list) and fm and isinstance(r(fm[0]), (int, float)) and r(fm[0]):
+					self.widthScale = abs(float(r(fm[0]))) * 1000.0
 			mw = r(desc.get("MissingWidth")) if isinstance(desc, dict) else None
 			self.dw = float(mw) if isinstance(mw, (int, float)) and mw > 0 else (500.0 if not self.widths else 0.0)
 			enc = r(fdict.get("Encoding"))
@@ -333,6 +347,7 @@ class PdfFont:
 						t = _glyphNameToText(d)
 						if t:
 							self.encodingMap[code] = t
+						self.glyphNames[code] = d
 						code += 1
 		if isinstance(desc, dict):
 			flags = r(desc.get("Flags")) or 0
@@ -360,7 +375,7 @@ class PdfFont:
 		return list(s)
 
 	def width(self, code):
-		return self.widths.get(code, self.dw)
+		return self.widths.get(code, self.dw) * self.widthScale
 
 	def text(self, code):
 		"""What a PDF viewer shows for this code."""
@@ -394,6 +409,13 @@ class PdfFont:
 			for cp, g in font.cmap().items():
 				if 0x900 <= cp <= 0x97F or 0x20 <= cp < 0x2100:
 					emb.setdefault(g, chr(cp))
+		except Exception:
+			pass
+		try:
+			# conjuncts and other shaped forms, when the embedded font kept its substitution table
+			for g, st in font.glyphStrings().items():
+				if st and isDeva(st):
+					emb.setdefault(g, st)
 		except Exception:
 			pass
 		gids = {}
@@ -448,6 +470,10 @@ class PdfFont:
 					t = t2  # a conjunct shape found in another font of the same design
 			if t is None:
 				t = emb.get(g)
+				if t is not None:
+					# only the embedded subset's own tables say so: Word's subsets can map a
+					# letter to the wrong glyph, so this is checked against the document later
+					self.weak.add(code)
 			if t is not None:
 				self.truth[code] = t
 
@@ -478,6 +504,7 @@ class _PageReader:
 		self.fonts = fonts
 		self.glyphs = []
 		self.deadline = deadline
+		self.box = None  # (x0, y0, x1, y1) of the visible page: text drawn outside it is not shown
 
 	def font(self, res, name):
 		r = self.doc.resolve
@@ -550,6 +577,12 @@ class _PageReader:
 						x = rise * m[2] + m[4]
 						y = rise * m[3] + m[5]
 						w = font.width(code) / 1000.0
+						box = self.box
+						if box is not None and (y < box[1] - 1.0 or y > box[3] + 1.0 or x < box[0] - 1.0 or x > box[2] + 1.0):
+							# outside the page (a line a browser cut at the page end draws its tops
+							# below the page; the whole line is on the next page)
+							tm = (tm[0], tm[1], tm[2], tm[3], tm[4] + (w * fs + tc) * th * tm[0], tm[5] + (w * fs + tc) * th * tm[1])
+							continue
 						tx = (w * fs + tc + (tw if (not font.cid and code == 32) else 0.0)) * th
 						u = x * ca + y * sa
 						v = -x * sa + y * ca
@@ -628,6 +661,20 @@ class _PageReader:
 					self.run(sub, xo.dict.get("Resources") or res, _mul(fm, ctm), depth + 1)
 
 
+def _pageBox(doc, page):
+	"""The visible area of a page (CropBox, else MediaBox) as (x0, y0, x1, y1), or None."""
+	r = doc.resolve
+	for k in ("CropBox", "MediaBox"):
+		b = r(page.get(k))
+		if isinstance(b, list) and len(b) >= 4:
+			v = [r(x) for x in b[:4]]
+			if all(isinstance(x, (int, float)) for x in v):
+				x0, y0, x1, y1 = v
+				if x1 - x0 > 10 and y1 - y0 > 10 or x0 - x1 > 10 and y0 - y1 > 10:
+					return (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+	return None
+
+
 class Word:
 	__slots__ = ("glyphs", "page")
 
@@ -676,7 +723,7 @@ def _words(glyphs, page):
 	cur = None
 	lineV = None
 	endU = 0.0
-	pend = None
+	pend = []    # space glyphs of this line not yet passed: (u, advance)
 	lastV = None
 	for g in dedup:
 		font, code, u, v, size, adv, span = g
@@ -690,22 +737,33 @@ def _words(glyphs, page):
 			cur = Word((page, True))
 			lineV = v
 			endU = u
-			pend = None
+			# a line may begin with the space that follows a sign drawn after it (LibreOffice
+			# draws "• " as the space, then the bullet in another font)
+			pend = [(u, adv)] if blank and adv > 0.05 * size else []
 		elif blank and adv <= 0.05 * size:
 			# a space glyph that does not move the pen (InDesign draws runs of them) is no break;
 			# a real gap after it is still found by the distance test
 			pass
 		elif blank:
-			# decide at the next glyph: a "space" that the next letter is drawn over is an
-			# invisible joiner (Word puts ZWJ/ZWNJ as a space glyph), not a word break
-			if pend is None:
-				pend = (u, adv)
-		elif pend is not None:
-			if u >= pend[0] + 0.5 * pend[1] or is_bullet or prev_is_bullet:
+			# decided at the next glyphs: a "space" that the next letter is drawn over is an
+			# invisible joiner (Word puts ZWJ/ZWNJ as a space glyph), not a word break; and
+			# punctuation in another font may be drawn after the spaces around it (LibreOffice:
+			# "गा.पा. - वडा" draws both spaces first, then "." and "-")
+			pend.append((u, adv))
+		elif pend:
+			brk = False
+			keep = []
+			for su, sadv in pend:
+				if u >= su + 0.5 * sadv:
+					brk = True   # the letter is past the space: a new word
+				elif u + 0.1 * size < su:
+					keep.append((su, sadv))  # drawn before the space: it still separates what follows
+				# else: drawn over the space - a joiner, no break
+			pend = keep
+			if brk or is_bullet or prev_is_bullet:
 				if cur.glyphs:
 					words.append(cur)
 					cur = Word((page, False))
-			pend = None
 		elif u - endU > 0.2 * size or is_bullet or prev_is_bullet:
 			if cur.glyphs:
 				words.append(cur)
@@ -752,6 +810,7 @@ class DocIndex:
 		deadline = time.monotonic() + timeLimit
 		for pn, page in enumerate(pages):
 			pr = _PageReader(doc, fonts, deadline, pause)
+			pr.box = _pageBox(doc, page)
 			try:
 				pr.run(doc.contentData(page), page.get("Resources"), _ID)
 			except TimeoutError:
@@ -1389,6 +1448,7 @@ def _wordTexts(w):
 				fixed = legacyFonts._LONE_DIGIT_KEYS[raw]  # the Shift+digit keys of a Preeti font draw the digits
 			return shownText, fixed, None, enc
 	toks = []      # (text, glyph number)
+	plainToks = []  # the same without readings worked out from the document
 	charGlyph = []  # for each shown (key) character: its glyph number
 	certain = True
 	guessed = False
@@ -1399,6 +1459,7 @@ def _wordTexts(w):
 			raw = "".join(t for c, t in items)
 			conv = legacyFonts.convert(keyOf(raw), font.legacy) or raw
 			toks.append((conv, gi))
+			plainToks.append((conv, gi))
 			for c, t in items:
 				charGlyph.extend([gi] * len(keyOf(t)))
 			gi += 1
@@ -1406,15 +1467,16 @@ def _wordTexts(w):
 		inferred = getattr(font, "inferred", None)
 		for code, t in items:
 			real = font.truth.get(code)
-			if real is None and inferred is not None and code in inferred:
+			plainToks.append((real if real is not None else _CONTROL.sub("", _PUA.sub("", t or "")), gi))
+			if (real is None or code in font.weak) and inferred is not None and code in inferred:
 				real = inferred[code]
 				guessed = True
 			elif real is None:
 				real = t
-				if isDeva(t) or (font.cid and not t) or _PUA.search(t):
+				if isDeva(t) or (font.cid and not t) or _PUA.search(t) or _CONTROL.search(t):
 					certain = False
-				if _PUA.search(real):
-					real = _PUA.sub("", real)
+				if _PUA.search(real) or _CONTROL.search(real):
+					real = _CONTROL.sub("", _PUA.sub("", real))
 			toks.append((real, gi))
 			charGlyph.extend([gi] * len(keyOf(t)))
 			gi += 1
@@ -1451,6 +1513,13 @@ def _wordTexts(w):
 		checker = next((getattr(f, "isWord", None) for f, _i in segs if getattr(f, "isWord", None)), None)
 		core = fixed.strip(_PUNCT)
 		if checker is None or len(core) < 3 or not checker(core):
+			# a reading that helps most words can still be wrong in this one: the PDF's own text
+			# wins when it makes a dictionary word
+			if checker is not None and len(plainToks) == len(toks):
+				plain = "".join(t for t, g in reorder(list(plainToks)))
+				pc = plain.strip(_PUNCT)
+				if pc and isDeva(pc) and all(checker(x) for x in re.split(r"[-/]", pc) if x):
+					return shownText, devanagariRepair.composeMatras(plain), None, None
 			if isDeva(shownText):
 				rep = devanagariRepair.repair(shownText)
 				if rep and rep != shownText:
@@ -1481,21 +1550,33 @@ def _wordTexts(w):
 
 _CONS = [chr(c) for c in range(0x0915, 0x093A)]
 _EXTRA_CANDS = ["", REPH, VIRAMA + "\u0930", VIRAMA, I_SIGN, "\u093e", "\u0940", "\u0941", "\u0942", "\u0947", "\u0948", "\u094b", "\u094c", "\u0902", "\u0901"]
+# shapes a font draws as one glyph that a broken text table often gets wrong (for glyphs with
+# no usable text): common conjuncts and sign pairs
+_SHAPE_CANDS = ["श्च", "ष्ट", "ष्ठ", "स्त", "स्थ", "न्त", "न्द", "न्ध", "म्ब", "म्प", "ङ्ग", "ङ्क", "ञ्च", "ञ्ज",
+	"ण्ड", "ण्ट", "द्ध", "द्द", "द्व", "द्य", "त्त", "क्त", "क्र", "प्र", "ट्ट", "ड्ड", "ह्म", "ह्य", "त्व",
+	"स्व", "ल्ल", "न्न", "च्च", "ज्ज", "द्र", "ग्र", "ब्र", "भ्र", "ट्र", "ड्र", "ह्र", "क्ष्", "त्र्",
+	"ौं", "ों", "ें", "ैं", "ीं", "ां", "ाँ", "ुँ", "ूँ", "ेँ", "िँ", "र्ि", "र्ी", "र्ं"]
 _PUNCT = ".,;:!?()[]{}'\"\u2018\u2019\u201c\u201d-\u2013\u2014\u0964\u0965/"
 
 
 _PUA = re.compile("[\ue000-\uf8ff\U000f0000-\U0010ffff]")
 
 
+_CONTROL = re.compile("[\x00-\x08\x0e-\x1f]")
+
+
 def _isUnknownText(t):
 	# an empty text is normal (the syllable's text sits on another glyph); private-use
-	# characters and U+FFFD mean the PDF really doesn't say
-	return bool(t) and bool(_PUA.search(t))
+	# characters, U+FFFD and control characters (Type3 fonts give \x00 for conjuncts and ि)
+	# mean the PDF really doesn't say
+	return bool(t) and (bool(_PUA.search(t)) or bool(_CONTROL.fullmatch(t)))
 
 
 def _candidates(t):
 	"""Possible real texts of a glyph whose ToUnicode text is t (InDesign and others give a glyph
 	the text of its whole syllable, or nothing)."""
+	if t and _CONTROL.fullmatch(t):
+		t = ""  # a Type3 font's \x00: nothing known about the glyph
 	if t and _PUA.search(t):
 		base = _PUA.sub("", t)
 		if base:
@@ -1505,7 +1586,7 @@ def _candidates(t):
 	out = [t]
 	if not t or t == "\ufffd" or not isDeva(t):
 		if not t or t == "\ufffd":
-			return _EXTRA_CANDS + ["\u0943", "\u0903", "\u093c"] + _CONS + [c + VIRAMA for c in _CONS] + ["\u0915\u094d\u0937", "\u0924\u094d\u0930", "\u091c\u094d\u091e", "\u0936\u094d\u0930", "\u0930\u0942", "\u0930\u0941"]
+			return _EXTRA_CANDS + ["\u0943", "\u0903", "\u093c"] + _CONS + [c + VIRAMA for c in _CONS] + ["\u0915\u094d\u0937", "\u0924\u094d\u0930", "\u091c\u094d\u091e", "\u0936\u094d\u0930", "\u0930\u0942", "\u0930\u0941"] + _SHAPE_CANDS
 		return out
 	core = t
 	if core.startswith(REPH) and len(core) > 2:
@@ -1529,47 +1610,168 @@ def _candidates(t):
 	return seen
 
 
+_JUNK_SIGNS = set("0123456789<>@#$%^&*~`|\\=+_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
+
+
+def _isDevaSign(ch):
+	"""A Devanagari letter or sign (not a digit, not a danda)."""
+	return "\u0900" <= ch <= "\u0963" or "\u0971" <= ch <= "\u097f"
+
+
+def _shapeKey(f, c):
+	"""A Type3 glyph's identity: its drawing program (the same in all of a book's Type3 fonts)."""
+	sh = getattr(f, "_shapes", None)
+	if sh is None:
+		sh = f._shapes = {}
+	k = sh.get(c)
+	if k is None:
+		k = (id(f), c)
+		t3 = getattr(f, "_t3", None)
+		if t3:
+			doc, procs, names = t3
+			nm = names.get(c)
+			st = doc.resolve(procs.get(nm)) if (nm and isinstance(procs, dict)) else None
+			if isinstance(st, pdfReader.Stream):
+				try:
+					data = doc.decode(st)
+					k = ("t3", zlib.crc32(data), len(data))
+				except Exception:
+					pass
+		sh[c] = k
+	return k
+
+
+def _gluedJunk(allWords):
+	"""{font id: codes} of glyphs in Unicode fonts whose text is one ASCII sign that, nearly every
+	time it is used, sits inside a Devanagari word (ग0डक, प<Iम, काठमाड0): a conjunct or sign
+	the PDF's text table gives a wrong text for. A real digit or bracket is not glued like that."""
+	glued = {}
+	total = {}
+	for w in allWords:
+		gl = w.glyphs
+		n = len(gl)
+		for i, g in enumerate(gl):
+			f = g[0]
+			if f.legacy or g[6] is not None:
+				continue
+			t = f.text(g[1])
+			if len(t) != 1 or t not in _JUNK_SIGNS:
+				continue
+			k = (id(f), g[1])
+			total[k] = total.get(k, 0) + 1
+			pt = gl[i - 1][0].text(gl[i - 1][1]) if i > 0 else ""
+			nt = gl[i + 1][0].text(gl[i + 1][1]) if i + 1 < n else ""
+			if pt and _isDevaSign(pt[-1]) and (not nt or _isDevaSign(nt[0])):
+				glued[k] = glued.get(k, 0) + 1
+	out = {}
+	for k, cnt in glued.items():
+		if cnt >= 2 and cnt >= 0.8 * total[k]:
+			out.setdefault(k[0], set()).add(k[1])
+	return out
+
+
 def _inferFonts(fonts, allWords, isWord, deadline, pause=None):
 	"""Fonts with no reference (a commercial font, an unusual version): work out each glyph's real
 	text from the whole document, choosing for every glyph the reading that makes the most
 	dictionary words."""
+	junk = _gluedJunk(allWords)
 	groups = {}
 	for f in fonts:
-		if not f.cid or not f.used:
+		if not f.used or f.legacy:
 			continue
-		# only glyphs the PDF gives no text for (or U+FFFD) are worked out; glyphs with text keep it
-		unknown = [c for c in f.used if c not in f.truth and _isUnknownText(f.text(c))]
+		# only glyphs the PDF gives no text for (or U+FFFD), or an ASCII sign glued inside
+		# Devanagari words (a conjunct whose text table says "0" or "<"), are worked out; glyphs
+		# with real text keep it
+		fj = junk.get(id(f), set())
+		# a Devanagari font the add-on knows only partly (another version of Kalimati: Word's
+		# PDFs give its ि and reph glyphs the text र, न, ह or इ): its other glyphs' texts are
+		# only a first guess, checked against the dictionary like unknown ones
+		weak = f.weak
+		deva = [c for c in f.used if (c not in f.truth or c in weak) and isDeva(f.truth.get(c) or f.text(c))]
+		if len(deva) >= 3 and sum(1 for c in f.used if isDeva(f.truth.get(c) or f.text(c))) >= 20:
+			fj = fj | set(deva)
+			junk[id(f)] = fj
+		unknown = [c for c in f.used if (c not in f.truth or c in weak) and (_isUnknownText(f.text(c)) or c in fj)]
 		if not unknown:
 			continue
-		groups.setdefault(f.baseFont, []).append(f)
+		# subsets of one CID font share their glyph numbers; Type3 fonts share glyphs by their
+		# drawing programs; any other simple font is on its own
+		if f.cid and f.baseFont:
+			gk = f.baseFont
+		elif getattr(f, "_t3", None):
+			gk = "\x00type3"
+		else:
+			gk = id(f)
+		groups.setdefault(gk, []).append(f)
 	if not groups:
 		return
-	for base, flist in groups.items():
+	# the words each font is used in (looked up once, not once per font: a book with hundreds of
+	# Type3 fonts made this quadratic)
+	wantIds = set(id(f) for flist in groups.values() for f in flist)
+	wordsOf = {}
+	for w in allWords:
+		seen = None
+		for g in w.glyphs:
+			fi = id(g[0])
+			if fi in wantIds and (seen is None or fi not in seen):
+				wordsOf.setdefault(fi, []).append(w)
+				if seen is None:
+					seen = set()
+				seen.add(fi)
+	# (glyph inference is a help, never worth a long wait: a few seconds for a short document,
+	# at most 20 seconds for a book)
+	deadline = min(deadline, time.monotonic() + max(2.0, min(20.0, 1.0 + len(allWords) / 800.0)))
+	# the most used fonts first: if time runs out, the rare ones are left
+	for base, flist in sorted(groups.items(), key=lambda kv: -sum(sum(f.used.values()) for f in kv[1])):
+		if time.monotonic() > deadline:
+			break
 		fset = set(id(f) for f in flist)
+		isT3 = base == "\x00type3"
+
+		def gkey(f, c):
+			return _shapeKey(f, c) if isT3 else c
+
 		# unique glyph sequences (words) that use this font, with counts
 		seqs = {}
-		for w in allWords:
-			if not any(id(g[0]) in fset for g in w.glyphs):
-				continue
-			key = tuple((id(g[0]) in fset, g[1] if id(g[0]) in fset else (g[0].truth.get(g[1]) if g[0].truth.get(g[1]) is not None else g[0].text(g[1]))) for g in w.glyphs)
+		cand_words = {}
+		for f in flist:
+			for w in wordsOf.get(id(f), ()):
+				cand_words[id(w)] = w
+		for w in cand_words.values():
+			key = tuple((id(g[0]) in fset, gkey(g[0], g[1]) if id(g[0]) in fset else (g[0].truth.get(g[1]) if g[0].truth.get(g[1]) is not None else g[0].text(g[1]))) for g in w.glyphs)
 			seqs[key] = seqs.get(key, 0) + 1
 		if not seqs:
 			continue
-		known = {}
+		gj = set()
 		for f in flist:
-			for c in f.used:
-				t = f.text(c)
-				if c in f.truth:
-					known[c] = f.truth[c]
-				elif not _isUnknownText(t):
-					known[c] = t
+			gj |= set(gkey(f, c) for c in junk.get(id(f), ()))
+		known = {}
 		text0 = {}
 		for f in flist:
 			for c in f.used:
-				if c not in known:
-					text0.setdefault(c, f.text(c))
-		assign = {c: (_PUA.sub("", t) if t else "") for c, t in text0.items()}
-		cands = {c: _candidates(text0[c]) for c in assign}
+				t = f.text(c)
+				k = gkey(f, c)
+				if c in f.truth and c not in f.weak:
+					known[k] = f.truth[c]
+				elif k in gj:
+					text0.setdefault(k, f.truth.get(c) or t)
+				elif not _isUnknownText(t):
+					known.setdefault(k, f.truth.get(c) or t)
+		for f in flist:
+			for c in f.used:
+				k = gkey(f, c)
+				if k not in known:
+					text0.setdefault(k, f.text(c))
+		assign = {c: (_CONTROL.sub("", _PUA.sub("", t)) if t else "") for c, t in text0.items()}
+		# (a glued ASCII sign keeps its own text unless a reading makes more dictionary words)
+		cands = {}
+		for c in assign:
+			if c in gj:
+				lst = [text0[c]] + (_candidates(text0[c]) if isDeva(text0[c]) else []) + _candidates("")
+				seen = set()
+				cands[c] = [x for x in lst if not (x in seen or seen.add(x))]
+			else:
+				cands[c] = _candidates(text0[c])
 		usedBy = {}
 		seqList = list(seqs.items())
 		for si, (key, cnt) in enumerate(seqList):
@@ -1600,33 +1802,63 @@ def _inferFonts(fonts, allWords, isWord, deadline, pause=None):
 				r = cache[w] = 1 if isWord(w) else 0
 			return r * cnt
 
+		topIds = {}
 		order = sorted(assign, key=lambda c: -len(usedBy.get(c, ())))
+		todo = set(order)
 		for _pass in range(3):
 			changed = False
+			nextTodo = set()
 			for c in order:
 				ids = usedBy.get(c)
-				if not ids:
+				if not ids or c not in todo:
 					continue
 				if time.monotonic() > deadline:
 					break
 				if pause:
 					pause()
 				cur = assign[c]
-				best = (sum(score(si) for si in ids), cur)
-				for cand in cands[c]:
+				# judged on the glyph's most frequent words; with many readings to try, a quick
+				# first round on its 40 most frequent words keeps the 12 best (a glyph used in
+				# thousands of words would otherwise take minutes)
+				top = topIds.get(c)
+				if top is None:
+					top = topIds[c] = sorted(ids, key=lambda si: -seqList[si][1])[:200]
+				base = sum(score(si) for si in top)
+				if base >= 0.6 * sum(seqList[si][1] for si in top):
+					continue  # its words are already dictionary words: the reading is right
+				clist = cands[c]
+				if len(clist) > 12 and len(top) > 6:
+					small = top[:40] if len(top) > 80 else top[:max(6, len(top) // 2)]
+					ranked = []
+					for cand in clist:
+						assign[c] = cand
+						ranked.append((sum(score(si) for si in small), cand))
+					assign[c] = cur
+					ranked.sort(key=lambda x: -x[0])
+					clist = [x[1] for x in ranked[:12]]
+				best = (base, cur)
+				for cand in clist:
 					if cand == cur:
 						continue
 					assign[c] = cand
-					sc = sum(score(si) for si in ids)
+					sc = sum(score(si) for si in top)
 					if sc > best[0]:
 						best = (sc, cand)
 				assign[c] = best[1]
 				if best[1] != cur:
 					changed = True
+					# only glyphs sharing words with a changed one can gain in the next round
+					for si in top:
+						for inFont, v in seqList[si][0]:
+							if inFont and v in assign:
+								nextTodo.add(v)
 			if not changed:
 				break
+			todo = nextTodo
+		# a glued ASCII sign no reading improved stays as it was (not a guess)
+		res = {c: v for c, v in assign.items() if not (c in gj and v == text0[c])}
 		for f in flist:
-			f.inferred = dict(assign)
+			f.inferred = {c: res[gkey(f, c)] for c in f.used if gkey(f, c) in res} if isT3 else res
 			f.isWord = isWord
 
 
