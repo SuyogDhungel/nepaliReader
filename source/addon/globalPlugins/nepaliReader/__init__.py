@@ -1390,6 +1390,22 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			diag.exception("could not rebuild the PDF text")
 			st.status = "none"
 
+	def _perRunText(self, idx, grp, whole):
+		"""The rebuilt text of each run of a group, or None when the runs cannot be looked up one
+		by one (a run boundary inside a word) or would not add up to the whole group's text."""
+		per = []
+		for _i, t, _k, _e in grp:
+			if not pdfText.keyOf(t):
+				per.append(t)
+				continue
+			nt = self._indexText(None, idx, t)
+			if nt is None:
+				return None
+			per.append(nt)
+		if re.sub(r"\s+", "", "".join(per)) != re.sub(r"\s+", "", whole):
+			return None
+		return per
+
 	def _indexText(self, info, idx, text):
 		"""The real text for one run of what the viewer gave, or None if the index doesn't know it."""
 		for pre in ("Finished loading PDF", "Loading PDF"):
@@ -2069,7 +2085,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			if isinstance(item, str):
 				if not item:
 					continue
-				if cur is not None and cur[0] == key and lastWasText:
+				# only a piece that continues a word is joined: at a space the pieces stay apart,
+				# so a bold or underlined word keeps its formatting where it is
+				midWord = cur is not None and not out[cur[1][-1]][-1:].isspace() and not item[:1].isspace()
+				if cur is not None and cur[0] == key and lastWasText and midWord:
 					cur[1].append(i)
 				else:
 					cur = (key, [i])
@@ -2204,6 +2223,18 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 						new = None
 					if new is None:
 						continue
+					if len(grp) > 1 and new != whole:
+						# several runs (a bold word, a change of font): each keeps its own text when
+						# every run can be looked up by itself and together they say the same, so
+						# NVDA still announces bold, italic or the font at the right word
+						per = self._perRunText(idx, grp, new)
+						if per is not None:
+							for (i, _t, _k, _e), nt in zip(grp, per):
+								rebuilt[i] = bool(nt and (devanagariRepair.hasDevanagari(nt) or nt != _t))
+								if nt != _t:
+									out[i] = nt
+									changed = True
+							continue
 					first = grp[0][0]
 					rebuilt[first] = bool(new and (devanagariRepair.hasDevanagari(new) or new != whole))
 					if new != whole:
