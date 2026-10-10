@@ -373,6 +373,24 @@ def _ownCopy(text, notify=False):
 		_OWN_COPY[0] = False
 
 
+def _fieldBounds(ti, offset):
+	"""(start, end) of the browse-mode buffer field holding offset (a table cell's text, a link),
+	the same range NVDA limits its own words to; None outside a virtual buffer."""
+	try:
+		h = getattr(getattr(ti, "obj", None), "VBufHandle", None)
+		if h is None:
+			return None
+		import NVDAHelper
+		s = ctypes.c_int()
+		e = ctypes.c_int()
+		NVDAHelper.localLib.VBuf_getLineOffsets(h, offset, 0, False, ctypes.byref(s), ctypes.byref(e))
+		if s.value <= offset < e.value:
+			return (s.value, e.value)
+	except Exception:
+		pass
+	return None
+
+
 def _formatCopy(formatConfig=None):
 	"""A plain dict of document formatting settings. NVDA's own settings section cannot be given
 	to dict() (it iterates its keys only), so it is copied item by item."""
@@ -1041,6 +1059,14 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			span = self._indexWordSpan(idx, lineText, rel)
 		else:
 			span = self._legacyWordSpan(lineText, rel)
+			if span is not None:
+				# never across a table cell, link or other control: only inside the piece of text
+				# NVDA itself keeps words in (in browse mode, one field of the buffer)
+				fb = _fieldBounds(ti, offset)
+				if fb is not None:
+					a = max(span[0], fb[0] - lineStart)
+					b = min(span[1], fb[1] - lineStart)
+					span = (a, b) if a <= rel < b else None
 		if span is None:
 			return None
 		ns = min(start, lineStart + span[0])
