@@ -1756,7 +1756,9 @@ def _inferFonts(fonts, allWords, isWord, deadline, pause=None):
 		# only a first guess, checked against the dictionary like unknown ones
 		weak = f.weak
 		deva = [c for c in f.used if (c not in f.truth or c in weak) and isDeva(f.truth.get(c) or f.text(c))]
-		if len(deva) >= 3 and sum(1 for c in f.used if isDeva(f.truth.get(c) or f.text(c))) >= 20:
+		# (not for Type3 fonts the add-on knows nothing about: their PDF texts are right far
+		# more often than a guess - a 533-page book read 9% worse)
+		if (f.truth or not getattr(f, "_t3", None)) and len(deva) >= 3 and sum(1 for c in f.used if isDeva(f.truth.get(c) or f.text(c))) >= 20:
 			fj = fj | set(deva)
 			junk[id(f)] = fj
 		unknown = [c for c in f.used if (c not in f.truth or c in weak) and (_isUnknownText(f.text(c)) or c in fj)]
@@ -1787,8 +1789,8 @@ def _inferFonts(fonts, allWords, isWord, deadline, pause=None):
 					seen = set()
 				seen.add(fi)
 	# (glyph inference is a help, never worth a long wait: a few seconds for a short document,
-	# at most 20 seconds for a book)
-	deadline = min(deadline, time.monotonic() + max(2.0, min(20.0, 1.0 + len(allWords) / 800.0)))
+	# at most 40 seconds for a big book, in the background while it is already being read)
+	deadline = min(deadline, time.monotonic() + max(2.0, min(40.0, 1.0 + len(allWords) / 800.0)))
 	if deadline <= time.monotonic():
 		return
 	# the most used fonts first: if time runs out, the rare ones are left
@@ -1897,6 +1899,18 @@ def _inferFonts(fonts, allWords, isWord, deadline, pause=None):
 				if base >= 0.6 * sum(seqList[si][1] for si in top):
 					continue  # its words are already dictionary words: the reading is right
 				clist = cands[c]
+				if len(clist) > 24 and len(top) > 20:
+					# a first, cheaper round on the 10 most frequent words keeps the 24 best
+					tiny = top[:10]
+					ranked = []
+					for cand in clist:
+						assign[c] = cand
+						ranked.append((sum(score(si) for si in tiny), cand))
+					assign[c] = cur
+					ranked.sort(key=lambda x: -x[0])
+					clist = [x[1] for x in ranked[:24]]
+					if cur not in clist:
+						clist.append(cur)
 				if len(clist) > 12 and len(top) > 6:
 					small = top[:40] if len(top) > 80 else top[:max(6, len(top) // 2)]
 					ranked = []
