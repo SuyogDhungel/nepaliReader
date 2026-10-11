@@ -4,7 +4,7 @@ sys.path.insert(0,'addon/globalPlugins')
 from nepaliReader import sfnt, glyphRefs
 old=json.loads(zlib.decompress(open('addon/globalPlugins/nepaliReader/glyphRefs.dat','rb').read()).decode())['fonts']
 new=[]; seen=set()
-for p in sorted(glob.glob('/tmp/claude-0/w/gf/ttf/*.ttf')):
+for p in sorted(glob.glob(sys.argv[1] if len(sys.argv) > 1 else '/tmp/gf/ttf/*.ttf')):
     data=open(p,'rb').read()
     for face in range(sfnt.faceCount(data)):
         try:

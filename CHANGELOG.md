@@ -8,8 +8,7 @@ All notable changes to the **Nepali Reader** NVDA add-on are documented here.
 - **Shortcut Key Streamlining**: Redundant shortcut keys to activate and deactivate Nepali mode were removed. Only `NVDA + Ctrl + Shift + Space` toggles Nepali mode on or off, and `NVDA + Ctrl + L` directly opens the Nepali Reader settings dialog. `Ctrl + C` continues to copy clean Unicode text.
 
 ### Added
-- **In-App Update Progress**: Update download with a live progress dialog (`Connecting to server...`, `Downloading update, please wait... X%`), cancel support, IPv4-first connection for slow ISP routes, automatic hand-off to NVDA's own add-on install dialog, and plain-text release notes for screen readers (by Roshan Gautam).
-- **Project Authorship**: Maintained by Suyog Dhungel and Roshan Gautam.
+- **In-App Update Progress**: Update download with a live progress dialog (`Connecting to server...`, `Downloading update, please wait... X%`), cancel support, IPv4-first connection for slow ISP routes, automatic hand-off to NVDA's own add-on install dialog, and plain-text release notes for screen readers.
 - **Integrated GitHub Auto-Updater**: Built-in automatic update engine checking GitHub releases. Users receive update notifications with one-click background download and installation without needing external websites or manual downloads. Added a manual "Check for updates..." item under NVDA's Tools menu and a toggle in Nepali Reader settings.
 
 ### Fixed
@@ -43,7 +42,7 @@ All notable changes to the **Nepali Reader** NVDA add-on are documented here.
 - The PDF viewer's own buttons are no longer looked up in the PDF (Fit to page was read "Fit तय page").
 - Real words in file names and titles are no longer changed (बैङ्क-ऐन was read ऐंन).
 - Unicode PDFs: selecting with Ctrl+Shift+Arrow and copying with Ctrl+C now give the same corrected text as line and word reading (looked up straight in the PDF's rebuilt text).
-- **Copy in browse mode when Nepali mode is off**: Ctrl+C now always uses NVDA's own browse mode copy, so copying works with the add-on switched off (by Roshan Gautam). Conflict with ClipSpeak resolved.
+- **Copy in browse mode when Nepali mode is off**: Ctrl+C now always uses NVDA's own browse mode copy, so copying works with the add-on switched off. Conflict with ClipSpeak resolved.
 - **Fully inactive when switched off**: The MultiLang language hooks now do nothing while Nepali mode is off (menu or shortcut), so MultiLang behaves exactly as without the add-on.
 - **English stays English when reading character by character or word by word** in documents that mix Preeti and English (Word, Notepad, browsers, PDFs). Before, an English letter was spoken as a Nepali letter. Character and word reading now follow exactly what line reading decides for the same word; in PDFs the document's own letter is used. Typing echo and spelling are never converted.
 - **Unicode PDF Window Title & Filename Speech Normalization**: Permanently fixed speech announcements for government PDF filenames, URLs, and window titles with stripped matras (e.g. `२०८३-०६-२०_दनक_वपद_बलटन.pdf` is spoken naturally and accurately as `२०८३-०६-२० दैनिक विपद् बुलेटिन` in File Explorer, Brave, Chrome, and Edge) without altering files on disk.
