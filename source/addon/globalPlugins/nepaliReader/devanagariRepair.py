@@ -886,6 +886,9 @@ def cleanShuffled(text):
 	# Preeti hash key before digits in Devanagari context (e.g. संख्या #२२८४ -> संख्या २२८४)
 	text = re.sub(r'(संख्या)\s*#\s*([०-९\u0966-\u096f0-9]+)', r'\1 \2', text)
 
+	# Preeti ":" key typed between digits (e.g. १०स्०० -> १०:००, ५स्३० -> ५:३०)
+	text = re.sub(r'(?<=[\u0966-\u096f0-9])स्(?=[\u0966-\u096f0-9])', ':', text)
+
 	# Common font/OCR corruptions:
 	text = re.sub(_DEVA_BOUND_L + r'महव' + _DEVA_BOUND_R, 'महत्त्व', text)
 	text = re.sub(_DEVA_BOUND_L + r'महव(को|का|की|मा|ले|लाई|बाट|हरू|पूर्ण)', r'महत्त्व\1', text)
@@ -1001,6 +1004,8 @@ def cleanForCharNav(text):
 	text = re.sub(_DEVA_BOUND_L + r'प्रसले' + _DEVA_BOUND_R, 'प्रसङ्गले', text)
 	text = re.sub(_DEVA_BOUND_L + r'संख्या/टिरण' + _DEVA_BOUND_R, 'संख्या/विवरण', text)
 	text = re.sub(_DEVA_BOUND_L + r'मृत\s+क' + _DEVA_BOUND_R, 'मृतक', text)
+	# Preeti ":" key typed between digits (e.g. १०स्०० -> १०:००, ५स्३० -> ५:३०)
+	text = re.sub(r'(?<=[\u0966-\u096f0-9])स्(?=[\u0966-\u096f0-9])', ':', text)
 	return text
 
 

@@ -419,7 +419,7 @@ def preetiFamilyToUnicode(text, font="preeti", _table=None, bf=None):
 		# they MUST NOT be stripped as punctuation!
 		lead_b = ""
 		trail_b = ""
-		if len(word) >= 2 and word[0] == "(" and word[-1] == ")":
+		if len(word) >= 2 and word[0] == "(" and word[-1] == ")" and word[1:-1] and not word[1:-1].startswith(")"):
 			lead_b = "("
 			trail_b = ")"
 			word = word[1:-1]
@@ -637,6 +637,7 @@ _COLON = re.compile("(?<=्)ः|ः(?=\\s*[–—\\-(])|^ः$")
 
 
 _DECIMAL_ZERO = re.compile(r"(?<=[\u0966-\u096f][.,])\)(?=%|[\u0966-\u096f]|\s|$)")
+_TIME_COLON = re.compile(r"(?<=[\u0966-\u096f0-9])स्(?=[\u0966-\u096f0-9])")
 
 
 # a visarga at the end of a word: the same key is the colon of a label or heading ("भत्ता:",
@@ -667,6 +668,9 @@ def convert(text, encoding="preeti", bf=None):
 	if ")" in out:
 		# a ")" right after a Nepali digit and a point is the digit key for ० (६.)% is ६.०%)
 		out = _DECIMAL_ZERO.sub("\u0966", out)
+	if "स्" in out:
+		# Preeti ":" key typed between digits is the colon of a time or ratio (10:00, 5:30)
+		out = _TIME_COLON.sub(":", out)
 	return out
 
 

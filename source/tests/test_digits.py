@@ -28,6 +28,19 @@ check('repair: बा६ रेक८', DR.repair('बा६ रेक८ १९
 # the Preeti keys ( ) between two Preeti words are the digit keys
 check('lone ( is ९', legacyFonts.convert('vf; ( hgf', 'preeti'), 'खास ९ जना')
 check('( ) of a clause stay brackets', legacyFonts.convert('(s) v', 'preeti'), '(क) ख')
+check('Preeti () is ९० (90)', legacyFonts.convert('()', 'preeti'), '९०')
+check('Preeti ()) is ९०० (900)', legacyFonts.convert('())', 'preeti'), '९००')
+check('Preeti ()))) is ९००००', legacyFonts.convert('())))', 'preeti'), '९००००')
+check('Preeti ()() is ९०९०', legacyFonts.convert('()()', 'preeti'), '९०९०')
+check('Preeti clause (!) is (१)', legacyFonts.convert('(!)', 'preeti'), '(१)')
+check('Preeti clause (@) is (२)', legacyFonts.convert('(@)', 'preeti'), '(२)')
+check('Preeti parenthesized year (@)*#) is (२०८३)', legacyFonts.convert('(@)*#)', 'preeti'), '(२०८३)')
+check('Preeti time !):)) is १०:००', legacyFonts.convert('!):))', 'preeti'), '१०:००')
+check('Preeti time %:#) is ५:३०', legacyFonts.convert('%:#)', 'preeti'), '५:३०')
+check('Preeti time !:)) is १:००', legacyFonts.convert('!:))', 'preeti'), '१:००')
+check('Unicode time in repair: १०स्०० -> १०:००', DR.repair('साँझ १०स्०० बजे', broken=True), 'साँझ १०:०० बजे')
+check('Unicode time in cleanForCharNav: १०स्०० -> १०:००', DR.cleanForCharNav('१०स्००'), '१०:००')
+check('Unicode date and time preserved: २०८३ and ५:३०', DR.repair('यही मिति २०८३ असोज २५ गते बिहान करिब ५:३० बजे गोरखा जिल्लाको चुमनुब्री'), 'यही मिति २०८३ असोज २५ गते बिहान करिब ५:३० बजे गोरखा जिल्लाको चुमनुब्री')
 
 # character and word reading of numbers
 F.state['app'] = 'winword'

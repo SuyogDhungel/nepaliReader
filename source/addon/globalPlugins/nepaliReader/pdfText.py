@@ -39,7 +39,8 @@ NUKTA = "़"
 REPH = "र्"
 DEP_SIGNS = set("ऺऻािीुूृॄॅॆेैॉॊोौॎॏॕॖॗॢॣऀँंः़")
 INDEPENDENT = set(chr(c) for c in range(0x0904, 0x0915)) | set("ॠॡॲॳॴॵॶॷ")
-INDEX_VERSION = 26
+INDEX_VERSION = 27
+_DIGITS_SET = frozenset("0123456789\u0966\u0967\u0968\u0969\u096a\u096b\u096c\u096d\u096e\u096f")
 INFER = True
 
 
@@ -1535,8 +1536,9 @@ def _wordTexts(w):
 			real = font.truth.get(code)
 			plainToks.append((real if real is not None else _CONTROL.sub("", _PUA.sub("", t or "")), gi))
 			if (real is None or code in font.weak) and inferred is not None and code in inferred:
-				real = inferred[code]
-				guessed = True
+				if not (t and all(c in _DIGITS_SET for c in t)):
+					real = inferred[code]
+					guessed = True
 			elif real is None:
 				real = t
 				if isDeva(t) or (font.cid and not t) or _PUA.search(t) or _CONTROL.search(t):
@@ -1641,6 +1643,8 @@ def _isUnknownText(t):
 def _candidates(t):
 	"""Possible real texts of a glyph whose ToUnicode text is t (InDesign and others give a glyph
 	the text of its whole syllable, or nothing)."""
+	if t and all(c in _DIGITS_SET for c in t):
+		return [t]
 	if t and _CONTROL.fullmatch(t):
 		t = ""  # a Type3 font's \x00: nothing known about the glyph
 	if t and _PUA.search(t):
@@ -1786,13 +1790,13 @@ def _inferFonts(fonts, allWords, isWord, deadline, pause=None):
 		# PDFs give its ि and reph glyphs the text र, न, ह or इ): its other glyphs' texts are
 		# only a first guess, checked against the dictionary like unknown ones
 		weak = f.weak
-		deva = [c for c in f.used if (c not in f.truth or c in weak) and isDeva(f.truth.get(c) or f.text(c))]
+		deva = [c for c in f.used if (c not in f.truth or c in weak) and isDeva(f.truth.get(c) or f.text(c)) and not any(ch in _DIGITS_SET for ch in (f.truth.get(c) or f.text(c)))]
 		# (not for Type3 fonts the add-on knows nothing about: their PDF texts are right far
 		# more often than a guess - a 533-page book read 9% worse)
 		if (f.truth or not getattr(f, "_t3", None)) and len(deva) >= 3 and sum(1 for c in f.used if isDeva(f.truth.get(c) or f.text(c))) >= 20:
 			fj = fj | set(deva)
 			junk[id(f)] = fj
-		unknown = [c for c in f.used if (c not in f.truth or c in weak) and (_isUnknownText(f.text(c)) or c in fj)]
+		unknown = [c for c in f.used if (c not in f.truth or c in weak) and (_isUnknownText(f.text(c)) or c in fj) and not (f.text(c) and all(ch in _DIGITS_SET for ch in f.text(c)))]
 		if not unknown:
 			continue
 		# subsets of one CID font share their glyph numbers; Type3 fonts share glyphs by their
@@ -1898,7 +1902,7 @@ def _inferFonts(fonts, allWords, isWord, deadline, pause=None):
 		def score(si):
 			key, cnt = seqList[si]
 			w = wordOf(key).strip(_PUNCT)
-			if not w or not isDeva(w):
+			if not w or not isDeva(w) or any(c in _DIGITS_SET for c in w):
 				return 0
 			r = cache.get(w)
 			if r is None:
