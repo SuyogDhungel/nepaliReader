@@ -2,6 +2,17 @@
 
 All notable changes to the **Nepali Reader** NVDA add-on are documented here.
 
+## [Unreleased]
+
+### Added
+- **Tables in PDFs**: Chrome, Edge and Brave give NVDA a PDF's table only as loose lines. The add-on now reads each table from the PDF file itself: from the table structure the PDF saves (Word and most office programs save it), or else from the cell borders drawn on the page. Header cells and merged cells (one cell over several rows) are kept. A grid of lines that does not hold the text around it (an infographic with a few boxes) is not taken as a table.
+- **Accessible view (`NVDA + Ctrl + Shift + V`)**: in a PDF, opens the whole document as a web page in your browser with real tables, headings and the correct Nepali text, page by page, where NVDA's table keys work (T, Ctrl+Alt+arrows with the headers spoken).
+- **Copying a table**: Ctrl+C on a selection that takes in table cells pastes into Word, Excel or an email as a real table, and as one row per line with tab-separated cells in plain text. Lines that are not part of the PDF's text (Chrome's toolbar, image labels) are copied as they are, in their place.
+
+### Fixed
+- **Lines where Chrome glues its own words to the page's text** ("Unlabeled graphicपटहरो", the toolbar in front of the first line) were left with the PDF's broken text (राटिय, पटहरो, तातलका). The Nepali part of such a line is now looked up by itself: राष्ट्रिय, पहिरो, तालिका.
+- **PDFs that stopped being read**: since 2.0.1 a PDF whose font gives a letter the text of a Latin digit (the Rasuwa flood report: the ि of धादिङ has the text "9") could not be read at all. Such a digit inside a Nepali word is read as the letter its glyph is again; numbers (२०८३, 10:00) stay exactly as written.
+
 ## [2.0.1] - 2026-10-12
 
 ### Fixed

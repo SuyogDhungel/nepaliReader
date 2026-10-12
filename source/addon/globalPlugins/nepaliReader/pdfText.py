@@ -24,6 +24,7 @@ try:
 	from . import pdfReader
 	from . import sfnt
 	from . import devanagariRepair
+	from . import pdfLayout
 	from .detector import cleanGluedTokens
 except ImportError:
 	import glyphRefs
@@ -31,6 +32,7 @@ except ImportError:
 	import pdfReader
 	import sfnt
 	import devanagariRepair
+	import pdfLayout
 	from detector import cleanGluedTokens
 
 VIRAMA = "्"
@@ -39,7 +41,10 @@ NUKTA = "़"
 REPH = "र्"
 DEP_SIGNS = set("ऺऻािीुूृॄॅॆेैॉॊोौॎॏॕॖॗॢॣऀँंः़")
 INDEPENDENT = set(chr(c) for c in range(0x0904, 0x0915)) | set("ॠॡॲॳॴॵॶॷ")
-INDEX_VERSION = 27
+INDEX_VERSION = 28
+LAYOUT = True  # read tables and headings (pdfLayout)
+_LINE_OPS = re.compile(rb"[\d.]\s+(?:re|l)\s")
+_PATH_OPS = frozenset(("re", "m", "l", "h", "c", "v", "y", "S", "s", "f", "F", "f*", "B", "B*", "b", "b*", "n"))
 _DIGITS_SET = frozenset("0123456789\u0966\u0967\u0968\u0969\u096a\u096b\u096c\u096d\u096e\u096f")
 INFER = True
 
@@ -512,6 +517,7 @@ class _PageReader:
 		self.glyphs = []
 		self.deadline = deadline
 		self.box = None  # (x0, y0, x1, y1) of the visible page: text drawn outside it is not shown
+		self.lines = None  # ([horizontal], [vertical]) lines drawn, when a table is looked for
 
 	def font(self, res, name):
 		r = self.doc.resolve
@@ -529,7 +535,7 @@ class _PageReader:
 			self.fonts.setdefault("_keep", []).append(fd)
 		return f
 
-	def run(self, data, res, ctm, depth=0):
+	def run(self, data, res, ctm, depth=0, mcid0=None):
 		r = self.doc.resolve
 		res = r(res) if res is not None else {}
 		if not isinstance(res, dict):
@@ -546,7 +552,13 @@ class _PageReader:
 		count = 0
 		mc = []      # marked content: [span or None]
 		span = None  # innermost /ActualText span: [id, text]
-		for op, args in pdfReader.contentOps(data):
+		mcids = []   # marked content ids (the PDF's tags: which table cell, heading... a glyph is in)
+		mcid = mcid0  # (a form drawn inside a tagged run belongs to that run)
+		lines = self.lines
+		path = []    # the path being built, for table borders (pdfLayout): pieces in page space
+		subp = []
+		pstart = None
+		for op, args in pdfReader.contentOps(data, graphics=lines is not None):
 			count += 1
 			if count & 255 == 0:
 				if time.monotonic() > self.deadline:
@@ -593,7 +605,7 @@ class _PageReader:
 						tx = (w * fs + tc + (tw if (not font.cid and code == 32) else 0.0)) * th
 						u = x * ca + y * sa
 						v = -x * sa + y * ca
-						glyphs.append((font, code, u, v, size, tx * scale, span))
+						glyphs.append((font, code, u, v, size, tx * scale, span, mcid, x, y))
 						font.used[code] = font.used.get(code, 0) + 1
 						tm = (tm[0], tm[1], tm[2], tm[3], tm[4] + tx * tm[0], tm[5] + tx * tm[1])
 			elif op == "BDC" or op == "BMC":
@@ -601,6 +613,10 @@ class _PageReader:
 				if isinstance(props, str) and not isinstance(props, bytes):
 					props = r((r(res.get("Properties")) or {}).get(props)) if isinstance(res, dict) else None
 				props = r(props)
+				mi = r(props.get("MCID")) if isinstance(props, dict) and depth == 0 else None
+				mcids.append(mi if isinstance(mi, int) else None)
+				if isinstance(mi, int):
+					mcid = mi
 				at = props.get("ActualText") if isinstance(props, dict) else None
 				at = r(at)
 				if isinstance(at, bytes):
@@ -619,6 +635,9 @@ class _PageReader:
 				if mc:
 					mc.pop()
 				span = next((x for x in reversed(mc) if x is not None), None)
+				if mcids:
+					mcids.pop()
+				mcid = next((x for x in reversed(mcids) if x is not None), mcid0)
 			elif op == "Td" or op == "TD":
 				if len(args) >= 2:
 					tx, ty = _num(args[0]), _num(args[1])
@@ -656,6 +675,34 @@ class _PageReader:
 			elif op == "Q":
 				if stack:
 					ctm, font, fs, tc, tw, th, tl, rise = stack.pop()
+			elif lines is not None and op in _PATH_OPS:
+				# the lines of a table, read in the same pass as the text
+				if op == "re" and len(args) >= 4:
+					rx, ry, rw, rh = args[:4]
+					pts = [pdfLayout._pt(ctm, rx, ry), pdfLayout._pt(ctm, rx + rw, ry), pdfLayout._pt(ctm, rx + rw, ry + rh), pdfLayout._pt(ctm, rx, ry + rh)]
+					path.append(("re", min(c[0] for c in pts), min(c[1] for c in pts), max(c[0] for c in pts), max(c[1] for c in pts)))
+					subp = []
+				elif op == "m" and len(args) >= 2:
+					pstart = pdfLayout._pt(ctm, args[0], args[1])
+					subp = [pstart]
+				elif op == "l" and len(args) >= 2 and subp:
+					pq = pdfLayout._pt(ctm, args[0], args[1])
+					path.append(("l", subp[-1], pq))
+					subp.append(pq)
+				elif op == "h" and subp and pstart is not None:
+					path.append(("l", subp[-1], pstart))
+					subp.append(pstart)
+				elif op in ("c", "v", "y"):
+					if len(args) >= 2:
+						subp.append(pdfLayout._pt(ctm, args[-2], args[-1]))
+				else:
+					fill = op in ("f", "F", "f*", "B", "B*", "b", "b*")
+					stroke = op in ("S", "s", "B", "B*", "b", "b*")
+					if (fill or stroke) and path:
+						pdfLayout._paint(path, fill, stroke, lines[0], lines[1])
+					path = []
+					subp = []
+					pstart = None
 			elif op == "Do" and args and depth < 8:
 				xo = r((r(res.get("XObject")) or {}).get(args[0])) if isinstance(res, dict) else None
 				if isinstance(xo, pdfReader.Stream) and r(xo.dict.get("Subtype")) == "Form":
@@ -665,7 +712,7 @@ class _PageReader:
 						sub = self.doc.decode(xo)
 					except Exception:
 						continue
-					self.run(sub, xo.dict.get("Resources") or res, _mul(fm, ctm), depth + 1)
+					self.run(sub, xo.dict.get("Resources") or res, _mul(fm, ctm), depth + 1, mcid)
 
 
 def _pageBox(doc, page):
@@ -729,7 +776,7 @@ def _words(glyphs, page):
 	seen = {}
 	dedup = []
 	for g in glyphs:
-		font, code, u, v, size, adv, span = g
+		font, code, u, v, size, adv, span = g[:7]
 		k = (id(font), code)
 		is_dup = False
 		if k in seen:
@@ -741,7 +788,7 @@ def _words(glyphs, page):
 			seen.setdefault(k, []).append((u, v))
 			t = font.text(code)
 			if ("wingdings" in font.baseFont.lower() or "symbol" in font.baseFont.lower()) and t in ("\x01", "\x02", "\x03", "§", "Å", "´", "•"):
-				g = (font, code, u, v, size, adv, ("bullet", "•"))
+				g = (font, code, u, v, size, adv, ("bullet", "•")) + tuple(g[7:])
 			dedup.append(g)
 
 	words = []
@@ -751,7 +798,7 @@ def _words(glyphs, page):
 	pend = []    # space glyphs of this line not yet passed: (u, advance)
 	lastV = None
 	for g in dedup:
-		font, code, u, v, size, adv, span = g
+		font, code, u, v, size, adv, span = g[:7]
 		size = size or 1.0
 		blank = _isSpace(font, code, span)
 		is_bullet = (span and span[0] == "bullet") or font.text(code) == "•" or ("wingdings" in font.baseFont.lower())
@@ -820,6 +867,8 @@ class DocIndex:
 		self._byBag = None
 		self.fixedWords = 0
 		self.stats = {}
+		self.layout = None     # tables, headings, paragraphs (pdfLayout), or None
+		self.touched = None    # a list while a copy collects the index words it read
 
 	# -- building -------------------------------------------------------------
 
@@ -833,15 +882,35 @@ class DocIndex:
 		fonts = {}
 		pageGlyphs = []
 		deadline = time.monotonic() + timeLimit
+		# the layout (tables, headings) is read for the whole document only, not for the quick
+		# index of the first pages
+		withLayout = LAYOUT and not maxPages
+		struct = None
+		pageTables = {}
+		if withLayout:
+			try:
+				struct = pdfLayout.structure(doc, pdfLayout.pageRefs(doc), deadline)
+			except Exception:
+				struct = None
 		for pn, page in enumerate(pages):
 			pr = _PageReader(doc, fonts, deadline, pause)
 			pr.box = _pageBox(doc, page)
 			try:
-				pr.run(doc.contentData(page), page.get("Resources"), _ID)
+				data = doc.contentData(page)
+				if withLayout and data and len(_LINE_OPS.findall(data, 0, 2000000)) >= 6:
+					pr.lines = ([], [])
+				pr.run(data, page.get("Resources"), _ID)
 			except TimeoutError:
 				break
 			except Exception:
 				pass
+			if pr.lines and pr.lines[0] and pr.lines[1]:
+				try:
+					t = pdfLayout.gridTables(pr.lines[0], pr.lines[1])
+					if t:
+						pageTables[pn] = t
+				except Exception:
+					pass
 			pageGlyphs.append((pn, pr.glyphs))
 			if progress:
 				progress(pn + 1, len(pages))
@@ -875,6 +944,19 @@ class DocIndex:
 				pass
 		idx = cls()
 		idx._fill(allWords, pause)
+		if withLayout:
+			try:
+				boxes = [pdfLayout.wordBox(w) for w in allWords]
+				layout = pdfLayout.analyse(struct, pageTables, boxes, idx._order)
+				wpage = [0] * len(idx.words)
+				for wi, i in enumerate(idx._order):
+					if i is not None:
+						wpage[i] = allWords[wi].page[0] if isinstance(allWords[wi].page, tuple) else 0
+				layout["wpage"] = wpage
+				idx.layout = layout
+			except Exception:
+				idx.layout = None
+		idx._order = None
 		idx.stats = {"pages": len(pages), "words": len(idx.words), "fixed": idx.fixedWords,
 			"fonts": [(f.baseFont, f.legacy, len(f.used), len(f.truth)) for f in realFonts if f.used]}
 		return idx
@@ -882,6 +964,7 @@ class DocIndex:
 	def _fill(self, allWords, pause=None):
 		B = []
 		pos = 0
+		self._order = order = []   # grouped word -> its place in self.words (None: not kept)
 		for n, w in enumerate(allWords):
 			if pause and not n & 255:
 				pause()
@@ -912,7 +995,9 @@ class DocIndex:
 					fixed = "".join(legacyFonts._LONE_DIGIT_KEYS[c] for c in m.group(1)) + m.group(2)
 			key = keyOf(shown)
 			if not key:
+				order.append(None)
 				continue
+			order.append(len(self.words))
 			self.starts.append(pos)
 			self.lineStart.append(w.page[1] if isinstance(w.page, tuple) else False)
 			if fixed is not None and fixed != shown:
@@ -1006,6 +1091,8 @@ class DocIndex:
 			lo = max(a, s) - s
 			hi = min(b, s + len(fk)) - s
 			if hi > lo:
+				if self.touched is not None:
+					self.touched.append(i)
 				if lo == 0 and hi == len(fk):
 					out.append((wtext, fixed is not None))
 				else:
@@ -1134,7 +1221,7 @@ class DocIndex:
 		if not key:
 			return None
 		cache = self.__dict__.setdefault("_lookupCache", {})
-		hit = cache.get(text)
+		hit = cache.get(text) if self.touched is None else None  # (a copy collects the words it reads)
 		if hit is not None:
 			self._hint = hit[1]
 			return hit[0]
@@ -1255,6 +1342,8 @@ class DocIndex:
 					out.append((fixed, True) if fixed is not None else (key, False))
 				else:
 					out.append(self._part(i, lo, hi))
+				if self.touched is not None:
+					self.touched.append(i)
 			i += 1
 		return out
 
@@ -1431,7 +1520,7 @@ class DocIndex:
 
 	def dump(self):
 		return {"v": INDEX_VERSION, "B": self.B, "starts": self.starts, "words": self.words,
-			"lineStart": self.lineStart, "fixed": self.fixedWords, "stats": self.stats}
+			"lineStart": self.lineStart, "fixed": self.fixedWords, "stats": self.stats, "layout": self.layout}
 
 	@classmethod
 	def restore(cls, d):
@@ -1444,6 +1533,7 @@ class DocIndex:
 		idx.lineStart = d["lineStart"]
 		idx.fixedWords = d["fixed"]
 		idx.stats = d.get("stats", {})
+		idx.layout = d.get("layout")
 		idx._buildF()
 		return idx
 
@@ -1512,6 +1602,7 @@ def _wordTexts(w):
 			if enc not in ("krutidev", "fontasy", "himalaya") and raw in legacyFonts._LONE_DIGIT_KEYS:
 				fixed = legacyFonts._LONE_DIGIT_KEYS[raw]  # the Shift+digit keys of a Preeti font draw the digits
 			return shownText, fixed, None, enc
+	letters = any("\u0905" <= ch <= "\u0939" for ch in shownText)
 	toks = []      # (text, glyph number)
 	plainToks = []  # the same without readings worked out from the document
 	charGlyph = []  # for each shown (key) character: its glyph number
@@ -1535,10 +1626,9 @@ def _wordTexts(w):
 		for code, t in items:
 			real = font.truth.get(code)
 			plainToks.append((real if real is not None else _CONTROL.sub("", _PUA.sub("", t or "")), gi))
-			if (real is None or code in font.weak) and inferred is not None and code in inferred:
-				if not (t and all(c in _DIGITS_SET for c in t)):
-					real = inferred[code]
-					guessed = True
+			if (real is None or code in font.weak) and inferred is not None and code in inferred and not _keepDigit(t, letters):
+				real = inferred[code]
+				guessed = True
 			elif real is None:
 				real = t
 				if isDeva(t) or (font.cid and not t) or _PUA.search(t) or _CONTROL.search(t):
@@ -1631,6 +1721,15 @@ _PUA = re.compile("[\ue000-\uf8ff\U000f0000-\U0010ffff]")
 
 
 _CONTROL = re.compile("[\x00-\x08\x0e-\x1f]")
+
+
+def _keepDigit(t, letters):
+	"""A glyph whose PDF text is a digit is that digit (२०८३, 10:00 are read as written), not a
+	reading worked out from the document - except a Latin digit inside a Nepali word: some
+	fonts' text tables give the ि of धादिङ the text "9"."""
+	if not t or not all(c in _DIGITS_SET for c in t):
+		return False
+	return not letters or any("\u0966" <= c <= "\u096f" for c in t)
 
 
 def _isUnknownText(t):

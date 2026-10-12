@@ -66,6 +66,7 @@ You can control all features directly through the NVDA menu using your keyboard:
 |---|---|
 | **`NVDA + Ctrl + Shift + Space`** | **Toggle Nepali Mode**: turns reading conversion on or off. NVDA announces *"Nepali mode on"* or *"Nepali mode off"*. |
 | **`NVDA + Ctrl + L`** | **Open Settings**: directly opens the Nepali Reader settings dialog. |
+| **`NVDA + Ctrl + Shift + V`** | **Accessible view of a PDF**: opens the PDF as a web page with real tables, headings and correct Nepali, where NVDA's table keys work. |
 | **`Ctrl + C`** | **Smart Copy**: while Nepali mode is on, copying selected text puts clean Unicode Devanagari on the clipboard. |
 
 The other commands (convert selected text, legacy font mode, default font family) have no key by default. Use the NVDA menu, Tools, Nepali Reader, or assign a key yourself as described below.
@@ -98,6 +99,7 @@ If any shortcut conflicts with another add-on or if you prefer different keys, y
 * **Left / Right Arrow**: Moves character by character. Accurately speaks individual characters and vowel signs without repetition.
 * **Ctrl + Left / Right Arrow**: Moves word by word through real Devanagari words.
 * **Shift + Arrows**: Selects text accurately without broken characters.
+* **Tables**: Chrome, Edge and Brave show a PDF's table to NVDA as loose lines. The add-on reads the table from the PDF itself (the structure Word saves, or the drawn cell borders). Press **`NVDA + Ctrl + Shift + V`** to open the whole PDF as a web page with real tables (T jumps to a table, Ctrl+Alt+Arrows move by cell and speak the headers). Copying (Ctrl+C) a selection that includes table cells pastes into Word or Excel as a real table, and as tab-separated rows in plain text.
 * **Numbers & Dates**: Dates like `२०७५` and numbers like `१.`, `(१)`, `२३` are announced in spoken Nepali via eSpeak.
 * **MultiLang & Multi-Voice TTS Support**: Seamlessly integrates with the **MultiLang** virtual synthesizer add-on. If MultiLang is active, Nepali Reader ensures Devanagari text is correctly recognized as Nepali (`ne`) rather than forced to Hindi (`hi`), and automatically routes speech to installed Nepali TTS voices (such as **Hear2Read Indic Voices** with Google Nepali voice or **eSpeak NG**) across Word documents, PDFs, and web browsers.
 

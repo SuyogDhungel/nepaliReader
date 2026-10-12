@@ -690,10 +690,11 @@ _FAST = re.compile(
 _EI = re.compile(rb"[\x00\t\n\x0c\r ]EI(?=[\x00\t\n\x0c\r ]|$)")
 
 
-def contentOps(data):
+def contentOps(data, graphics=False):
 	"""Yield (operator, operands) from a content stream. Inline images are skipped.
 	Fast path: one regular expression scan; only literal strings with escapes or deeply nested
-	parentheses are parsed by hand."""
+	parentheses are parsed by hand. Drawing operators (paths, colours) are skipped unless
+	graphics is true (the lines of a table are read only when they are needed)."""
 	pos = 0
 	n = len(data)
 	operands = []
@@ -705,6 +706,12 @@ def contentOps(data):
 			if g == "gfx":
 				if not stack:
 					operands = []
+					if graphics:
+						toks = m.group(g).split()
+						try:
+							yield toks[-1].decode("latin-1"), [float(t) for t in toks[:-1]]
+						except ValueError:
+							pass
 				continue
 			if g == "n":
 				t = m.group(g)

@@ -39,6 +39,7 @@ from . import glyphRefs
 from . import legacyFonts
 from . import neLexicon
 from . import pdfText
+from . import pdfLayout
 from . import visualScript
 from . import diag
 from . import multilangIntegration
@@ -373,6 +374,35 @@ def _ownCopy(text, notify=False):
 		_OWN_COPY[0] = False
 
 
+def _ownCopyRich(plain, html, notify=False):
+	"""Puts a copy that holds a table on the clipboard twice: as HTML (Word, Excel and mail paste
+	a real table) and as plain text (one row per line, cells separated by tabs)."""
+	try:
+		import gui
+		import winUser
+		import winKernel
+		data = pdfLayout.cfHtml(html) + b"\0"
+		with winUser.openClipboard(gui.mainFrame.Handle):
+			winUser.emptyClipboard()
+			winUser.setClipboardData(winUser.CF_UNICODETEXT, plain)
+			fmt = ctypes.windll.user32.RegisterClipboardFormatW("HTML Format")
+			h = winKernel.HGLOBAL.alloc(winKernel.GMEM_MOVEABLE, len(data))
+			with h.lock() as addr:
+				ctypes.memmove(addr, data, len(data))
+			if ctypes.windll.user32.SetClipboardData(fmt, h):
+				h.forget()
+		if notify:
+			if hasattr(ui, "reportTextCopiedToClipboard"):
+				ui.reportTextCopiedToClipboard(plain)
+			else:
+				# Translators: reported when a selection was copied
+				ui.message(_("Copied to clipboard"))
+		return True
+	except Exception:
+		log.debugWarning("Nepali Reader: could not put the table on the clipboard", exc_info=True)
+		return _ownCopy(plain, notify)
+
+
 def _fieldBounds(ti, offset):
 	"""(start, end) of the browse-mode buffer field holding offset (a table cell's text, a link),
 	the same range NVDA limits its own words to; None outside a virtual buffer."""
@@ -422,6 +452,7 @@ class _PdfState:
 		self.status = "new"   # new, building, ready, none
 		self.index = None
 		self.location = None
+		self.full = False     # the index of the whole document (not only its first pages)
 
 
 class _Yield:
@@ -876,6 +907,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 					if central is not None:
 						# the PDF's own text: nothing may "repair" it a second time
 						diag.write("copy (pdf) %r -> %r" % (raw[:80], (central or "")[:80]))
+						clip = plugin._tableClip(info)
+						if clip is not None:
+							return _ownCopyRich(clip[0], clip[1], notify)
 						if central != raw:
 							return _ownCopy(textInfos.convertToCrlf(central), notify)
 						return origCopy(_unwrap(info), notify)
@@ -909,6 +943,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 							central = plugin._centralText(info)
 							if central is not None:
 								diag.write("copy (pdf cursor) %r -> %r" % (raw[:80], (central or "")[:80]))
+								clip = plugin._tableClip(info)
+								if clip is not None:
+									_ownCopyRich(clip[0], clip[1], notify=True)
+									return
 								if central != raw:
 									_ownCopy(textInfos.convertToCrlf(central), notify=True)
 									return
@@ -1387,12 +1425,45 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				except Exception:
 					log.debugWarning("Nepali Reader: could not save the PDF index", exc_info=True)
 			st.index = idx
+			st.full = True
 			st.status = "ready"
 			self._cache.clear()
 		except Exception:
 			log.debugWarning("Nepali Reader: could not rebuild the PDF text", exc_info=True)
 			diag.exception("could not rebuild the PDF text")
 			st.status = "none"
+
+	def _tableClip(self, info):
+		"""(plain text, html) when a PDF selection takes in cells of a table, else None. Lines the
+		index places exactly give their words (a table's words become the table); any other line
+		(the viewer's toolbar, an image label) is copied as it is, in its place."""
+		try:
+			info = _unwrap(info)
+			idx = self._readyIndex(info.obj)
+			if idx is None or not (getattr(idx, "layout", None) or {}).get("tables"):
+				return None
+			raw = info.text or ""
+			if not raw.strip():
+				return None
+			items = []
+			idx.touched = []
+			try:
+				for ln in raw.splitlines():
+					if not pdfText.keyOf(ln):
+						continue
+					before = len(idx.touched)
+					got = self._indexText(None, idx, ln)
+					ids = idx.touched[before:]
+					items.append((got if got is not None else ln, ids if got is not None else []))
+			finally:
+				idx.touched = None
+			clip = pdfLayout.clipLines(idx, items)
+			if clip is not None:
+				diag.write("copy (pdf table) %r" % clip[0][:120])
+			return clip
+		except Exception:
+			diag.exception("table copy")
+			return None
 
 	def _perRunText(self, idx, grp, whole):
 		"""The rebuilt text of each run of a group, or None when the runs cannot be looked up one
@@ -1451,6 +1522,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			# page" button), not the page - a short word of it must not be read as Preeti (to = तय)
 			pieces = None
 		if not pieces or not any(ok for _p, ok in pieces):
+			mixed = self._mixedRuns(idx, text)
+			if mixed is not None:
+				return mixed
 			try:
 				diag.write("index miss: %r key=%r" % (text[:90], key[:60]))
 			except Exception:
@@ -1493,6 +1567,39 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			devanagariRepair.markExact(" ".join(t for t in result_text.split() if allGood or t in goodToks))
 		return result_text
 
+
+	_DEVA_RUN = re.compile("[\u0900-\u097F][\u0900-\u097F\\s\\d.,:;!?()\\[\\]/%#@&*'\"\u201c\u201d\u2018\u2019\u2013\u2014+=-]*")
+
+	def _mixedRuns(self, idx, text):
+		"""A line where the viewer glued its own words to the page's text ("Unlabeled graphicपहिरो",
+		its toolbar before the first line): each Devanagari run is looked up by itself and the
+		rest stays as it is. Not for a line whose Latin letters are Preeti keys."""
+		if not devanagariRepair.hasDevanagari(text) or not re.search(r"[A-Za-z]", text):
+			return None
+		latin = " ".join(re.findall(r"[A-Za-z][A-Za-z']*", text))
+		try:
+			if detector.looksLegacy(latin, "preeti"):
+				return None
+		except Exception:
+			return None
+		out = []
+		pos = 0
+		found = False
+		for m in self._DEVA_RUN.finditer(text):
+			out.append(text[pos:m.start()])
+			run = m.group(0)
+			body = run.rstrip()
+			# (a run of digits only, like the date in a file name, is not looked up)
+			letters = sum(1 for ch in body if "\u0915" <= ch <= "\u0939" or "\u0905" <= ch <= "\u0914")
+			got = self._indexText(None, idx, body) if letters >= 2 and len(pdfText.keyOf(body)) >= 3 else None
+			if got is not None:
+				found = True
+				out.append(got + run[len(body):])
+			else:
+				out.append(run)
+			pos = m.end()
+		out.append(text[pos:])
+		return "".join(out) if found else None
 
 	def _legacyAkshar(self, info, text, enc):
 		"""The syllable a Preeti / Kruti Dev character belongs to, from the word around it."""
@@ -2717,6 +2824,46 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			result = detector.convertTokens(detector.forceDecide(result), lambda s: legacyFonts.convert(s, encoding) or s)
 		_ownCopy(result)
 		ui.message(result)
+
+	@script(
+		# Translators: input help for a command
+		description=_(
+			"In a PDF: opens the whole document as a web page with real tables, headings and correct "
+			"Nepali, where NVDA's table and heading keys work"
+		),
+		category=CATEGORY,
+		gesture="kb:NVDA+control+shift+v",
+	)
+	def script_pdfView(self, gesture):
+		obj = api.getFocusObject()
+		if obj is None or not self._isPdfWindow(obj):
+			# Translators: reported when the accessible view is asked for outside a PDF
+			ui.message(_("This command works in a PDF"))
+			return
+		idx = self._pdfIndex(obj)
+		st = self._pdfs.get_(self._foregroundKey())
+		if idx is None or st is None or not st.full:
+			# Translators: reported while the PDF is still being read
+			ui.message(_("The PDF is still being read. Try again in a moment."))
+			return
+		try:
+			title = os.path.basename(st.location or "") if st.location and not st.location.startswith("http") else ""
+			if not title:
+				fg = api.getForegroundObject()
+				title = re.split(r" [-–—] ", (fg.name or "") if fg else "")[0].strip() or "PDF"
+			path = os.path.join(_cacheDir(), "pdfview.html")
+			os.makedirs(_cacheDir(), exist_ok=True)
+			with open(path, "w", encoding="utf-8") as f:
+				f.write(pdfLayout.documentHtml(idx, title))
+			n = len((idx.layout or {}).get("tables") or ())
+			os.startfile(path)
+			# Translators: reported when the accessible view of a PDF opens
+			ui.message(_("Opening the accessible view: {n} tables").format(n=n) if n else _("Opening the accessible view"))
+		except Exception:
+			diag.exception("pdf view")
+			log.debugWarning("Nepali Reader: could not open the accessible view", exc_info=True)
+			# Translators: reported when the accessible view could not be made
+			ui.message(_("Could not open the accessible view"))
 
 	@script(
 		# Translators: input help for a command
