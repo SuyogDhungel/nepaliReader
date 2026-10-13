@@ -2877,7 +2877,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				return fields
 			idx = self._readyIndex(obj)
 			layout = getattr(idx, "layout", None) if idx is not None else None
-			if not layout or not (layout.get("tables") or layout.get("heads") or layout.get("styles")):
+			if not layout or not (layout.get("tables") or layout.get("heads") or layout.get("styles") or layout.get("paras")):
 				return fields
 			roles = _structureRoles()
 			if roles is None:
