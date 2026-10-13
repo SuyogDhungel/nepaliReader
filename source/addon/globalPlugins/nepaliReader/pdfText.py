@@ -41,7 +41,10 @@ NUKTA = "़"
 REPH = "र्"
 DEP_SIGNS = set("ऺऻािीुूृॄॅॆेैॉॊोौॎॏॕॖॗॢॣऀँंः़")
 INDEPENDENT = set(chr(c) for c in range(0x0904, 0x0915)) | set("ॠॡॲॳॴॵॶॷ")
-INDEX_VERSION = 28
+INDEX_VERSION = 29
+STYLE_BOLD = 1
+STYLE_ITALIC = 2
+STYLE_UNDERLINE = 4
 LAYOUT = True  # read tables and headings (pdfLayout)
 _LINE_OPS = re.compile(rb"[\d.]\s+(?:re|l)\s")
 _PATH_OPS = frozenset(("re", "m", "l", "h", "c", "v", "y", "S", "s", "f", "F", "f*", "B", "B*", "b", "b*", "n"))
@@ -157,6 +160,7 @@ def aksharas(s):
 # (U+2219 is kept: legacy fonts made with Fontographer give their middle-dot glyph that code too,
 # and Sumod-Acharya draws ङ्ग there - s~rgh\u2219f is कञ्चनजङ्गा)
 _DROP = re.compile("[^\u0021-\u007e\u0080-\u009f\u00a1-\u00ac\u00ae-\u017f\u0192\u02c6\u02dc\u2122\u2219\u0900-\u097f\ua8e0-\ua8ff\u2010-\u2027\u2030-\u205e\u20a0-\u20cf]+")
+_KEEP = re.compile("[\u0021-\u007e\u0080-\u009f\u00a1-\u00ac\u00ae-\u017f\u0192\u02c6\u02dc\u2122\u2219\u0900-\u097f\ua8e0-\ua8ff\u2010-\u2027\u2030-\u205e\u20a0-\u20cf]+")  # (the letters keyOf keeps, in runs)
 
 
 _MARKS = re.compile("[\u0900-\u0903\u093a-\u094f\u0951-\u0957\u0962\u0963]")
@@ -518,6 +522,7 @@ class _PageReader:
 		self.deadline = deadline
 		self.box = None  # (x0, y0, x1, y1) of the visible page: text drawn outside it is not shown
 		self.lines = None  # ([horizontal], [vertical]) lines drawn, when a table is looked for
+		self.images = []   # (x0, y0, x1, y1) of the pictures drawn (text on a picture is a label)
 
 	def font(self, res, name):
 		r = self.doc.resolve
@@ -546,6 +551,7 @@ class _PageReader:
 		th = 1.0
 		tl = 0.0
 		rise = 0.0
+		tr = 0       # text render mode: 2 is filled and outlined (how Word draws bold of a font with no bold)
 		fs = 0.0
 		font = None
 		glyphs = self.glyphs
@@ -584,6 +590,9 @@ class _PageReader:
 				size = abs(fs) * scale
 				ang = math.atan2(m[1], m[0])
 				ca, sa = math.cos(ang), math.sin(ang)
+				# what the page shows of the run's style beyond its font: drawn filled and outlined
+				# (bold), slanted by the text matrix (italic) - Word's way for fonts with no bold/italic
+				style = (STYLE_BOLD if tr in (2, 6) else 0) | (STYLE_ITALIC if abs(ang) < 0.05 and m[3] and abs(m[2] / m[3]) > 0.12 else 0)
 				for it in items:
 					if isinstance(it, (int, float)):
 						tx = -it / 1000.0 * fs * th
@@ -605,7 +614,7 @@ class _PageReader:
 						tx = (w * fs + tc + (tw if (not font.cid and code == 32) else 0.0)) * th
 						u = x * ca + y * sa
 						v = -x * sa + y * ca
-						glyphs.append((font, code, u, v, size, tx * scale, span, mcid, x, y))
+						glyphs.append((font, code, u, v, size, tx * scale, span, mcid, x, y, style))
 						font.used[code] = font.used.get(code, 0) + 1
 						tm = (tm[0], tm[1], tm[2], tm[3], tm[4] + tx * tm[0], tm[5] + tx * tm[1])
 			elif op == "BDC" or op == "BMC":
@@ -671,10 +680,12 @@ class _PageReader:
 				if len(args) >= 6:
 					ctm = _mul(tuple(_num(a) for a in args[:6]), ctm)
 			elif op == "q":
-				stack.append((ctm, font, fs, tc, tw, th, tl, rise))
+				stack.append((ctm, font, fs, tc, tw, th, tl, rise, tr))
 			elif op == "Q":
 				if stack:
-					ctm, font, fs, tc, tw, th, tl, rise = stack.pop()
+					ctm, font, fs, tc, tw, th, tl, rise, tr = stack.pop()
+			elif op == "Tr":
+				tr = int(_num(args[0])) if args else 0
 			elif lines is not None and op in _PATH_OPS:
 				# the lines of a table, read in the same pass as the text
 				if op == "re" and len(args) >= 4:
@@ -713,6 +724,11 @@ class _PageReader:
 					except Exception:
 						continue
 					self.run(sub, xo.dict.get("Resources") or res, _mul(fm, ctm), depth + 1, mcid)
+				elif isinstance(xo, pdfReader.Stream) and r(xo.dict.get("Subtype")) == "Image" and lines is not None:
+					pts = [(ctm[4] + a * ctm[0] + b * ctm[2], ctm[5] + a * ctm[1] + b * ctm[3]) for a, b in ((0, 0), (1, 0), (0, 1), (1, 1))]
+					box = (min(q[0] for q in pts), min(q[1] for q in pts), max(q[0] for q in pts), max(q[1] for q in pts))
+					if box[2] - box[0] > 30 and box[3] - box[1] > 30:
+						self.images.append(box)
 
 
 def _pageBox(doc, page):
@@ -887,6 +903,8 @@ class DocIndex:
 		withLayout = LAYOUT and not maxPages
 		struct = None
 		pageTables = {}
+		pageLines = {}
+		pageImages = {}
 		if withLayout:
 			try:
 				struct = pdfLayout.structure(doc, pdfLayout.pageRefs(doc), deadline)
@@ -897,16 +915,19 @@ class DocIndex:
 			pr.box = _pageBox(doc, page)
 			try:
 				data = doc.contentData(page)
-				if withLayout and data and len(_LINE_OPS.findall(data, 0, 2000000)) >= 6:
+				if withLayout and data and _LINE_OPS.search(data, 0, 2000000):
 					pr.lines = ([], [])
 				pr.run(data, page.get("Resources"), _ID)
 			except TimeoutError:
 				break
 			except Exception:
 				pass
-			if pr.lines and pr.lines[0] and pr.lines[1]:
+			if pr.images:
+				pageImages[pn] = pr.images
+			if pr.lines and pr.lines[0]:
 				try:
-					t = pdfLayout.gridTables(pr.lines[0], pr.lines[1])
+					pageLines[pn] = pdfLayout._merge(pr.lines[0])
+					t = pdfLayout.gridTables(pr.lines[0], pr.lines[1]) if pr.lines[1] else None
 					if t:
 						pageTables[pn] = t
 				except Exception:
@@ -947,7 +968,7 @@ class DocIndex:
 		if withLayout:
 			try:
 				boxes = [pdfLayout.wordBox(w) for w in allWords]
-				layout = pdfLayout.analyse(struct, pageTables, boxes, idx._order)
+				layout = pdfLayout.analyse(struct, pageTables, boxes, idx._order, pageLines, pageImages)
 				wpage = [0] * len(idx.words)
 				for wi, i in enumerate(idx._order):
 					if i is not None:
@@ -1254,6 +1275,115 @@ class DocIndex:
 			cache.clear()
 		cache[text] = (res, self._hint)
 		return res
+
+	def locate(self, text, before=None, after=None, part=None, where=None):
+		"""The index words of one line the viewer shows, at that line's own place in the document:
+		the line found exactly (as shown, or as the real text); where it occurs more than once,
+		the place whose neighbouring text is the viewer's line before / after it (callables, only
+		asked for then), else the place nearest after the last line read. None if not found."""
+		key = matchKey(text)
+		if not key:
+			return None
+		# (the place of a line once found is kept: moving along it by character or word asks again)
+		cache = self.__dict__.setdefault("_locCache", {})
+		ck = (text, where) if where is not None else None
+		hit = cache.get(ck) if ck is not None else None
+		if hit is not None:
+			return self._locIds(hit[0], hit[1], key, text, part)
+		space = None
+		occ = []
+		for sp, sts in ((self.B, self.starts), (getattr(self, "F", ""), getattr(self, "fStarts", None))):
+			if not sp or not sts:
+				continue
+			# a line of the viewer begins and ends with whole words: a match inside a word (the ०
+			# of २०८३) is not the line
+			whole = []
+			p = sp.find(key)
+			tries = 0
+			while p >= 0 and tries < 20000:
+				tries += 1
+				i = bisect.bisect_right(sts, p) - 1
+				e = p + len(key)
+				j = bisect.bisect_left(sts, e)
+				if i >= 0 and sts[i] == p and (e >= len(sp) or (j < len(sts) and sts[j] == e)):
+					whole.append(p)
+				p = sp.find(key, p + 1)
+			if whole:
+				occ = whole
+				space = sp
+				break
+		if not occ:
+			return None
+		inB = space is self.B
+		starts = self.starts if inB else self.fStarts
+		bpos = lambda p: p if inB else self.starts[bisect.bisect_right(self.fStarts, p) - 1]
+		if len(occ) > 300:
+			# (a very common line - a lone digit: the places nearest the last line read)
+			h = self._hint if inB else (self.fStarts[bisect.bisect_right(self.starts, self._hint) - 1] if self.starts else 0)
+			occ = sorted(sorted(occ, key=lambda p: abs(p - h))[:300])
+		if len(occ) > 1:
+			bk = matchKey(before() if callable(before) else (before or ""))[-24:]
+			ak = matchKey(after() if callable(after) else (after or ""))[:24]
+
+			F = getattr(self, "F", "")
+
+			def near(text, piece, tail):
+				# 2: the whole neighbouring line is there; 1: its end (start) is
+				if piece in text:
+					return 2
+				return 1 if len(piece) >= 6 and (piece[-6:] if tail else piece[:6]) in text else 0
+
+			def score(p):
+				# the viewer's neighbouring lines, as shown (B) or as the real text (F)
+				s = 0
+				i0 = bisect.bisect_right(starts, p) - 1
+				i1 = bisect.bisect_right(starts, p + len(key) - 1)
+				if bk:
+					b0 = self.starts[i0]
+					f0 = self.fStarts[i0] if F else 0
+					s += max(near(self.B[max(0, b0 - len(bk) - 6):b0], bk, True),
+						near(F[max(0, f0 - len(bk) - 6):f0], bk, True) if F else 0)
+				if ak:
+					b1 = self.starts[i1] if i1 < len(self.starts) else len(self.B)
+					f1 = (self.fStarts[i1] if i1 < len(self.fStarts) else len(F)) if F else 0
+					s += max(near(self.B[b1:b1 + len(ak) + 6], ak, False),
+						near(F[f1:f1 + len(ak) + 6], ak, False) if F else 0)
+				return s
+
+			scores = [score(p) for p in occ]
+			best = max(scores)
+			occ = [p for p, sc in zip(occ, scores) if sc == best]
+			if len(occ) > 1:
+				h = self._hint
+				after_h = [p for p in occ if bpos(p) >= h]
+				occ = [after_h[0]] if after_h else [occ[-1]]
+		p = occ[0]
+		if ck is not None:
+			if len(cache) > 4000:
+				cache.clear()
+			cache[ck] = (p, inB)
+		return self._locIds(p, inB, key, text, part)
+
+	def _locIds(self, p, inB, key, text, part):
+		starts = self.starts if inB else self.fStarts
+		end = p + len(key)
+		if part is not None:
+			# only the words of a piece of the line (a word, a character): its place in the line's
+			# letters (a space between words belongs to the word after it)
+			off, length = part
+			k0 = len(matchKey(text[:off]))
+			k1 = k0 + max(1, len(matchKey(text[off:off + length])))
+			k0 = min(k0, len(key) - 1)
+			p, end = p + k0, p + min(max(k1, k0 + 1), len(key))
+		i = bisect.bisect_right(starts, p) - 1
+		ids = []
+		n = len(self.words)
+		while 0 <= i < n and starts[i] < end:
+			ids.append(i)
+			i += 1
+		if ids and part is None:
+			self._hint = self.starts[ids[0]]
+		return ids or None
 
 	def _dropRepeats(self, text):
 		"""Viewers repeat text that a PDF draws twice for a bold look (PDFium does): 'नाम नाम'.

@@ -37,7 +37,12 @@ class Info:
         p=state['pixels']
         return [Rect(0,0,p[1],p[2])] if p else []
     def getTextWithFields(self,fc): return [FieldCommand('formatChange',{'font-name':state['font']})] if state['font'] else []
-mod('textInfos', FieldCommand=FieldCommand, FormatField=FormatField, UNIT_CHARACTER='character', UNIT_LINE='line', UNIT_WORD='word', UNIT_PARAGRAPH='paragraph', POSITION_SELECTION='sel')
+class ControlField(dict): pass
+import enum
+class TextAlign(str, enum.Enum):
+    LEFT='left'; CENTER='center'; RIGHT='right'; JUSTIFY='justify'
+mod('controlTypes', TextAlign=TextAlign, Role=types.SimpleNamespace(TABLE='table', TABLECELL='cell', TABLECOLUMNHEADER='columnheader', TABLEROWHEADER='rowheader', HEADING='heading'))
+mod('textInfos', FieldCommand=FieldCommand, FormatField=FormatField, ControlField=ControlField, UNIT_CHARACTER='character', UNIT_LINE='line', UNIT_WORD='word', UNIT_PARAGRAPH='paragraph', POSITION_SELECTION='sel')
 mod('api', getForegroundObject=lambda: types.SimpleNamespace(windowHandle=state['fg'], name=state['title']), getFocusObject=lambda: types.SimpleNamespace(windowClassName='X', appModule=types.SimpleNamespace(appName=state['app'])), getCaretPosition=lambda: Info(), getReviewPosition=lambda: Info(), getClipData=lambda: '', copyToClip=lambda t: None)
 mod('globalPluginHandler', GlobalPlugin=type('GP',(),{'__init__':lambda s,*a,**k:None,'terminate':lambda s:None}))
 mod('gui', guiHelper=None); mod('gui.guiHelper')

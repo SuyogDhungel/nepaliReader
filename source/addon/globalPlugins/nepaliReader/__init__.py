@@ -403,6 +403,338 @@ def _ownCopyRich(plain, html, notify=False):
 		return _ownCopy(plain, notify)
 
 
+class _StoryMap:
+	"""A viewer document's whole text with what the index leaves out (spaces) taken out, and the
+	offset of each of its letters: a place in the index is found in the viewer's text by it."""
+
+	def __init__(self, info):
+		import array
+		self.length = info._getStoryLength()
+		text = info._getTextRange(0, self.length)
+		try:
+			import textUtils
+			conv = textUtils.getOffsetConverter(info.encoding)(text)
+			self._toEnc = conv.strToEncodedOffsets
+			self._toStr = conv.encodedToStrOffsets
+		except Exception:
+			self._toEnc = self._toStr = None
+		parts = []
+		offs = array.array("i")
+		for m in pdfText._KEEP.finditer(text):
+			parts.append(m.group())
+			offs.extend(range(m.start(), m.end()))
+		self.norm = "".join(parts).translate(pdfText._NORM)
+		self.offs = offs
+
+	def enc(self, k):
+		"""The TextInfo offset of letter k of norm."""
+		k = min(max(k, 0), len(self.offs) - 1)
+		o = self.offs[k]
+		return self._toEnc(o) if self._toEnc else o
+
+	def at(self, offset):
+		"""The letter of norm at (or after) a TextInfo offset."""
+		o = offset
+		if self._toStr:
+			try:
+				o = self._toStr(offset)
+			except Exception:
+				pass
+		return bisect.bisect_left(self.offs, o)
+
+	def find(self, needle, near=None, after=None):
+		"""Letter of norm where needle is: the place nearest to `near`, or the first at or
+		after `after`; -1 if not there."""
+		if not needle:
+			return -1
+		if after is not None:
+			return self.norm.find(needle, after)
+		best = -1
+		p = self.norm.find(needle)
+		count = 0
+		while p >= 0 and count < 400:
+			if best < 0 or (near is not None and abs(p - near) < abs(best - near)):
+				best = p
+			if near is None:
+				break
+			p = self.norm.find(needle, p + 1)
+			count += 1
+		return best
+
+
+def _neighbourLine(info, forward):
+	"""The text of the line before (or after) a TextInfo's text, or ""."""
+	try:
+		raw = _unwrap(info)
+		other = raw.copy()
+		other.collapse(end=forward)
+		if not forward:
+			if other.move(textInfos.UNIT_LINE, -1) == 0:
+				return ""
+		other.expand(textInfos.UNIT_LINE)
+		return other.text or ""
+	except Exception:
+		return ""
+
+
+def _cm(pt):
+	return ("%.2f" % (pt / 72.0 * 2.54)).rstrip("0").rstrip(".") + " cm"
+
+
+def _applyStyles(fields, changes):
+	"""fields with what the page shows of the text's format added where the viewer does not
+	report it: bold / italic made by drawing (Word outlines the letters of a font that has no
+	bold), underline, the paragraph's alignment and indentation. changes: [(offset in the text,
+	(style bits, (align, left indent, first line indent) or None))]. What the viewer reports is
+	never taken away."""
+	try:
+		import controlTypes
+		TextAlign = getattr(controlTypes, "TextAlign", None)
+	except Exception:
+		TextAlign = None
+
+	def bitsAt(off):
+		bits = (0, None)
+		for o, b in changes:
+			if o <= off:
+				bits = b
+			else:
+				break
+		return bits
+
+	def merged(fmt, key):
+		bits, para = key if isinstance(key, tuple) else (key, None)
+		f = textInfos.FormatField()
+		if fmt:
+			f.update(fmt)
+		if bits & 1:
+			f["bold"] = True
+		if bits & 2:
+			f["italic"] = True
+		if bits & 4:
+			f["underline"] = True
+		if para:
+			align, indent, first = para
+			if align and TextAlign is not None and not f.get("text-align"):
+				try:
+					f["text-align"] = TextAlign(align)
+				except ValueError:
+					pass
+			if indent and not f.get("left-indent"):
+				f["left-indent"] = _cm(indent)
+			if first > 0 and not f.get("first-line-indent"):
+				f["first-line-indent"] = _cm(first)
+			elif first < 0 and not f.get("hanging-indent"):
+				f["hanging-indent"] = _cm(-first)
+		return f
+
+	out = []
+	pos = 0
+	cur = None        # the viewer's format at this point
+	shown = None      # style bits of the last format given to NVDA
+	pending = None    # index in out of a format not yet followed by text
+	for f in fields:
+		if isinstance(f, textInfos.FieldCommand) and f.command == "formatChange":
+			cur = f.field
+			out.append(f)
+			pending = len(out) - 1
+			shown = None
+			continue
+		if not isinstance(f, str) or not f:
+			out.append(f)
+			continue
+		cuts = [o - pos for o, _b in changes if pos < o < pos + len(f)]
+		pieces = []
+		start = 0
+		for cut in cuts + [len(f)]:
+			if cut > start:
+				pieces.append((start, f[start:cut]))
+			start = cut
+		for start, piece in pieces:
+			bits = bitsAt(pos + start)
+			if bits != shown:
+				if pending is not None:
+					out[pending] = textInfos.FieldCommand("formatChange", merged(cur, bits))
+				elif bits != (0, None) or shown:
+					out.append(textInfos.FieldCommand("formatChange", merged(cur, bits)))
+				shown = bits
+			pending = None
+			out.append(piece)
+		pos += len(f)
+	return out
+
+
+def _lineSpans(info):
+	"""(whole line, its text, where the range starts in it, how much of it is in the range) for
+	each line a TextInfo's range touches, or None when the TextInfo cannot tell."""
+	try:
+		raw = _unwrap(info)
+		end = raw.copy()
+		end.collapse(end=True)
+		cur = raw.copy()
+		cur.collapse()
+		out = []
+		for _k in range(400):
+			line = cur.copy()
+			line.expand(textInfos.UNIT_LINE)
+			pre = line.copy()
+			pre.setEndPoint(cur, "endToStart")
+			piece = line.copy()
+			piece.setEndPoint(cur, "startToStart")
+			if piece.compareEndPoints(end, "endToEnd") > 0:
+				piece.setEndPoint(end, "endToEnd")
+			text = line.text or ""
+			pt = piece.text or ""
+			if pdfText.keyOf(pt):
+				out.append((line, text, len(pre.text or ""), len(pt)))
+			if line.compareEndPoints(end, "endToEnd") >= 0:
+				break
+			nxt = line.copy()
+			nxt.collapse(end=True)
+			if nxt.compareEndPoints(cur, "startToStart") <= 0:
+				break
+			cur = nxt
+		return out
+	except Exception:
+		return None
+
+
+def _structureRoles():
+	"""NVDA's roles for the table and heading fields the add-on gives NVDA in a PDF."""
+	try:
+		import controlTypes
+		R = getattr(controlTypes, "Role", None)
+		if R is not None:
+			return {"table": R.TABLE, "cell": R.TABLECELL, "columnheader": R.TABLECOLUMNHEADER,
+				"rowheader": R.TABLEROWHEADER, "heading": R.HEADING}
+		return {"table": controlTypes.ROLE_TABLE, "cell": controlTypes.ROLE_TABLECELL,
+			"columnheader": controlTypes.ROLE_TABLECOLUMNHEADER, "rowheader": controlTypes.ROLE_TABLEROWHEADER,
+			"heading": controlTypes.ROLE_HEADING}
+	except Exception:
+		return None
+
+
+def _controlStart(attrs, roles):
+	field = textInfos.ControlField()
+	for k, v in attrs.items():
+		field[k] = roles[v] if k == "role" else v
+	return textInfos.FieldCommand("controlStart", field)
+
+
+def _insertStructure(fields, groups, offs, idx, roles):
+	"""fields with the table cell / heading fields of each group of words put around its text:
+	at the start of the line (so NVDA counts them in the line's fields) or where the group's
+	first word is. None when a place would not nest with the viewer's own fields."""
+	def opens(ctx, prev):
+		if ctx is None:
+			return []
+		if ctx[0] == "cell":
+			table, cell = pdfLayout.cellAttrs(idx, ctx[1], ctx[2])
+			if prev is not None and prev[0] == "cell" and prev[1] == ctx[1]:
+				return [cell]
+			return [table, cell]
+		return [{"role": "heading", "level": ctx[1]}]
+
+	def closes(ctx, nxt):
+		if ctx is None:
+			return 0
+		if ctx[0] == "cell":
+			return 1 if (nxt is not None and nxt[0] == "cell" and nxt[1] == ctx[1]) else 2
+		return 1
+
+	isCmd = lambda f: isinstance(f, textInfos.FieldCommand)
+	n = len(fields)
+	i0 = 0
+	while i0 < n and isCmd(fields[i0]) and fields[i0].command in ("controlStart", "formatChange"):
+		i0 += 1
+	i1 = n
+	while i1 > i0 and isCmd(fields[i1 - 1]) and fields[i1 - 1].command == "controlEnd":
+		i1 -= 1
+	# (the line's last ends close the viewer's fields opened in the line first, then the line's own)
+	opened = 0
+	for f in fields[i0:i1]:
+		if isCmd(f):
+			opened += 1 if f.command == "controlStart" else (-1 if f.command == "controlEnd" else 0)
+	if opened > 0:
+		i1 = min(n, i1 + opened)
+	head = list(fields[:i0])
+	body = fields[i0:i1]
+	tail = list(fields[i1:])
+	text = "".join(f for f in body if isinstance(f, str))
+	# a line wholly in one table: the table field goes outside the viewer's innermost field (its
+	# paragraph, different from line to line), so NVDA sees the same table on every line of it and
+	# says "table with N rows" once, not at every row
+	outer = None
+	if groups and groups[0][0] is not None and groups[0][0][0] == "cell" and not text[:offs[0]].strip() \
+			and all(g[0] is not None and g[0][0] == "cell" and g[0][1] == groups[0][0][1] for g in groups):
+		outer = groups[0][0][1]
+	events = []  # (offset, controlEnds, opens)
+	prev = None
+	for k, (ctx, _ids) in enumerate(groups):
+		ends = closes(prev, ctx) if k else 0
+		starts = opens(ctx, prev)
+		if k == 0 and not text[:offs[0]].strip():
+			if outer is not None:
+				inner = max((i for i, f in enumerate(head) if isCmd(f) and f.command == "controlStart"), default=len(head))
+				head.insert(inner, _controlStart(starts[0], roles))
+				head.extend(_controlStart(a, roles) for a in starts[1:])
+			else:
+				head.extend(_controlStart(a, roles) for a in starts)
+		elif ends or starts:
+			events.append((offs[k], ends, starts))
+		prev = ctx
+	out = []
+	pos = 0
+	depth = 0
+	ev = 0
+
+	def emit(e):
+		for _x in range(e[1]):
+			out.append(textInfos.FieldCommand("controlEnd", None))
+		out.extend(_controlStart(a, roles) for a in e[2])
+
+	for f in body:
+		if isinstance(f, str):
+			rest = f
+			while ev < len(events) and events[ev][0] < pos + len(rest):
+				if depth != 0:
+					return None
+				cut = max(0, events[ev][0] - pos)
+				if cut:
+					out.append(rest[:cut])
+				rest = rest[cut:]
+				pos += cut
+				emit(events[ev])
+				ev += 1
+			if rest:
+				out.append(rest)
+			pos += len(rest)
+			continue
+		if isCmd(f):
+			# a group that starts exactly where a field of the viewer starts: its fields go first
+			while depth == 0 and f.command in ("controlStart", "formatChange") and ev < len(events) and events[ev][0] <= pos:
+				emit(events[ev])
+				ev += 1
+			if f.command == "controlStart":
+				depth += 1
+			elif f.command == "controlEnd":
+				depth -= 1
+				if depth < 0:
+					return None  # the viewer closes one of the line's own fields here
+		out.append(f)
+	if ev < len(events):
+		return None
+	if depth != 0:
+		return None
+	if outer is not None:
+		# the cell closes inside the viewer's field, the table after it
+		out.append(textInfos.FieldCommand("controlEnd", None))
+		return head + out + tail + [textInfos.FieldCommand("controlEnd", None)]
+	for _x in range(closes(prev, None)):
+		out.append(textInfos.FieldCommand("controlEnd", None))
+	return head + out + tail
+
+
 def _fieldBounds(ti, offset):
 	"""(start, end) of the browse-mode buffer field holding offset (a table cell's text, a link),
 	the same range NVDA limits its own words to; None outside a virtual buffer."""
@@ -541,6 +873,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			self._patchWordUnits()
 		except Exception:
 			log.debugWarning("Nepali Reader: could not hook word units", exc_info=True)
+		try:
+			self._patchTableNavigation()
+		except Exception:
+			log.debugWarning("Nepali Reader: could not hook table navigation", exc_info=True)
 		NVDASettingsDialog.categoryClasses.append(NepaliReaderSettingsPanel)
 		self._menu = None
 		try:
@@ -1079,6 +1415,299 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			new = make(orig)
 			setattr(owner, "_getWordOffsets", new)
 			self._patched2.append((owner, "_getWordOffsets", orig, new))
+
+	# -- tables and headings of a PDF, in the viewer itself -------------------------------
+
+	def _pdfDocIndex(self, ti):
+		"""The index (with its tables and headings) of the PDF a browse mode document shows."""
+		try:
+			obj = getattr(ti, "rootNVDAObject", None)
+			if obj is None or not isOn() or not self._isPdfWindow(obj):
+				return None
+			idx = self._readyIndex(obj)
+			if idx is None or not idx.layout:
+				return None
+			return idx
+		except Exception:
+			return None
+
+	def _storyMap(self, ti):
+		info = ti.makeTextInfo(textInfos.POSITION_FIRST)
+		length = info._getStoryLength()
+		cache = getattr(self, "_story", None)
+		if cache is None or cache[0]() is not ti or cache[1].length != length:
+			import weakref
+			try:
+				ref = weakref.ref(ti)  # (a closed document is not kept alive by the add-on)
+			except TypeError:
+				ref = lambda ti=ti: ti
+			cache = (ref, _StoryMap(info))
+			self._story = cache
+			self._navPlaces = {}
+		return cache[1]
+
+	def _pdfCellAt(self, ti, info):
+		"""(index, table number, cell number) of the cell at a position, or None."""
+		idx = self._pdfDocIndex(ti)
+		if idx is None or not idx.layout.get("tables"):
+			return None
+		try:
+			one = info.copy()
+			one.collapse()
+			one.expand(textInfos.UNIT_CHARACTER)
+			ids = self._pieceWords(one, idx)
+		except Exception:
+			return None
+		cells = pdfLayout._layoutCache(idx)[1]
+		for i in ids or ():
+			if i in cells:
+				return (idx, cells[i][0], cells[i][1])
+		return None
+
+	def _pdfCellInfo(self, ti, idx, tableNo, cellNo, startPos=None, at=None):
+		"""The text of a cell in the viewer's document (from its first word to its last), found
+		nearest to startPos, or at a known letter `at` of the story map."""
+		import textInfos.offsets
+		c = idx.layout["tables"][tableNo]["cells"][cellNo]
+		if not c[5]:
+			raise LookupError
+		ids = sorted(c[5])
+		sm = self._storyMap(ti)
+		near = None
+		if startPos is not None and hasattr(startPos, "_startOffset"):
+			near = sm.at(startPos._startOffset)
+		p = -1 if at is None else at
+		for nd in (pdfLayout.needles(idx, ids[0]) if p < 0 else ()):
+			p = sm.find(nd, near=near)
+			if p >= 0:
+				break
+		if p < 0:
+			raise LookupError
+		whole = "".join(idx.words[i][3] for i in ids).translate(pdfText._NORM)
+		real = "".join(pdfText.keyOf(idx.words[i][0] or idx.words[i][3]) for i in ids).translate(pdfText._NORM)
+		end = -1
+		for full in (whole, real):
+			if full and sm.norm.startswith(full, p):
+				end = p + len(full)
+				break
+		if end < 0:
+			for nd in (idx.words[ids[-1]][3].translate(pdfText._NORM), pdfText.matchKey(idx.words[ids[-1]][0] or "")):
+				q = sm.find(nd, after=p) if nd else -1
+				if 0 <= q < p + 4000:
+					end = q + len(nd)
+					break
+		if end < 0:
+			end = p + 1
+		return ti.makeTextInfo(textInfos.offsets.Offsets(sm.enc(p), sm.enc(end - 1) + 1))
+
+	def _pdfQuickNav(self, ti, gen, itemType, direction, pos):
+		"""NVDA's quick navigation to tables and headings (T, H, 1 to 6), and its elements list:
+		the viewer's own first; when it has none, the PDF's tables and the headings its tags name."""
+		got = False
+		for item in gen:
+			got = True
+			yield item
+		if got or direction not in ("next", "previous"):
+			return
+		idx = self._pdfDocIndex(ti)
+		if idx is None:
+			return
+		try:
+			import browseMode
+			import textInfos.offsets
+			kind = "table" if itemType == "table" else "heading"
+			level = int(itemType[7:]) if kind == "heading" and itemType[7:].isdigit() else None
+			found = pdfLayout.targets(idx, kind, level)
+			if not found:
+				return
+			sm = self._storyMap(ti)
+			cache = self.__dict__.setdefault("_navPlaces", {})
+			ckey = (id(idx.layout), kind, level)
+			places = cache.get(ckey)
+			if places is None:
+				# where each one is in the viewer's text, in document order (found once)
+				places = []
+				after = 0
+				for w, extra in found:
+					p = -1
+					for nd in pdfLayout.needles(idx, w):
+						p = sm.find(nd, after=after)
+						if p >= 0:
+							break
+					if p >= 0:
+						places.append((p, w, extra))
+						after = p + 1
+				cache[ckey] = places
+			plugin = self
+
+			class _Item(browseMode.TextInfoQuickNavItem):
+				@property
+				def label(item):
+					# (NVDA's elements list: the real text, not the viewer's)
+					try:
+						got = plugin._centralText(item.textInfo)
+						if got and got.strip():
+							return got.strip()
+					except Exception:
+						pass
+					return super().label
+			if pos is not None and hasattr(pos, "_startOffset"):
+				cur = sm.at(pos._startOffset)
+			else:
+				cur = -1 if direction == "next" else len(sm.norm) + 1
+			seq = [x for x in places if x[0] > cur] if direction == "next" else [x for x in reversed(places) if x[0] < cur]
+			for p, w, extra in seq:
+				if kind == "table":
+					info = self._pdfCellInfo(ti, idx, extra[0], extra[1], at=p)
+				else:
+					info = ti.makeTextInfo(textInfos.offsets.Offsets(sm.enc(p), sm.enc(p)))
+					info.expand(textInfos.UNIT_LINE)
+				yield _Item(itemType, ti, info)
+		except Exception:
+			diag.exception("pdf quick navigation")
+
+	def _patchTableNavigation(self):
+		"""NVDA's table keys (Ctrl+Alt+arrows) and quick navigation (T, H) in a PDF in Chrome or
+		Edge, for the tables and headings the add-on knows: NVDA's own commands, given the cells
+		NVDA cannot see in the viewer. Any table the viewer itself has is NVDA's as before."""
+		import virtualBuffers
+		import documentBase
+		VB = virtualBuffers.VirtualBuffer
+		plugin = self
+		TableCell = getattr(documentBase, "_TableCell", None)
+		BASE = pdfLayout.TABLE_ID_BASE
+
+		def ours(tid):
+			return isinstance(tid, int) and BASE <= tid < BASE + 100000
+
+		def mkCell(attrs):
+			v = (attrs["table-id"], attrs["table-rownumber"], attrs["table-columnnumber"], attrs["table-rowsspanned"], attrs["table-columnsspanned"])
+			return TableCell(*v) if TableCell is not None else v
+
+		classes = [VB]
+		try:
+			from virtualBuffers import gecko_ia2  # Chrome, Edge, Brave, Firefox
+			classes.append(gecko_ia2.Gecko_ia2)
+		except Exception:
+			pass
+
+		def patch(name, make):
+			# on every class that has its own (Chrome's buffer has its own cell search)
+			for cls in classes:
+				orig = cls.__dict__.get(name) if cls is not VB else getattr(cls, name, None)
+				if orig is None:
+					continue
+				new = make(orig)
+				setattr(cls, name, new)
+				self._patched2.append((cls, name, orig, new))
+
+		def coords(orig):
+			def _getTableCellCoords(self, info, *a, **k):
+				try:
+					return orig(self, info, *a, **k)
+				except LookupError:
+					try:
+						got = plugin._pdfCellAt(self, info)
+						cell = mkCell(pdfLayout.cellAttrs(*got)[1]) if got is not None else None
+					except Exception:
+						diag.exception("pdf table cell coords")
+						cell = None
+					if cell is None:
+						raise
+					return cell
+			return _getTableCellCoords
+
+		def dims(orig):
+			def _getTableDimensions(self, info, *a, **k):
+				try:
+					return orig(self, info, *a, **k)
+				except LookupError:
+					try:
+						got = plugin._pdfCellAt(self, info)
+					except Exception:
+						got = None
+					if got is None:
+						raise
+					t = got[0].layout["tables"][got[1]]
+					return (t["nr"], t["nc"])
+			return _getTableDimensions
+
+		def cellAt(orig):
+			def _getTableCellAt(self, tableID, startPos, row, column):
+				if not ours(tableID):
+					return orig(self, tableID, startPos, row, column)
+				idx = plugin._pdfDocIndex(self)
+				tn = tableID - BASE
+				if idx is None or tn >= len(idx.layout.get("tables") or ()):
+					raise LookupError
+				ci = pdfLayout.cellCovering(idx, tn, row, column)
+				if ci is None:
+					raise LookupError
+				try:
+					return plugin._pdfCellInfo(self, idx, tn, ci, startPos)
+				except LookupError:
+					raise
+				except Exception:
+					diag.exception("pdf table cell")
+					raise LookupError
+			return _getTableCellAt
+
+		def cellFields(cell):
+			# NVDA's _TableCell (a dataclass; a tuple in old versions)
+			if hasattr(cell, "tableID"):
+				return cell.tableID, cell.row, cell.col, cell.rowSpan, cell.colSpan
+			return tuple(cell[:5])
+
+		def nearest(orig):
+			def _getNearestTableCell(self, *args, **kw):
+				try:
+					if len(args) == 4 and not kw:
+						startPos, cell, movement, axis = args
+						tableID, row, col, rowSpan, colSpan = cellFields(cell)
+					elif len(args) >= 8:
+						tableID, startPos, row, col, rowSpan, colSpan, movement, axis = args[:8]
+					else:
+						tableID = None
+				except Exception:
+					tableID = None
+				if not ours(tableID):
+					return orig(self, *args, **kw)
+				idx = plugin._pdfDocIndex(self)
+				tn = tableID - BASE
+				if idx is None or tn >= len(idx.layout.get("tables") or ()):
+					raise LookupError
+				t = idx.layout["tables"][tn]
+				destRow, destCol = row, col
+				if axis == "row":
+					destRow += rowSpan if movement == "next" else -1
+				else:
+					destCol += colSpan if movement == "next" else -1
+				# (cells with no text cannot be moved to: they are passed over, up to the table's edge)
+				while 1 <= destRow <= t["nr"] and 1 <= destCol <= t["nc"]:
+					try:
+						return self._getTableCellAt(tableID, startPos, destRow, destCol)
+					except LookupError:
+						pass
+					if axis == "row":
+						destRow += 1 if movement == "next" else -1
+					else:
+						destCol += 1 if movement == "next" else -1
+				raise LookupError
+			return _getNearestTableCell
+
+		def nodes(orig):
+			def _iterNodesByType(self, itemType, direction="next", pos=None):
+				gen = orig(self, itemType, direction, pos)
+				if itemType != "table" and not str(itemType).startswith("heading"):
+					return gen
+				return plugin._pdfQuickNav(self, gen, itemType, direction, pos)
+			return _iterNodesByType
+
+		patch("_getTableCellCoords", coords)
+		patch("_getTableDimensions", dims)
+		patch("_getTableCellAt", cellAt)
+		patch("_getNearestTableCell", nearest)
+		patch("_iterNodesByType", nodes)
 
 	def _realWordOffsets(self, ti, offset, res):
 		"""(start, end) of the whole real word at `offset`, or None to keep the viewer's word."""
@@ -2138,6 +2767,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			return True
 
 	def _convertFieldsInner(self, info, formatConfig, c, unit=None):
+		return self._withLayout(info, self._convertFieldsCore(info, formatConfig, c, unit=unit), unit)
+
+	def _convertFieldsCore(self, info, formatConfig, c, unit=None):
 		try:
 			rawText = info.text or ""
 			if rawText:
@@ -2176,10 +2808,131 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			fc["reportFontName"] = True
 		fields = info.getTextWithFields(fc)
 		try:
-			return self._convertFieldList(info, fields, c, unit=unit)
+			fields = self._convertFieldList(info, fields, c, unit=unit)
 		except Exception:
 			log.error("Nepali Reader: conversion failed", exc_info=True)
 			diag.exception("conversion failed")
+			return fields
+		return fields
+
+	def _lineWords(self, info, idx, raw):
+		"""The index words of the text of a TextInfo, each line at its own place in the document
+		(a line that occurs several times - "० ० १ घाइतेलाई उपचारको लागि" in three rows - is placed
+		by the lines around it). A line not found exactly is looked up as reading looks it up."""
+		spans = _lineSpans(info)
+		if spans is not None:
+			# each line (or the part of it in the range: a table cell that starts mid-line) placed
+			# through the whole line and the lines around it
+			ids = []
+			for line, text, off, length in spans:
+				whole = off == 0 and length >= len(text.rstrip("\r\n"))
+				got = idx.locate(text, lambda line=line: _neighbourLine(line, False), lambda line=line: _neighbourLine(line, True),
+					part=None if whole else (off, max(1, length)), where=getattr(line, "_startOffset", None))
+				if got is None:
+					idx.touched = []
+					try:
+						self._indexText(None, idx, text[off:off + length] if not whole else text)
+					finally:
+						got = idx.touched
+						idx.touched = None
+				ids.extend(got or ())
+			return ids
+		lines = [ln for ln in raw.splitlines() if pdfText.keyOf(ln)]
+		ids = []
+		for k, ln in enumerate(lines):
+			before = (lambda k=k: lines[k - 1]) if k > 0 else (lambda: _neighbourLine(info, False))
+			after = (lambda k=k: lines[k + 1]) if k + 1 < len(lines) else (lambda: _neighbourLine(info, True))
+			got = idx.locate(ln, before, after)
+			if got is None:
+				idx.touched = []
+				try:
+					self._indexText(None, idx, ln)
+				finally:
+					got = idx.touched
+					idx.touched = None
+			ids.extend(got or ())
+		return ids
+
+	def _pieceWords(self, info, idx):
+		"""The index words of a word or character the user moved to, placed through its line (the
+		same place line reading gives it)."""
+		try:
+			rawInfo = _unwrap(info)
+			line = rawInfo.copy()
+			line.expand(textInfos.UNIT_LINE)
+			pre = line.copy()
+			pre.setEndPoint(rawInfo, "endToStart")
+			text = line.text or ""
+			off = len(pre.text or "")
+			length = max(1, len(rawInfo.text or ""))
+		except Exception:
+			return None
+		if not pdfText.keyOf(text):
+			return None
+		got = idx.locate(text, lambda: _neighbourLine(line, False), lambda: _neighbourLine(line, True), part=(off, length),
+			where=getattr(line, "_startOffset", None))
+		if got is None:
+			# a line not found exactly: its words only if they are all in one cell
+			lineIds = self._lineWords(line, idx, text)
+			groups = pdfLayout.lineGroups(idx, lineIds or [])
+			if len(groups) == 1:
+				return groups[0][1][:1]
+		return got
+
+	def _withLayout(self, info, fields, unit=None):
+		"""A PDF's tables and headings where they are on the page. Chrome and Edge give NVDA a PDF's
+		text as plain lines: the cells of a table and the headings the PDF itself defines are given
+		to NVDA here as its own table cell and heading fields, around exactly the words they hold,
+		so NVDA reports them as it does on any web page (row, column, header cells, heading level,
+		per its document formatting settings, only when they change). Nothing is added when the
+		viewer reports them itself, or when the line's words cannot be placed exactly."""
+		try:
+			obj = info.obj
+			if not self._isPdfWindow(obj):
+				return fields
+			idx = self._readyIndex(obj)
+			layout = getattr(idx, "layout", None) if idx is not None else None
+			if not layout or not (layout.get("tables") or layout.get("heads") or layout.get("styles")):
+				return fields
+			roles = _structureRoles()
+			if roles is None:
+				return fields
+			raw = _unwrap(info).text or ""
+			if not pdfText.keyOf(raw):
+				return fields
+			if unit in (textInfos.UNIT_CHARACTER, getattr(textInfos, "UNIT_WORD", "word")):
+				ids = self._pieceWords(info, idx)
+			else:
+				ids = self._lineWords(info, idx, raw)
+			if not ids:
+				return fields
+			text = "".join(f for f in fields if isinstance(f, str))
+			piece = unit in (textInfos.UNIT_CHARACTER, getattr(textInfos, "UNIT_WORD", "word"))
+			if piece:
+				# a character or a word: all of it is in the one word it belongs to
+				ids = ids[:1]
+			# bold, italic, underline as the page draws them (the viewer's own formatting stays)
+			changes = pdfLayout.pieceStyle(idx, ids[0]) if piece else pdfLayout.styleChanges(text, idx, ids)
+			if changes:
+				fields = _applyStyles(fields, changes)
+			mine = set(roles.values())
+			for f in fields:
+				if isinstance(f, textInfos.FieldCommand) and f.command == "controlStart" and f.field and f.field.get("role") in mine:
+					return fields  # the viewer reports this structure itself
+			groups = pdfLayout.lineGroups(idx, ids)
+			if not any(ctx for ctx, _ids in groups):
+				return fields
+			offs = [0] if piece and len(groups) == 1 else pdfLayout.groupOffsets(text, idx, groups)
+			if offs is None:
+				diag.write("layout: words not placed in %r" % text[:80])
+				return fields
+			new = _insertStructure(fields, groups, offs, idx, roles)
+			if new is None:
+				diag.write("layout: fields not nested in %r" % text[:80])
+				return fields
+			return new
+		except Exception:
+			diag.exception("layout fields")
 			return fields
 
 	@staticmethod
@@ -2824,46 +3577,6 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			result = detector.convertTokens(detector.forceDecide(result), lambda s: legacyFonts.convert(s, encoding) or s)
 		_ownCopy(result)
 		ui.message(result)
-
-	@script(
-		# Translators: input help for a command
-		description=_(
-			"In a PDF: opens the whole document as a web page with real tables, headings and correct "
-			"Nepali, where NVDA's table and heading keys work"
-		),
-		category=CATEGORY,
-		gesture="kb:NVDA+control+shift+v",
-	)
-	def script_pdfView(self, gesture):
-		obj = api.getFocusObject()
-		if obj is None or not self._isPdfWindow(obj):
-			# Translators: reported when the accessible view is asked for outside a PDF
-			ui.message(_("This command works in a PDF"))
-			return
-		idx = self._pdfIndex(obj)
-		st = self._pdfs.get_(self._foregroundKey())
-		if idx is None or st is None or not st.full:
-			# Translators: reported while the PDF is still being read
-			ui.message(_("The PDF is still being read. Try again in a moment."))
-			return
-		try:
-			title = os.path.basename(st.location or "") if st.location and not st.location.startswith("http") else ""
-			if not title:
-				fg = api.getForegroundObject()
-				title = re.split(r" [-–—] ", (fg.name or "") if fg else "")[0].strip() or "PDF"
-			path = os.path.join(_cacheDir(), "pdfview.html")
-			os.makedirs(_cacheDir(), exist_ok=True)
-			with open(path, "w", encoding="utf-8") as f:
-				f.write(pdfLayout.documentHtml(idx, title))
-			n = len((idx.layout or {}).get("tables") or ())
-			os.startfile(path)
-			# Translators: reported when the accessible view of a PDF opens
-			ui.message(_("Opening the accessible view: {n} tables").format(n=n) if n else _("Opening the accessible view"))
-		except Exception:
-			diag.exception("pdf view")
-			log.debugWarning("Nepali Reader: could not open the accessible view", exc_info=True)
-			# Translators: reported when the accessible view could not be made
-			ui.message(_("Could not open the accessible view"))
 
 	@script(
 		# Translators: input help for a command

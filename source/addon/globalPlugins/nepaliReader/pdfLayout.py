@@ -429,12 +429,14 @@ def _index(vals, v):
 
 
 def wordBox(w):
-	"""(page, x0, y0, x1, y1, mcid) of a grouped word (its glyphs carry page positions)."""
+	"""(page, x0, y0, x1, y1, mcid, style, baseline, size) of a grouped word (its glyphs carry
+	page positions and how they are drawn)."""
 	xs0 = []
 	xs1 = []
 	ys = []
 	size = 0.0
 	mcids = {}
+	styles = {}
 	for g in w.glyphs:
 		if len(g) < 10:
 			continue
@@ -445,15 +447,255 @@ def wordBox(w):
 		size = max(size, g[4] or 0.0)
 		if g[7] is not None:
 			mcids[g[7]] = mcids.get(g[7], 0) + 1
+		st = g[10] if len(g) > 10 else 0
+		styles[st] = styles.get(st, 0) + 1
 	if not xs0:
 		return None
 	pn = w.page[0] if isinstance(w.page, tuple) else w.page
 	mcid = max(mcids, key=mcids.get) if mcids else None
+	style = max(styles, key=styles.get) if styles else 0
 	y = sum(ys) / len(ys)
-	return (pn, min(xs0), y - 0.25 * size, max(xs1), y + 0.75 * size, mcid)
+	return (pn, min(xs0), y - 0.25 * size, max(xs1), y + 0.75 * size, mcid, style, y, size)
 
 
-def analyse(struct, pageTables, boxes, order):
+def _underlined(boxes, order, pageLines):
+	"""Index words with a line drawn right under them, no wider than their line of text (a cell's
+	border runs past its text, and lies lower)."""
+	out = set()
+	byPage = {}
+	for wi, box in enumerate(boxes):
+		if box is not None and order[wi] is not None and box[0] in pageLines:
+			byPage.setdefault(box[0], []).append((order[wi], box))
+	for pn, words in byPage.items():
+		hs = pageLines[pn]
+		if not hs:
+			continue
+		words.sort(key=lambda t: (-t[1][7], t[1][1]))
+		lines = []
+		for i, box in words:
+			if lines and abs(lines[-1][0] - box[7]) <= 0.3 * max(box[8], 1.0):
+				lines[-1][1].append((i, box))
+			else:
+				lines.append([box[7], [(i, box)]])
+		for base, ws in lines:
+			left = min(b[1] for _i, b in ws)
+			right = max(b[3] for _i, b in ws)
+			size = max(b[8] for _i, b in ws) or 1.0
+			for y, a, b in hs:
+				d = base - y
+				if not (0.02 * size <= d <= 0.22 * size):
+					continue
+				if a < left - 2.0 or b > right + 2.0:
+					continue
+				for i, box in ws:
+					if a <= box[1] + 1.0 and b >= box[3] - 1.0:
+						out.add(i)
+	return out
+
+
+def _mode(vals, tol=2.0):
+	"""The value most of vals are at (within tol), or None."""
+	vals = sorted(vals)
+	best = (0, None)
+	j = 0
+	for i, v in enumerate(vals):
+		while vals[j] < v - tol:
+			j += 1
+		k = i - j + 1
+		if k > best[0]:
+			best = (k, vals[(i + j) // 2])
+	return best[1]
+
+
+def _paragraphs(boxes, order, n, blocks, tables, pageTables, pageImages=None):
+	"""Alignment and indentation of each paragraph, from where its lines are on the page:
+	(index word -> paragraph number, [(align, left indent pt, first line indent pt)]).
+	A paragraph is what the PDF's tags call one, else one line; a cell is measured against
+	its borders. Only what the lines prove is given (align None when they do not show it)."""
+	para = [-1] * n
+	paras = []
+	cellRect = {}
+	byIdx = {}
+	for wi, box in enumerate(boxes):
+		i = order[wi]
+		if i is not None and box is not None and len(box) > 8:
+			byIdx[i] = box
+	# the rectangle of each cell of a table drawn with lines
+	for ti, t in enumerate(tables):
+		grid = pageTables.get(t["p"]) or []
+		rects = [(c[0], c[1], c[2], c[3]) for g in grid for c in g["cells"]]
+		for c in t["cells"]:
+			if not c[5] or c[5][0] not in byIdx:
+				continue
+			b = byIdx[c[5][0]]
+			cx = (b[1] + b[3]) / 2.0
+			cy = (b[2] + b[4]) / 2.0
+			for r in rects:
+				if r[0] - 1 <= cx <= r[2] + 1 and r[1] - 1 <= cy <= r[3] + 1:
+					for i in c[5]:
+						cellRect[i] = r
+					break
+	inTable = set()
+	for t in tables:
+		for c in t["cells"]:
+			inTable.update(c[5])
+	# units: the tags' paragraphs, else lines; cells by themselves
+	units = {}
+	for i in sorted(byIdx):
+		b = byIdx[i]
+		if i in inTable:
+			key = ("cell", id(cellRect.get(i)), b[0]) if i in cellRect else None
+			if key is None:
+				continue
+		elif blocks and i < len(blocks) and blocks[i]:
+			key = ("block", blocks[i])
+		else:
+			key = ("line", b[0], round(b[7] / max(b[8] * 0.3, 1.0)))
+		units.setdefault(key, []).append(i)
+	# the text area of each page: where most lines start and where full lines end
+	pageLines = {}
+	pageRows = {}
+	for key, ids in units.items():
+		if key[0] == "cell":
+			continue
+		for line in _unitLines(ids, byIdx):
+			pageLines.setdefault(byIdx[ids[0]][0], []).append(line)
+		if key[0] == "line":
+			b = byIdx[ids[0]]
+			ls = _unitLines(ids, byIdx)
+			if ls:
+				pageRows.setdefault(b[0], []).append((b[7], b[8], ls[0][0], ls[0][1], key))
+	area = {}
+	for pn, lines in pageLines.items():
+		if len(lines) < 4:
+			continue
+		# the left margin: the leftmost place three or more lines start at (indented clauses
+		# start further right, and may be most of the lines)
+		xs = sorted(l[0] for l in lines)
+		left = next((x for x in xs if sum(1 for y in xs if abs(y - x) <= 2.0) >= 3), None)
+		if left is None:
+			continue
+		far = max(l[1] for l in lines)
+		right = _mode([l[1] for l in lines if l[1] - left >= 0.6 * (far - left)])
+		if left is None or right is None or right - left <= 100:
+			continue
+		# a page of pictures, maps or boxes (few lines at the margin) or in two or more columns:
+		# a line's place on the page is not its alignment
+		atEdge = sum(1 for l in lines if abs(l[0] - left) <= 2.0) + sum(1 for l in lines if abs(l[1] - right) <= 2.0)
+		if atEdge < max(8, 0.5 * len(lines)):
+			continue
+		# (columns)
+		starts = [l[0] for l in lines if l[0] > left + 0.3 * (right - left)]
+		second = _mode(starts) if starts else None
+		if second is not None and sum(1 for l in lines if abs(l[0] - second) <= 2.0) >= max(3, 0.15 * len(lines)):
+			continue
+		area[pn] = (left, right)
+	# what else is on each row of each page (a line with other text beside it is not centred or
+	# right aligned on the page, whatever its position)
+	rowsOf = {}
+	for i, b in byIdx.items():
+		rowsOf.setdefault(b[0], []).append((b[7], b[1], b[3], i))
+	unitOf = {}
+	for key, ids in units.items():
+		for i in ids:
+			unitOf[i] = key
+	for key, ids in units.items():
+		pn = byIdx[ids[0]][0]
+		own = set(ids)
+		alone = True
+		if key[0] != "cell":
+			size = max(byIdx[i][8] for i in ids) or 1.0
+			bases = {round(byIdx[i][7], 1) for i in ids}
+			for base, x0, x1, j in rowsOf.get(pn, ()):
+				if j not in own and any(abs(base - b) <= 0.3 * size for b in bases):
+					alone = False
+					break
+		if key[0] != "cell" and any(img[0] - 2 <= byIdx[i][1] and byIdx[i][3] <= img[2] + 2 and img[1] - 2 <= byIdx[i][7] <= img[3] + 2
+				for i in ids for img in (pageImages or {}).get(pn, ())):
+			continue  # text on a picture (a map's labels) is not a paragraph
+		if key[0] == "cell":
+			r = cellRect.get(ids[0])
+			box = (r[0] + 1.5, r[2] - 1.5) if r else None
+		else:
+			box = area.get(pn)
+		if box is None:
+			continue
+		lines = _unitLines(ids, byIdx)
+		info = _alignOf(lines, box[0], box[1], key[0] == "cell", alone)
+		if info is not None and info[0] in ("right", "center") and key[0] == "line" and len(lines) == 1:
+			# a line that starts where the line next to it starts is the end of that paragraph
+			# (not centred or right aligned, wherever it happens to end); a line centred under the
+			# line next to it is part of a centred block (a caption in a column), not right aligned
+			base = byIdx[ids[0]][7]
+			size = byIdx[ids[0]][8] or 1.0
+			mid0 = (lines[0][0] + lines[0][1]) / 2.0
+			for b2, s2, a2, e2, k2 in pageRows.get(pn, ()):
+				if k2 == key or abs(b2 - base) > 1.8 * max(size, s2) or abs(b2 - base) < 0.3 * size:
+					continue
+				if abs(a2 - lines[0][0]) <= 2.0 or (info[0] == "right" and a2 < lines[0][1] and e2 > lines[0][0] and abs((a2 + e2) / 2.0 - mid0) <= 2.0):
+					info = None
+					break
+		if info is None:
+			continue
+		k = len(paras)
+		paras.append(info)
+		for i in ids:
+			para[i] = k
+	return (para if paras else None), (paras or None)
+
+
+def _unitLines(ids, byIdx):
+	"""(x0, x1) of each line of a paragraph's words, top to bottom."""
+	rows = []
+	for i in ids:
+		b = byIdx[i]
+		for row in rows:
+			if abs(row[0] - b[7]) <= 0.3 * max(b[8], 1.0):
+				row[1] = min(row[1], b[1])
+				row[2] = max(row[2], b[3])
+				break
+		else:
+			rows.append([b[7], b[1], b[3]])
+	rows.sort(key=lambda r: -r[0])
+	return [(r[1], r[2]) for r in rows]
+
+
+def _alignOf(lines, left, right, cell, alone=True):
+	"""(align, left indent, first line indent) of a paragraph's lines, in points, or None.
+	Strict: an alignment is given only when the lines prove it (a wrong one is worse than none).
+	left / right: the page's text area, or a cell's borders."""
+	tol = 2.0
+	width = right - left
+	if width <= 0:
+		return None
+	L = min(a for a, b in lines)
+	R = max(b for a, b in lines)
+	mids = [(a + b) / 2.0 for a, b in lines]
+	mid = (left + right) / 2.0
+	big = 6.0 if cell else max(30.0, 0.08 * width)
+	align = None
+	if len(lines) >= 3 and R - L >= 0.6 * width and all(abs(b - R) <= tol for a, b in lines[:-1]) \
+			and all(abs(a - L) <= tol for a, b in lines[1:]) and lines[-1][1] < R - 10.0:
+		align = "justify"
+	elif len(lines) >= 3 and all(abs(a - L) <= tol for a, b in lines[1:]) and abs(lines[0][0] - L) <= tol \
+			and max(b for a, b in lines[:-1]) - min(b for a, b in lines[:-1]) > 15.0 and R - L >= 0.5 * width:
+		align = "left"
+	elif alone and all(abs(m - mid) <= tol for m in mids) and all(a - left >= big and right - b >= big for a, b in lines) \
+			and (len(lines) == 1 or max(b - a for a, b in lines) - min(b - a for a, b in lines) > 10.0):
+		align = "center"
+	elif alone and all(abs(b - right) <= (tol + (6.0 if cell else 0.0)) for a, b in lines) and all(a - left >= 0.4 * width for a, b in lines):
+		align = "right"
+	indent = first = 0.0
+	if not cell and align in ("justify", "left"):
+		indent = L - left if L - left >= 6.0 else 0.0
+		if abs(lines[0][0] - L) >= 6.0:
+			first = lines[0][0] - L
+	if align is None:
+		return None
+	return (align, round(indent, 1), round(first, 1))
+
+
+def analyse(struct, pageTables, boxes, order, pageLines=None, pageImages=None):
 	"""The layout kept in the index.
 	struct: structure() or None; pageTables: {page: gridTables()}; boxes: wordBox() of every
 	grouped word; order: the index position of every grouped word (None if it is not in the index).
@@ -533,7 +775,19 @@ def analyse(struct, pageTables, boxes, order):
 			pn = boxes[order.index(min(allWords))][0] if allWords and min(allWords) in order else 0
 			tables.append({"p": pn, "nr": len(rows), "nc": ncols, "cells": cells})
 	tables.sort(key=lambda t: min((i for c in t["cells"] for i in c[5]), default=0))
-	return {"tables": tables, "blocks": blocks, "heads": heads}
+	# how each word is drawn: bold / italic made by drawing (Word's way for a font with none),
+	# underlined
+	styles = bytearray(n)
+	for wi, box in enumerate(boxes):
+		i = order[wi]
+		if i is not None and box is not None and len(box) > 6:
+			styles[i] = box[6] & 3
+	if pageLines:
+		for i in _underlined(boxes, order, pageLines):
+			styles[i] |= 4
+	para, paras = _paragraphs(boxes, order, n, blocks, tables, pageTables, pageImages or {})
+	return {"tables": tables, "blocks": blocks, "heads": heads, "styles": bytes(styles) if any(styles) else None,
+		"para": para, "paras": paras}
 
 
 def _wholeTable(t, words, used):
@@ -691,39 +945,219 @@ def clipLines(idx, items):
 	return "\r\n".join(plain), "".join(html)
 
 
-def documentHtml(idx, title, lang="ne"):
-	"""The whole document as a web page: headings, paragraphs and real tables, page by page."""
-	layout = getattr(idx, "layout", None) or {}
-	cells = cellIndex(layout)
+TABLE_ID_BASE = 0x4E520000  # (table ids of the add-on's tables, apart from the viewer's own)
+
+
+def _layoutCache(idx):
+	cache = getattr(idx, "_layoutCache", None)
+	if cache is None or cache[0] is not idx.layout:
+		layout = idx.layout or {}
+		cache = (idx.layout, cellIndex(layout), {})
+		idx._layoutCache = cache
+	return cache
+
+
+def lineGroups(idx, ids):
+	"""The structure a run of index words is in, as groups of consecutive words:
+	[(None | ("cell", table, cell) | ("heading", level, block), [ids])]."""
+	layout = idx.layout or {}
+	_l, cells, _a = _layoutCache(idx)
 	heads = layout.get("heads") or {}
-	wpage = layout.get("wpage") or []
-	out = ['<!DOCTYPE html><html lang="%s"><head><meta charset="utf-8"><title>%s</title>' % (lang, _esc(title)),
-		"<style>body{font-family:'Nirmala UI',Mangal,sans-serif;font-size:1.15em;max-width:60em;margin:1em auto;padding:0 1em;line-height:1.6}"
-		"table{border-collapse:collapse;margin:1em 0}th,td{border:1px solid #777;padding:.3em .5em;vertical-align:top}"
-		"th{background:#eef}section{border-top:1px dashed #aaa;margin-top:1.5em}</style></head><body>"]
-	n = len(idx.words)
-	pageStart = 0
-	while pageStart < n:
-		pn = wpage[pageStart] if pageStart < len(wpage) else 0
-		end = pageStart
-		while end < n and (wpage[end] if end < len(wpage) else 0) == pn:
-			end += 1
-		# (a table is shown where its first word is; its words on this page are all in it)
-		out.append('<section aria-label="Page %d">' % (pn + 1))
-		for piece in _lineGroups(idx, range(pageStart, end), cells):
-			if piece[0] == "table":
-				out.append(tableHtml(layout["tables"][piece[1]], idx.words))
+	blocks = layout.get("blocks")
+	out = []
+	last = None
+	for i in ids:
+		if i == last:
+			continue
+		last = i
+		tc = cells.get(i)
+		if tc is not None:
+			ctx = ("cell", tc[0], tc[1])
+		else:
+			b = blocks[i] if blocks and i < len(blocks) else 0
+			level = heads.get(b) if b else None
+			ctx = ("heading", level, b) if level else None
+		if out and out[-1][0] == ctx:
+			out[-1][1].append(i)
+		else:
+			out.append((ctx, [i]))
+	return out
+
+
+def cellAttrs(idx, ti, ci):
+	"""(table attributes, cell attributes) as NVDA's table fields have them; roles as names:
+	"table", "cell", "columnheader", "rowheader"."""
+	_l, _cells, cache = _layoutCache(idx)
+	key = (ti, ci)
+	got = cache.get(key)
+	if got is not None:
+		return got
+	t = idx.layout["tables"][ti]
+	cells = t["cells"]
+	c = cells[ci]
+	r0, c0, rs, cs, th = c[0], c[1], c[2], c[3], c[4]
+	# header rows: every cell with text in the row is a header cell
+	rowsTh = {}
+	for x in cells:
+		if x[5]:
+			rowsTh.setdefault(x[0], []).append(bool(x[4]))
+	headerRows = {r for r, v in rowsTh.items() if v and all(v)}
+	text = lambda x: " ".join(_wordText(idx.words[i]) for i in x[5])
+	colHead = [text(x) for x in cells if x[4] and x[0] in headerRows and x[0] < r0 and x[1] <= c0 < x[1] + x[3] and x[5]]
+	rowHead = [text(x) for x in cells if x[4] and x[0] not in headerRows and x[0] <= r0 < x[0] + x[2] and x[1] < c0 and x[5]]
+	if th:
+		role = "columnheader" if r0 in headerRows else "rowheader"
+	else:
+		role = "cell"
+	tid = TABLE_ID_BASE + ti
+	table = {"role": "table", "table-id": tid, "table-rowcount": t["nr"], "table-columncount": t["nc"]}
+	cell = {"role": role, "table-id": tid, "table-rownumber": r0 + 1, "table-columnnumber": c0 + 1,
+		"table-rowsspanned": rs, "table-columnsspanned": cs}
+	if colHead:
+		cell["table-columnheadertext"] = " ".join(colHead)
+	if rowHead:
+		cell["table-rowheadertext"] = " ".join(rowHead)
+	got = (table, cell)
+	cache[key] = got
+	return got
+
+
+def wordOffsets(text, idx, ids):
+	"""Where each index word starts in the text read for those words (one after the other), or
+	None if one cannot be placed."""
+	out = []
+	pos = 0
+	last = None
+	for i in ids:
+		if i == last:
+			continue
+		last = i
+		w = _wordText(idx.words[i])
+		parts = w.split()
+		found = text.find(w, pos)
+		if found < 0 and parts:
+			found = text.find(parts[0], pos)
+		if found < 0 or (out and found - pos > 40):
+			return None
+		out.append((i, found))
+		pos = found + len(parts[0] if parts and text.startswith(parts[0], found) and not text.startswith(w, found) else w)
+	return out
+
+
+def styleChanges(text, idx, ids):
+	"""[(offset, (style bits, (align, left indent pt, first line indent pt) or None))] where what
+	the page shows of the text's format changes along the text, or None."""
+	layout = idx.layout or {}
+	styles = layout.get("styles") or b""
+	para = layout.get("para") or []
+	paras = layout.get("paras") or []
+	def key(i):
+		k = para[i] if i < len(para) else -1
+		return (styles[i] if i < len(styles) else 0, paras[k] if k >= 0 else None)
+	if not any(key(i) != (0, None) for i in ids):
+		return None
+	offs = wordOffsets(text, idx, ids)
+	if offs is None:
+		return None
+	out = []
+	cur = None
+	for i, o in offs:
+		st = key(i)
+		if st != cur:
+			# (the space before a word goes with the word before it)
+			out.append((o, st))
+			cur = st
+	if out:
+		out[0] = (0, out[0][1])
+	return out
+
+
+def pieceStyle(idx, i):
+	"""styleChanges for a character or word of index word i: [(0, its style)] or None."""
+	layout = idx.layout or {}
+	styles = layout.get("styles") or b""
+	para = layout.get("para") or []
+	paras = layout.get("paras") or []
+	k = para[i] if i < len(para) else -1
+	key = (styles[i] if i < len(styles) else 0, paras[k] if k >= 0 else None)
+	return [(0, key)] if key != (0, None) else None
+
+
+def groupOffsets(text, idx, groups):
+	"""Where each group's first word is in the text read for those words, or None if a group
+	cannot be placed exactly. Each word is looked for after the words before it, so a word
+	is never found inside the one before it (the ५ of १५)."""
+	out = []
+	pos = 0
+	for ctx, ids in groups:
+		first = None
+		for k, i in enumerate(ids):
+			w = _wordText(idx.words[i])
+			parts = w.split()
+			found = text.find(w, pos)
+			length = len(w)
+			if found < 0 and parts:
+				found = text.find(parts[0], pos)
+				length = len(parts[0])
+			if found < 0 or (k and found - pos > 40):
+				if k == 0:
+					return None
 				continue
-			text = _esc(" ".join(_wordText(idx.words[i]) for i in piece[2]))
-			level = heads.get(piece[1]) if piece[1] else None
-			if level:
-				out.append("<h%d>%s</h%d>" % (level, text, level))
-			else:
-				out.append("<p>%s</p>" % text)
-		out.append("</section>")
-		pageStart = end
-	out.append("</body></html>")
-	return "".join(out)
+			if k == 0:
+				first = found
+			pos = found + length
+		out.append(first)
+	return out
+
+
+def cellCovering(idx, ti, row, col):
+	"""The number of the cell of table ti that covers (row, col) (1-based), or None."""
+	for ci, c in enumerate(idx.layout["tables"][ti]["cells"]):
+		if c[0] < row <= c[0] + c[2] and c[1] < col <= c[1] + c[3]:
+			return ci
+	return None
+
+
+def targets(idx, kind, level=None):
+	"""First index word of each table (kind "table") or heading (kind "heading", of one level or
+	any), in document order: [(word, (table, cell) or level)]."""
+	layout = idx.layout or {}
+	out = []
+	if kind == "table":
+		for ti, t in enumerate(layout.get("tables") or ()):
+			first = [(min(c[5]), ci) for ci, c in enumerate(t["cells"]) if c[5]]
+			if first:
+				w, ci = min(first)
+				out.append((w, (ti, ci)))
+	else:
+		heads = layout.get("heads") or {}
+		blocks = layout.get("blocks") or []
+		seen = set()
+		for i, b in enumerate(blocks):
+			if b and b in heads and b not in seen and (level is None or heads[b] == level):
+				seen.add(b)
+				out.append((i, heads[b]))
+	out.sort()
+	return out
+
+
+def needles(idx, w, n=32):
+	"""Strings to find index word w by in the viewer's text: from the word on, as the viewer
+	shows it (B) and as the real text (F); then the word by itself (a viewer that shows one word
+	broken and the next right). Longest first."""
+	out = []
+	F = getattr(idx, "F", "")
+	fStarts = getattr(idx, "fStarts", None)
+	for space, starts in ((idx.B, idx.starts), (F, fStarts)):
+		if space and starts and w < len(starts):
+			out.append(space[starts[w]:starts[w] + n])
+	for space, starts in ((idx.B, idx.starts), (F, fStarts)):
+		if space and starts and w < len(starts):
+			end = starts[w + 1] if w + 1 < len(starts) else len(space)
+			one = space[starts[w]:end]
+			if len(one) >= 2 and one not in out:
+				out.append(one)
+	return out
 
 
 def cfHtml(fragment):
