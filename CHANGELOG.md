@@ -2,7 +2,7 @@
 
 All notable changes to the **Nepali Reader** NVDA add-on are documented here.
 
-## [Unreleased]
+## [2.0.1] - 2026-10-13
 
 ### Added
 - **Tables in PDFs**: Chrome, Edge and Brave give NVDA a PDF's table only as loose lines. The add-on now reads each table from the PDF file itself: from the table structure the PDF saves (Word and most office programs save it), or else from the cell borders drawn on the page. Header cells and merged cells (one cell over several rows) are kept. A grid of lines that does not hold the text around it (an infographic with a few boxes) is not taken as a table.
@@ -10,23 +10,18 @@ All notable changes to the **Nepali Reader** NVDA add-on are documented here.
 - **NVDA's table keys and quick navigation in PDFs**: Ctrl+Alt+arrows move by cell in the PDF's tables, T / Shift+T go to the next / previous table, and H, 1 to 6 to the headings the PDF's structure names (when the viewer has none itself).
 - **Copying a table**: Ctrl+C on a selection that takes in table cells pastes into Word, Excel or an email as a real table, and as one row per line with tab-separated cells in plain text. Lines that are not part of the PDF's text (Chrome's toolbar, image labels) are copied as they are, in their place.
 
-### Fixed
-- **Lines where Chrome glues its own words to the page's text** ("Unlabeled graphicपटहरो", the toolbar in front of the first line) were left with the PDF's broken text (राटिय, पटहरो, तातलका). The Nepali part of such a line is now looked up by itself: राष्ट्रिय, पहिरो, तालिका.
-- **PDFs that stopped being read**: since 2.0.1 a PDF whose font gives a letter the text of a Latin digit (the Rasuwa flood report: the ि of धादिङ has the text "9") could not be read at all. Such a digit inside a Nepali word is read as the letter its glyph is again; numbers (२०८३, 10:00) stay exactly as written.
-
-## [2.0.1] - 2026-10-12
+### Changed
+- **Official NVDA Add-on Store Updates**: Removed the local update checker as updates are now handled natively through the official NVDA Add-on Store.
 
 ### Fixed
 - **Fixed Digit Zero (`०`) Reading Bug**: Fixed an issue where the digit 0 (`०`) was dropped or missed when reading numbers in Unicode and Preeti documents (e.g. `२०८३` was read as `२८३`, and `१०:००` was read as `१:`). Numbers and timestamps are now read accurately as written.
+- **Lines where Chrome glues its own words to the page's text** ("Unlabeled graphicपटहरो", the toolbar in front of the first line) were left with the PDF's broken text (राटिय, पटहरो, तातलका). The Nepali part of such a line is now looked up by itself: राष्ट्रिय, पहिरो, तालिका.
+- **PDFs that stopped being read**: a PDF whose font gives a letter the text of a Latin digit (the Rasuwa flood report: the ि of धादिङ has the text "9") is read as the letter its glyph is again; numbers (२०८३, 10:00) stay exactly as written.
 
 ## [2.0] - 2026-10-09
 
 ### Changed
 - **Shortcut Key Streamlining**: Redundant shortcut keys to activate and deactivate Nepali mode were removed. Only `NVDA + Ctrl + Shift + Space` toggles Nepali mode on or off, and `NVDA + Ctrl + L` directly opens the Nepali Reader settings dialog. `Ctrl + C` continues to copy clean Unicode text.
-
-### Added
-- **In-App Update Progress**: Update download with a live progress dialog (`Connecting to server...`, `Downloading update, please wait... X%`), cancel support, IPv4-first connection for slow ISP routes, automatic hand-off to NVDA's own add-on install dialog, and plain-text release notes for screen readers.
-- **Integrated GitHub Auto-Updater**: Built-in automatic update engine checking GitHub releases. Users receive update notifications with one-click background download and installation without needing external websites or manual downloads. Added a manual "Check for updates..." item under NVDA's Tools menu and a toggle in Nepali Reader settings.
 
 ### Fixed
 - **Glyph tables rebuilt**: the add-on's built-in tables of what each glyph shows in common Devanagari fonts had the reph labelled as ृ and many half letters labelled as full letters (Rajdhani and other Google fonts). Rebuilt from the current fonts (184 tables, including static Noto Serif/Sans Devanagari) and 10,522 old entries corrected; कार्य, गर्ने, रिपोर्ट no longer read कायृ, गनेृ, रिपोटृ.
@@ -85,7 +80,6 @@ All notable changes to the **Nepali Reader** NVDA add-on are documented here.
 - **Bold headings drawn twice**: PDFs that draw a heading twice for a bold look (नेपाल पर्यटन बोर्ड ऐन in Brave) had the heading read twice, also when the second copy was split differently ("परिच्छेद – परिच्छेद –१") or its last word went to the next line. It is read once, as the page shows it.
 - **Renumbered Preeti glyphs**: in a PDF whose Preeti font numbers its glyphs anew, the ड of बोर्ड was read रू (बोर्रूको); the name the PDF gives each glyph is now used.
 - **Saved PDF indexes**: the add-on saves what it rebuilds from each PDF (in the NVDA settings folder, under nepaliReader) so a PDF opens at once the next time. Indexes made by an older version of the add-on, which are never read again, are now deleted; at most 60 recent ones stay.
-- **Quiet releases**: the automatic update check only notifies when the GitHub release notes contain the word [notify]. Releases without it are still found by "Check for updates...", and the next [notify] release carries every earlier fix.
 
 ## [1.1.6] - 2026-10-07
 

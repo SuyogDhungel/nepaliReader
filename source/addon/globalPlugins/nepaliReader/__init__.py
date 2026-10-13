@@ -59,8 +59,6 @@ CONF_SPEC = {
 	"visualCheck": "boolean(default=True)",
 	"webFontOnly": "boolean(default=True)",
 	"lastOnMode": "option('auto', 'always', default='auto')",
-	"autoCheckUpdate": "boolean(default=True)",
-	"lastUpdateCheck": "float(default=0.0)",
 }
 config.conf.spec[CONF_SECTION] = CONF_SPEC
 
@@ -889,12 +887,6 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			wx.CallLater(2000, multilangIntegration.install)
 			wx.CallLater(3000, self._checkHooks)
 			wx.CallLater(3500, self._startupReminder)
-			if conf().get("autoCheckUpdate", True):
-				try:
-					from . import updater
-					updater.startAutoUpdateCheck(conf())
-				except Exception:
-					pass
 		except Exception:
 			log.debugWarning("Nepali Reader: gesture check failed", exc_info=True)
 
@@ -1001,16 +993,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		# Translators: menu item
 		item = menu.Append(wx.ID_ANY, _("&Settings... (NVDA+Ctrl+L)"))
 		gui.mainFrame.sysTrayIcon.Bind(wx.EVT_MENU, self._onMenuSettings, item)
-		# Translators: menu item to check for updates
-		itemUpdate = menu.Append(wx.ID_ANY, _("&Check for updates..."))
-		gui.mainFrame.sysTrayIcon.Bind(wx.EVT_MENU, lambda e: self._onCheckUpdates(), itemUpdate)
 		# Translators: name of the add-on's submenu in NVDA's Tools menu
 		self._menu = toolsMenu.AppendSubMenu(menu, _("&Nepali Reader"))
 		_menuSync[0] = self._syncMenu
-
-	def _onCheckUpdates(self):
-		from . import updater
-		updater.checkUpdate(manual=True, configRef=conf())
 
 	def _removeMenu(self):
 		try:
@@ -3633,9 +3618,6 @@ class NepaliReaderSettingsPanel(SettingsPanel):
 		# Translators: settings label
 		self.webCheck = helper.addItem(wx.CheckBox(self, label=_("On web pages and chat apps, convert only text whose font is Preeti, Kruti Dev or similar")))
 		self.webCheck.SetValue(c["webFontOnly"])
-		# Translators: settings label
-		self.updateCheck = helper.addItem(wx.CheckBox(self, label=_("Automatically check for updates from GitHub")))
-		self.updateCheck.SetValue(c.get("autoCheckUpdate", True))
 
 	def onSave(self):
 		c = conf()
@@ -3651,5 +3633,4 @@ class NepaliReaderSettingsPanel(SettingsPanel):
 		c["switchLanguage"] = self.langCheck.GetValue()
 		c["visualCheck"] = self.visualCheck.GetValue()
 		c["webFontOnly"] = self.webCheck.GetValue()
-		c["autoCheckUpdate"] = self.updateCheck.GetValue()
 		_menuSync[0]()
