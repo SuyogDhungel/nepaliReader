@@ -3050,6 +3050,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		key = pdfText.keyOf(text)
 		if not key:
 			return None
+		s_text = text.strip()
+		if s_text.isdigit() or _PLAIN_NUMBER.match(s_text):
+			return None
 		lines = text.splitlines(True)
 		if len(lines) > 2:
 			# several lines (a paragraph, a selection, select all): line by line, keeping the line breaks
@@ -3078,6 +3081,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		if pieces and any(not ok and _isEnglishOutside(idx, pc) for pc, ok in pieces):
 			# an English word the document does not have: this is the viewer's own text (a "Fit to
 			# page" button), not the page - a short word of it must not be read as Preeti (to = तय)
+			pieces = None
+		if pieces and (s_text.isdigit() or _PLAIN_NUMBER.match(s_text)) and any(devanagariRepair.hasDevanagariLetters(pc) for pc, _ in pieces):
 			pieces = None
 		if not pieces or not any(ok for _p, ok in pieces):
 			mixed = self._mixedRuns(idx, text)
@@ -3349,6 +3354,33 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			pass
 		return False
 
+	@staticmethod
+	def _isPdfViewerUiControl(obj):
+		"""True if an object is a PDF viewer toolbar or navigation control (page number, zoom, etc.)
+		and should NOT have PDF text lookup or legacy font translation applied."""
+		if obj is None:
+			return False
+		try:
+			names = (
+				"page number", "zoom level", "zoom in", "zoom out", "fit to page",
+				"rotate counterclockwise", "rotate clockwise", "print", "download",
+				"save to google drive", "add text annotations", "draw", "undo", "redo",
+				"more actions", "current page", "number of pages", "presentation mode",
+				"two page view", "single page view", "thumbnails"
+			)
+			for target in (obj, getattr(obj, "parent", None)):
+				if not target:
+					continue
+				name = (getattr(target, "name", "") or "").strip().lower()
+				if name in names:
+					return True
+				desc = (getattr(target, "description", "") or "").strip().lower()
+				if desc in names:
+					return True
+		except Exception:
+			pass
+		return False
+
 	def _isWebNonPdf(self, obj):
 		"""True in a browser or chat app showing a normal page (not a PDF)."""
 		try:
@@ -3456,6 +3488,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 					line, off = ctx
 					chAt = idx.charAt(line, off, len(orig_char))
 					if chAt and devanagariRepair.hasDevanagari(chAt):
+						if orig_char.isdigit() and not any(0x0966 <= ord(c) <= 0x096F for c in chAt):
+							return fields
 						chAt = devanagariRepair.cleanForCharNav(chAt)
 						for i, item in enumerate(fields):
 							if isinstance(item, str):
@@ -3627,7 +3661,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
 		# 6. Fallback standalone character mapping
 		if res is None:
-			if inLegacy and orig_char in legacyFonts.PREETI_MAP:
+			if orig_char.isdigit():
+				res = orig_char
+			elif inLegacy and orig_char in legacyFonts.PREETI_MAP:
 				res = legacyFonts.PREETI_MAP.get(orig_char)
 			elif devanagariRepair.hasDevanagari(orig_char):
 				res = devanagariRepair.composeMatras(orig_char)
@@ -3703,8 +3739,11 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			return True
 
 	def _convertFieldsInner(self, info, formatConfig, c, unit=None):
+		obj = getattr(info, "obj", None)
+		if self._isPdfViewerUiControl(obj):
+			return info.getTextWithFields(formatConfig)
 		fields = self._convertFieldsCore(info, formatConfig, c, unit=unit)
-		if self._isPdfWindow(getattr(info, "obj", None)):
+		if self._isPdfWindow(obj):
 			fields = self._filterPdfViewerTableFields(info, fields)
 		return self._withLayout(info, fields, unit)
 
@@ -4037,6 +4076,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 					groups.append(cur)
 				for grp in groups:
 					whole = "".join(t for _i, t, _k, _e in grp)
+					if whole.strip().isdigit() or _PLAIN_NUMBER.match(whole.strip()):
+						continue
 					try:
 						new = self._indexText(info if len(groups) == 1 else None, idx, whole)
 					except Exception:

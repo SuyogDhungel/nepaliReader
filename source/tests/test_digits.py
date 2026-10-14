@@ -133,5 +133,32 @@ check('drop repeat cut by the line end', _d._dropRepeats("g]kfn ko{6g af]8{sf] :
 _d2 = _Doc("kmkmlkmlkmkm/fd/fd/fdkm")
 check('a real repeat stays', _d2._dropRepeats("/fd /fd /fd"), "/fd /fd /fd")
 check('glyph name variant', PT._glyphNameToText('eight.alt'), '8')
+
+# Standalone digit lookups in PDF index must never match inside Preeti words (1 inside lj1KtL -> ज्ञ)
+_d3 = PT.DocIndex()
+_d3.B = "k|];lj1KtLl;4fy{a}+slnld6]8sf]"
+_d3.starts = [0, 4, 10, 16, 20]
+_d3.words = [
+	('प्रेस', None, 'preeti', 'k|];'),
+	('विज्ञप्ती', None, 'preeti', 'lj1KtL'),
+	('सिद्धार्थ', None, 'preeti', 'l;4fy{'),
+	('बैंक', None, 'preeti', 'a}+s'),
+	('लिमिटेडको', None, 'preeti', 'lnld6]8sf]')
+]
+for d in '0123456789':
+	check(f'standalone digit {d} never matches inside Preeti words', _d3.lookup(d), None)
+
+# PDF viewer toolbar controls (e.g. Page number edit field, Zoom level) must be detected
+class _MockObj:
+	def __init__(self, name, role='edit'):
+		self.name = name
+		self.role = role
+		self.parent = None
+
+check('Page number control detected', NR.GlobalPlugin._isPdfViewerUiControl(_MockObj('Page number')), True)
+check('Zoom level control detected', NR.GlobalPlugin._isPdfViewerUiControl(_MockObj('Zoom level')), True)
+check('Regular doc object not control', NR.GlobalPlugin._isPdfViewerUiControl(_MockObj('प्रेस विज्ञप्ती')), False)
+
 print('FAILED' if bad else 'ALL OK', bad)
 sys.exit(1 if bad else 0)
+

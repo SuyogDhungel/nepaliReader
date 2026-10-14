@@ -1153,6 +1153,8 @@ class DocIndex:
 					return p
 				tries += 1
 				p = B.find(key, p + 1)
+			if key.isdigit() or len(key) <= 3:
+				continue
 			return first
 		return -1
 
@@ -1189,6 +1191,10 @@ class DocIndex:
 		p = B.find(key, self._hint)
 		if p < 0:
 			p = B.find(key)
+		if p >= 0 and (key.isdigit() or len(key) <= 3):
+			i = bisect.bisect_right(self.starts, p) - 1
+			if i < 0 or self.starts[i] != p:
+				p = -1
 		if p < 0:
 			p = self._findSkel(key)
 		if p < 0 and len(key) >= 10:
@@ -1443,7 +1449,11 @@ class DocIndex:
 		p = self._bfind(key)
 		if p >= 0:
 			self._hint = p
-			return self._span(p, p + len(key))
+			res = self._span(p, p + len(key))
+			if res and key.isdigit() and any(devanagariRepair.hasDevanagariLetters(pc) for pc, _ in res):
+				res = None
+			if res is not None:
+				return res
 		deva = isDeva(key)
 		if deva:
 			pf = self._findF(key, tolerant=False)
@@ -1451,7 +1461,11 @@ class DocIndex:
 				return self._spanF(pf, pf + len(key), extend=False)
 		p = self._find(key)
 		if p >= 0:
-			return self._span(p, p + len(key))
+			res = self._span(p, p + len(key))
+			if res and key.isdigit() and any(devanagariRepair.hasDevanagariLetters(pc) for pc, _ in res):
+				res = None
+			if res is not None:
+				return res
 		if deva:
 			pf = self._findF(key)
 			if pf >= 0:
