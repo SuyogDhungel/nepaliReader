@@ -78,9 +78,19 @@ p._clearContext()
 runs = [('Preeti', 'g]kfn ;/sf/')]
 got = chars(runs)
 check('Preeti-only line converts by character', got[0], 'न')
-# 5. words
+# 5. Standalone digits and page numbers in character navigation (not converted to Preeti ligatures like 1 -> ज्ञ)
+p._clearContext()
+for d in '0123456789':
+    runs = [(None, d)]
+    got = chars(runs)
+    check(f'standalone digit {d} by character', got[0], d)
+runs = [(None, 'page 1')]
+got = chars(runs)
+check('page number by character', got[-1], '1')
+# 6. words
 runs = [('Preeti', 'g]kfn '), ('Calibri', 'Report '), ('Preeti', ';/sf/')]
 check('word read: English', said(wordInfo(runs, 7), 'word').strip(), 'Report')
 check('word read: Preeti', said(wordInfo(runs, 1), 'word').strip(), 'नेपाल')
 print('FAILED' if bad else 'ALL OK', bad)
 sys.exit(1 if bad else 0)
+

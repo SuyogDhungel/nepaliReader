@@ -3525,10 +3525,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				plan = devanagariRepair.gluedDigitPlan(word)
 				if plan and len(plan) == len(word) and 0 <= char_off < len(plan):
 					res = plan[char_off]
-				elif not orig_char.isascii():
+				else:
 					res = orig_char
-			elif not orig_char.isascii():
-				res = orig_char  # a Devanagari digit among digits or punctuation
+			else:
+				res = orig_char  # standalone digit or number (page numbers, list numbers, dates, amounts)
 
 		# 2. Preeti shifted number row symbols (% -> ५, ! -> १, @ -> २, etc.)
 		elif orig_char in devanagariRepair._PREETI_SHIFT_DIGIT_MAP:
@@ -3592,7 +3592,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 					elif c_cur == '}': res = 'ै'
 					elif c_cur == '[': res = 'ृ'
 					elif c_cur in ('\u00ac', '¬'): res = 'ु'
-					elif c_cur == 'M': res = ':'
+					elif c_cur.isdigit(): res = c_cur
 					elif c_cur in legacyFonts.PREETI_MAP: res = legacyFonts.PREETI_MAP[c_cur]
 					else: res = c_cur
 
