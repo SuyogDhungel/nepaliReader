@@ -424,10 +424,10 @@ def preetiFamilyToUnicode(text, font="preeti", _table=None, bf=None):
 			trail_b = ")"
 			word = word[1:-1]
 		else:
-			if word.startswith("(") and (len(word) == 1 or word[1] not in "!@#$%^&*()"):
+			if word.startswith("(") and (len(word) == 1 or word[1] not in "!@#$%^&*()="):
 				lead_b = "("
 				word = word[1:]
-			if word.endswith(")") and (len(word) == 1 or word[-2] not in "!@#$%^&*()"):
+			if word.endswith(")") and (len(word) == 1 or word[-2] not in "!@#$%^&*()="):
 				trail_b = ")"
 				word = word[:-1]
 
@@ -653,6 +653,9 @@ def _visargaOrColon(m):
 
 
 def convert(text, encoding="preeti", bf=None):
+	if "&" in text and ";" in text and any(ent in text for ent in ("&#", "&amp;", "&quot;", "&gt;", "&lt;", "&apos;")):
+		import html
+		text = html.unescape(text)
 	if encoding == "krutidev":
 		return krutiDevToUnicode(text)
 	# (a "." between digits draws a danda in Preeti and is kept as the danda the page shows)

@@ -2032,7 +2032,19 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		try:
 			idx = self._readyIndex(getattr(obj, "rootNVDAObject", None) or obj)
 			if idx is not None and getattr(idx, "layout", None) and idx.layout.get("tables"):
-				for ti, t in enumerate(idx.layout["tables"]):
+				tables = idx.layout["tables"]
+				target_ti = None
+				if tableID is not None and isinstance(tableID, int) and pdfLayout.TABLE_ID_BASE <= tableID < pdfLayout.TABLE_ID_BASE + len(tables):
+					target_ti = tableID - pdfLayout.TABLE_ID_BASE
+				elif cellInfo is not None:
+					c_ids = self._pieceWords(cellInfo, idx)
+					cells_map = pdfLayout.cellIndex(idx.layout)
+					for ci_id in c_ids or ():
+						if ci_id in cells_map:
+							target_ti = cells_map[ci_id][0]
+							break
+				candidate_tables = [(target_ti, tables[target_ti])] if (target_ti is not None and 0 <= target_ti < len(tables)) else enumerate(tables)
+				for ti, t in candidate_tables:
 					cells = t.get("cells", [])
 					r0, c0 = row - 1, col - 1
 					for ci, c in enumerate(cells):
@@ -2080,7 +2092,19 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		try:
 			idx = self._readyIndex(getattr(obj, "rootNVDAObject", None) or obj)
 			if idx is not None and getattr(idx, "layout", None) and idx.layout.get("tables"):
-				for ti, t in enumerate(idx.layout["tables"]):
+				tables = idx.layout["tables"]
+				target_ti = None
+				if tableID is not None and isinstance(tableID, int) and pdfLayout.TABLE_ID_BASE <= tableID < pdfLayout.TABLE_ID_BASE + len(tables):
+					target_ti = tableID - pdfLayout.TABLE_ID_BASE
+				elif cellInfo is not None:
+					c_ids = self._pieceWords(cellInfo, idx)
+					cells_map = pdfLayout.cellIndex(idx.layout)
+					for ci_id in c_ids or ():
+						if ci_id in cells_map:
+							target_ti = cells_map[ci_id][0]
+							break
+				candidate_tables = [(target_ti, tables[target_ti])] if (target_ti is not None and 0 <= target_ti < len(tables)) else enumerate(tables)
+				for ti, t in candidate_tables:
 					cells = t.get("cells", [])
 					r0, c0 = row - 1, col - 1
 					for ci, c in enumerate(cells):
@@ -3949,6 +3973,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		unicodeFont = False
 		for i, item in enumerate(fields):
 			if isinstance(item, str):
+				if "&" in item and ";" in item and any(ent in item for ent in ("&#", "&amp;", "&quot;", "&gt;", "&lt;", "&apos;")):
+					import html
+					fields[i] = item = html.unescape(item)
 				if item and "\u00e0" in item:
 					dec = devanagariRepair.decodeMojibake(item)
 					if dec != item:
@@ -3965,6 +3992,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				for attr in ("table-rowheadertext", "table-columnheadertext", "name", "description"):
 					val = item.field.get(attr)
 					if isinstance(val, str) and val:
+						if "&" in val and ";" in val and any(ent in val for ent in ("&#", "&amp;", "&quot;", "&gt;", "&lt;", "&apos;")):
+							import html
+							val = html.unescape(val)
+							item.field[attr] = val
 						if curEnc:
 							conv = legacyFonts.convert(val, curEnc)
 							if conv and conv != val:
@@ -4087,7 +4118,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			elif known == "unicode":
 				continue  # Mangal, Kalimati, Nirmala...: real Unicode text
 			elif devanagariRepair.hasDevanagari(text):
-				if any(ch.isascii() and ch.isalpha() for ch in text):
+				if any(ch.isascii() and ch.isalpha() for ch in text) or any(detector.isPreetiSymbolNumber(w) for w in text.split()):
 					anyKnownFont = anyKnownFont or bool(known)
 					unknown.append((i, text))
 				continue
@@ -4095,6 +4126,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				# numbers/symbols: if in confirmed legacy context, convert!
 				# numbers/symbols alone: they are Preeti only when the text next to them is Preeti
 				# (decided below), never next to Unicode Nepali or English: "(राजनीतिक)" keeps "("
+				if detector.isPreetiSymbolNumber(text) or any(detector.isPreetiSymbolNumber(w) for w in text.split()):
+					convert[i] = (enc or ctxEnc or c["encoding"] or "preeti", False)
+					continue
 				isUniDoc = self._docState().isUnicodeDocument
 				if not isUniDoc and ctxEnc and any(ch in "!@#$%^&*()+=~`_{}[]\\|/<>?0123456789." for ch in text):
 					symRuns.append((i, text, ctxEnc))
@@ -4244,7 +4278,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 					and self._visualVerdict(info, joined) == visualScript.DEVANAGARI):
 				return
 		if isUnicodeDoc and (legacyWords < 2 and legacyWords * 2 < words):
-			hasStrong = any(f and (detector.wordScore(t, used) >= detector.MIXED_WORD or detector._strongAlone(t, detector.wordScore(t, used), used)) for t, f in decisions if not t.isspace())
+			hasStrong = any(f and (detector.isPreetiSymbolNumber(t) or detector.wordScore(t, used) >= detector.MIXED_WORD or detector._strongAlone(t, detector.wordScore(t, used), used)) for t, f in decisions if not t.isspace())
 			if not hasStrong:
 				return
 		inPdf = self._isPdfWindow(info.obj)

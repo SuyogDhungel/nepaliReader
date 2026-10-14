@@ -174,6 +174,8 @@ def _strongAlone(token, sc, encoding):
 def isNonLegacySymbolOrEmoji(t):
 	if not t:
 		return False
+	if isPreetiSymbolNumber(t):
+		return False
 	if any(ord(c) > 255 and not (0x0900 <= ord(c) <= 0x097F) and c not in legacyFonts.PREETI_MAP for c in t):
 		return True
 	if any(c in _PURE_BULLETS for c in t):
@@ -199,6 +201,9 @@ def decide(text, encoding="preeti", context=False):
 	* `context=True` means the surrounding document was recently confirmed legacy, so short
 	  fragments (single words, characters) lean towards legacy unless they look English.
 	"""
+	if "&" in text and ";" in text and any(ent in text for ent in ("&#", "&amp;", "&quot;", "&gt;", "&lt;", "&apos;")):
+		import html
+		text = html.unescape(text)
 	text = cleanGluedTokens(text)
 	if _MOJIBAKE.search(text):
 		# UTF-8 Devanagari shown through a Latin code page (à¤§à¤°...): not Preeti, left as it is
@@ -230,6 +235,8 @@ def decide(text, encoding="preeti", context=False):
 		if context and hasScorable:
 			# ambiguous fragment inside a legacy document: only convert if it has ASCII letters and is not a bullet/arrow/emoji/number
 			return [(t, bool(t) and any(c.isascii() and c.isalpha() for c in t) and not isNonLegacySymbolOrEmoji(t) and not _NUM_TOKEN.match(t.strip(_STRIP)) and not _URLISH.search(t)) for t, _ in scored]
+		if any(isPreetiSymbolNumber(t) for t, _ in scored):
+			return [(t, isPreetiSymbolNumber(t)) for t, _ in scored]
 		return [(t, False) for t, _ in scored]
 	if context and not hasDeva:
 		wholeLine = legacy >= english and not any(
@@ -250,7 +257,7 @@ def decide(text, encoding="preeti", context=False):
 		core = _core(t)
 		if not t or t.isspace() or any("\u0900" <= c <= "\u097f" for c in t):
 			result.append((t, False))
-		elif isPreetiSymbolNumber(t) and (wholeLine or notEnglishLine):
+		elif isPreetiSymbolNumber(t) and (wholeLine or notEnglishLine or hasDeva or context or core.startswith("?=") or any(c in ",./÷–—" for c in t)):
 			result.append((t, True))
 		elif isNonLegacySymbolOrEmoji(t) or isNonLegacySymbolOrEmoji(core):
 			result.append((t, False))
@@ -275,7 +282,7 @@ def decide(text, encoding="preeti", context=False):
 			isBulletPrefix = (bool(re.match(r"^9[a-zA-Z]+0$", t)) or bool(_PREETI_LIST_TOKEN.match(t)) or (len(core) == 1 and core.islower() and (t[-1:] in "_).-/" or t[:1] in "([") and notEnglishLine))
 			result.append((t, bool(
 				isBulletPrefix
-				or (notEnglishLine and isPreetiSymbolNumber(t))
+				or (isPreetiSymbolNumber(t) and (notEnglishLine or hasDeva or context or core.startswith("?=") or any(c in ",./÷–—" for c in t)))
 				or (sc is not None and (
 					(legacy > english and _strongAlone(t, sc, encoding))
 					or (sc >= MIXED_WORD and len(_core(t)) >= 3 and not isEnglishWord(_core(t))
@@ -331,17 +338,38 @@ paragraph|page|end of document|top|bottom|bold|italic|underline|not bold|not ita
 
 
 _NUM_TOKEN = re.compile(r"^[\$€₹#№]?\d+(?:[.,/:\-]\d+)*[%°]?$")
-# digits typed on Preeti's shifted number row: !(*) = १९८०, @)&* = २०७८ (a bracket pair around
-# symbols, as in (!) or (@), is a clause marker and is left to the converter)
-_PREETI_SYMNUM = re.compile(r"^[!@#$%^&*()\u00f7]{2,}[.,]?$")
+# digits typed on Preeti's shifted number row: !(*) = १९८०, @)&* = २०७८, !$,&(,$$,&(,!(%÷– = १४,७९,४४,७९,१९५/–
+_PREETI_SYMNUM = re.compile(
+	r"""^
+	[\(\[]?                                     # optional opening bracket
+	(?:\?=|[\?रुरू]\.?)?                        # optional currency prefix (?= or रु.)
+	[!@#$%^&*()0-9,./=:\u00f7\u2013\u2014\-]+   # Preeti digits, commas, dots, slashes, dashes, colons
+	(?:-?[a-zA-Z]+)?                            # optional attached Preeti suffix like -Ps
+	[\)\]]?                                     # optional closing bracket
+	$""",
+	re.VERBOSE
+)
 
 
 def isPreetiSymbolNumber(t):
 	core = (t or "").strip()
+	if not core:
+		return False
+	if core == "?=":
+		return True
+	if _NUM_TOKEN.match(core):
+		return False
+	if not any(c in "!@#$%^&*()" for c in core) and not core.startswith("?="):
+		return False
 	if not _PREETI_SYMNUM.match(core):
 		return False
-	body = core.rstrip(".,")
-	if body[0] == "(" and body[-1] == ")":
+	# Ignore single repeated symbols like &&, !!, **, ##, $$, %%, ^^, @@, ((, ))
+	non_punct = [c for c in core if c not in " \t\r\n"]
+	if len(set(non_punct)) <= 1:
+		return False
+	if core in ("*", "-", "–", "—", "(", ")", "[", "]", "!"):
+		return False
+	if core.startswith("(") and core.endswith(")") and len(core) == 3 and not (core[1] in "!@#$%^&*()"):
 		return False
 	return True
 
@@ -355,6 +383,9 @@ def forceDecide(text, protectEnglish=True):
 	and (if protectEnglish) words NVDA itself speaks."""
 	if not protectEnglish and text.strip().lower() in NVDA_PHRASES:
 		return [(text, False)]
+	if "&" in text and ";" in text and any(ent in text for ent in ("&#", "&amp;", "&quot;", "&gt;", "&lt;", "&apos;")):
+		import html
+		text = html.unescape(text)
 	if _MOJIBAKE.search(text):
 		return [(t, False) for t in re.split(r"(\s+)", text)]
 	out = []
