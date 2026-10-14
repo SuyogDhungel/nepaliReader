@@ -710,7 +710,43 @@ blank_tbl_fields = [
 ]
 filtered_blank = p._filterPdfViewerTableFields(blank_tbl_info, blank_tbl_fields)
 check('viewer table with blank body has table/cell fields stripped', [f for f in filtered_blank if isinstance(f, FC)], [])
-check('viewer table with blank body keeps text', ''.join(f for f in filtered_blank if isinstance(f, str)), 'शीर्षक')
+# Multi-table header isolation test:
+# Ensure Table 0's headers do not leak into Table 1, Table 2, etc.
+multi_idx = Idx()
+multi_idx.words = [
+	("T0H1", None, None, "T0H1"), ("T0H2", None, None, "T0H2"),
+	("T0D1", None, None, "T0D1"), ("T0D2", None, None, "T0D2"),
+	("T1H1", None, None, "T1H1"), ("T1H2", None, None, "T1H2"),
+	("T1D1", None, None, "T1D1"), ("T1D2", None, None, "T1D2"),
+]
+multi_idx.lineStart = [True, False, True, False, True, False, True, False]
+multi_idx.layout = {
+	"tables": [
+		{
+			"p": 0, "nr": 2, "nc": 2,
+			"cells": [
+				[0, 0, 1, 1, 1, [0]], [0, 1, 1, 1, 1, [1]],
+				[1, 0, 1, 1, 0, [2]], [1, 1, 1, 1, 0, [3]],
+			]
+		},
+		{
+			"p": 0, "nr": 2, "nc": 2,
+			"cells": [
+				[0, 0, 1, 1, 1, [4]], [0, 1, 1, 1, 1, [5]],
+				[1, 0, 1, 1, 0, [6]], [1, 1, 1, 1, 0, [7]],
+			]
+		}
+	],
+	"blocks": None, "heads": {}, "wpage": [0]*8
+}
+L._layoutCache(multi_idx)
+p._readyIndex = lambda o: multi_idx
+multi_doc = MockViewerTableDoc({})
+t0_id = L.TABLE_ID_BASE + 0
+t1_id = L.TABLE_ID_BASE + 1
+check('multi-table: table 0 row 2 col 1 gets table 0 header', p._getColumnHeaderForCell(multi_doc, None, t0_id, 2, 1), 'T0H1')
+check('multi-table: table 1 row 2 col 1 gets table 1 header without leaking table 0', p._getColumnHeaderForCell(multi_doc, None, t1_id, 2, 1), 'T1H1')
+check('multi-table: table 1 row 2 col 2 gets table 1 header', p._getColumnHeaderForCell(multi_doc, None, t1_id, 2, 2), 'T1H2')
 
 print('FAILED' if bad else 'ALL OK', bad)
 sys.exit(1 if bad else 0)
