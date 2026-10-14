@@ -58,6 +58,7 @@ CONF_SPEC = {
 	"switchLanguage": "boolean(default=True)",
 	"visualCheck": "boolean(default=True)",
 	"webFontOnly": "boolean(default=True)",
+	"announceTableHeaders": "boolean(default=True)",
 	"lastOnMode": "option('auto', 'always', default='auto')",
 }
 config.conf.spec[CONF_SECTION] = CONF_SPEC
@@ -1407,6 +1408,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		"""The index (with its tables and headings) of the PDF a browse mode document shows."""
 		try:
 			obj = getattr(ti, "rootNVDAObject", None)
+			if obj is None:
+				obj = getattr(getattr(ti, "obj", None), "rootNVDAObject", None)
 			if obj is None or not isOn() or not self._isPdfWindow(obj):
 				return None
 			idx = self._readyIndex(obj)
@@ -1485,15 +1488,26 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			end = p + 1
 		return ti.makeTextInfo(textInfos.offsets.Offsets(sm.enc(p), sm.enc(end - 1) + 1))
 
-	def _pdfQuickNav(self, ti, gen, itemType, direction, pos):
+	def _pdfQuickNav(self, ti, gen, itemType, direction, pos, orig=None):
 		"""NVDA's quick navigation to tables and headings (T, H, 1 to 6), and its elements list:
-		the viewer's own first; when it has none, the PDF's tables and the headings its tags name."""
+		the viewer's own first; when the document has none, the PDF's tables and the headings its tags name."""
 		got = False
 		for item in gen:
 			got = True
 			yield item
 		if got or direction not in ("next", "previous"):
 			return
+
+		# If the viewer document already provides native nodes of this type,
+		# do not synthesize items across unloaded page chunks (which lands in sidebar thumbnails).
+		if pos is not None and orig is not None:
+			try:
+				first_check = orig(ti, itemType, "next", None)
+				if next(first_check, None) is not None:
+					return
+			except Exception:
+				pass
+
 		idx = self._pdfDocIndex(ti)
 		if idx is None:
 			return
@@ -1547,6 +1561,21 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				else:
 					info = ti.makeTextInfo(textInfos.offsets.Offsets(sm.enc(p), sm.enc(p)))
 					info.expand(textInfos.UNIT_LINE)
+				txt = (info.text or "").lower()
+				if "thumbnail" in txt:
+					continue
+				try:
+					obj = getattr(info, "NVDAObjectAtStart", None)
+					if obj:
+						name = (getattr(obj, "name", "") or "").lower()
+						if "thumbnail" in name:
+							continue
+						import controlTypes
+						btn = getattr(controlTypes, "ROLE_BUTTON", None)
+						if btn is not None and getattr(obj, "role", None) == btn:
+							continue
+				except Exception:
+					pass
 				yield _Item(itemType, ti, info)
 		except Exception:
 			diag.exception("pdf quick navigation")
@@ -1576,9 +1605,16 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		except Exception:
 			pass
 
-		def patch(name, make):
-			# on every class that has its own (Chrome's buffer has its own cell search)
-			for cls in classes:
+		tableDocClasses = list(classes)
+		try:
+			if hasattr(documentBase, "DocumentWithTableNavigation"):
+				tableDocClasses.append(documentBase.DocumentWithTableNavigation)
+		except Exception:
+			pass
+
+
+		def patchList(clsList, name, make):
+			for cls in clsList:
 				orig = cls.__dict__.get(name) if cls is not VB else getattr(cls, name, None)
 				if orig is None:
 					continue
@@ -1586,10 +1622,27 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				setattr(cls, name, new)
 				self._patched2.append((cls, name, orig, new))
 
+		def patch(name, make):
+			patchList(classes, name, make)
+
 		def coords(orig):
 			def _getTableCellCoords(self, info, *a, **k):
 				try:
-					return orig(self, info, *a, **k)
+					cell = orig(self, info, *a, **k)
+					if plugin._isPdfWindow(getattr(self, "rootNVDAObject", None) or self):
+						try:
+							nr, nc = self._getTableDimensions(info)
+							if nc <= 1:
+								raise LookupError
+							if nr >= 2:
+								tid = getattr(cell, "tableID", cell[0] if isinstance(cell, (list, tuple)) else 0)
+								if not plugin._isViewerTableReal(self, info, tid, nr, nc):
+									raise LookupError
+						except LookupError:
+							raise
+						except Exception:
+							pass
+					return cell
 				except LookupError:
 					try:
 						got = plugin._pdfCellAt(self, info)
@@ -1680,19 +1733,886 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				raise LookupError
 			return _getNearestTableCell
 
+		def _setSelection(target, pos):
+			if hasattr(target, "setSelection"):
+				try:
+					target.setSelection(pos)
+					return
+				except Exception:
+					pass
+			try:
+				target.selection = pos
+			except Exception:
+				pass
+
+		def tableMove(orig):
+			def _tableMovementScriptHelper(self, movement, axis):
+				if not isOn():
+					return orig(self, movement, axis)
+				isPdf = plugin._isPdfWindow(getattr(self, "rootNVDAObject", None) or self)
+				if not isPdf:
+					return orig(self, movement, axis)
+				try:
+					curSel = self.selection
+					cell = self._getTableCellCoords(curSel)
+				except Exception:
+					return orig(self, movement, axis)
+				try:
+					destInfo = self._getNearestTableCell(curSel, cell, movement, axis)
+				except LookupError:
+					try:
+						tones.beep(220, 40)
+					except Exception:
+						pass
+					return
+				except Exception:
+					return orig(self, movement, axis)
+				if destInfo is not None:
+					caret = destInfo.copy()
+					caret.collapse()
+					_setSelection(self, caret)
+					newCell = None
+					try:
+						newCell = self._getTableCellCoords(caret)
+					except Exception:
+						pass
+					curRow = getattr(cell, "row", cell[1] if isinstance(cell, (list, tuple)) else None)
+					curCol = getattr(cell, "col", cell[2] if isinstance(cell, (list, tuple)) else None)
+					newRow = getattr(newCell, "row", newCell[1] if isinstance(newCell, (list, tuple)) else None) if newCell else None
+					newCol = getattr(newCell, "col", newCell[2] if isinstance(newCell, (list, tuple)) else None) if newCell else None
+					tableID = getattr(cell, "tableID", cell[0] if isinstance(cell, (list, tuple)) else None)
+					prevCoord = (curRow, curCol) if curRow is not None and curCol is not None else None
+					newCoord = (newRow, newCol) if newRow is not None and newCol is not None else prevCoord
+					plugin._speakTableCell(self, destInfo, prevCoord=prevCoord, newCoord=newCoord,
+					                       enteredTable=False, tableID=tableID)
+					return
+				return orig(self, movement, axis)
+			return _tableMovementScriptHelper
+
+		def moveLine(direction):
+			def helper(orig):
+				def script_moveByLine(self, gesture):
+					if not isOn():
+						return orig(self, gesture)
+					isPdf = plugin._isPdfWindow(getattr(self, "rootNVDAObject", None) or self)
+					if not isPdf:
+						return orig(self, gesture)
+					return plugin._handlePdfLineMove(self, gesture, direction, orig)
+				return script_moveByLine
+			return helper
+
+		def layoutTable(orig):
+			def isNVDAObjectPartOfLayoutTable(self, obj):
+				if isOn() and plugin._isPdfWindow(getattr(self, "rootNVDAObject", None) or self):
+					try:
+						cc = getattr(obj, "tableColumnCount", None)
+						if cc is not None:
+							return cc <= 1
+					except Exception:
+						pass
+					return False
+				return orig(self, obj)
+			return isNVDAObjectPartOfLayoutTable
+
 		def nodes(orig):
 			def _iterNodesByType(self, itemType, direction="next", pos=None):
 				gen = orig(self, itemType, direction, pos)
 				if itemType != "table" and not str(itemType).startswith("heading"):
 					return gen
-				return plugin._pdfQuickNav(self, gen, itemType, direction, pos)
+				return plugin._pdfQuickNav(self, gen, itemType, direction, pos, orig=orig)
 			return _iterNodesByType
 
 		patch("_getTableCellCoords", coords)
 		patch("_getTableDimensions", dims)
 		patch("_getTableCellAt", cellAt)
 		patch("_getNearestTableCell", nearest)
+		patch("isNVDAObjectPartOfLayoutTable", layoutTable)
+		patch("_tableNav", tableMove)
+		patchList(tableDocClasses, "_tableMovementScriptHelper", tableMove)
+		patch("script_moveByLine_forward", moveLine(1))
+		patch("script_moveByLine_back", moveLine(-1))
 		patch("_iterNodesByType", nodes)
+
+		local = threading.local()
+		try:
+			vbTI = virtualBuffers.VirtualBufferTextInfo
+			origLine = getattr(vbTI, "_getLineOffsets", None)
+			if origLine is not None:
+				def makeLine(orig):
+					def _getLineOffsets(self, offset):
+						if getattr(local, "busy_line", False) or not isOn():
+							return orig(self, offset)
+						local.busy_line = True
+						try:
+							res = orig(self, offset)
+							obj = getattr(self, "obj", None)
+							rootObj = getattr(obj, "rootNVDAObject", None)
+							if not plugin._isPdfWindow(obj) and not plugin._isPdfWindow(rootObj):
+								return res
+							new = plugin._pdfCellLineOffsets(self, offset, res)
+							return new if new is not None else res
+						except Exception:
+							diag.exception("line offsets")
+							return orig(self, offset)
+						finally:
+							local.busy_line = False
+					return _getLineOffsets
+				newLine = makeLine(origLine)
+				setattr(vbTI, "_getLineOffsets", newLine)
+				self._patched2.append((vbTI, "_getLineOffsets", origLine, newLine))
+		except Exception:
+			diag.exception("patch line offsets")
+
+	@staticmethod
+	def _setSelection(target, pos):
+		if hasattr(target, "setSelection"):
+			try:
+				target.setSelection(pos)
+				return
+			except Exception:
+				pass
+		try:
+			target.selection = pos
+		except Exception:
+			pass
+
+	def _cellLineInfos(self, obj, cellInfo):
+		"""Returns a list of TextInfo objects, each covering one line of the cell."""
+		lines = []
+		try:
+			cellStart = getattr(cellInfo, "_startOffset", None)
+			cellEnd = getattr(cellInfo, "_endOffset", None)
+			raw = cellInfo.text or ""
+
+			# 1. Newline-separated lines in raw text (only if multiple lines exist)
+			if raw.strip().count("\n") >= 1:
+				cStart = cellStart if cellStart is not None else 0
+				idx = 0
+				for part in raw.splitlines(True):
+					p_len = len(part)
+					if p_len > 0 and part.strip():
+						seg = cellInfo.copy()
+						if cellStart is not None and cellEnd is not None:
+							seg._startOffset = cStart + idx
+							seg._endOffset = cStart + idx + p_len
+						lines.append(seg)
+					idx += p_len
+				if lines:
+					return lines
+
+			# 2. Virtual buffer UNIT_LINE expansion within cell
+			if cellStart is not None and cellEnd is not None and cellEnd > cellStart:
+				pos = cellStart
+				seen = set()
+				for _ in range(100):
+					if pos >= cellEnd:
+						break
+					probe = cellInfo.copy()
+					probe._startOffset = pos
+					probe._endOffset = min(pos + 1, cellEnd)
+					probe.expand(textInfos.UNIT_LINE)
+
+					st = getattr(probe, "_startOffset", pos)
+					en = getattr(probe, "_endOffset", pos + 1)
+					st = max(cellStart, st)
+					en = min(cellEnd, en)
+
+					if st < en and (st, en) not in seen:
+						seen.add((st, en))
+						seg = cellInfo.copy()
+						seg._startOffset = st
+						seg._endOffset = en
+						if (seg.text or "").strip():
+							lines.append(seg)
+						pos = max(en, getattr(probe, "_endOffset", en))
+					else:
+						pos += 1
+					if pos <= st:
+						pos = st + 1
+				if len(lines) > 1:
+					return lines
+		except Exception:
+			pass
+
+		return [cellInfo.copy()]
+
+	def _getConvertedFields(self, info):
+		if info is None:
+			return []
+		if hasattr(self, "_convertFields"):
+			try:
+				return self._convertFields(info, None) or []
+			except Exception:
+				pass
+		if hasattr(info, "getTextWithFields"):
+			try:
+				return info.getTextWithFields() or []
+			except Exception:
+				pass
+		return []
+
+	def _hasCellCoords(self, info):
+		if info is not None and hasattr(info, "getTextWithFields"):
+			try:
+				for f in info.getTextWithFields():
+					if isinstance(f, textInfos.FieldCommand) and f.command == "controlStart" and f.field:
+						if f.field.get("table-rownumber") is not None or f.field.get("table-columnnumber") is not None:
+							return True
+			except Exception:
+				pass
+		for f in self._getConvertedFields(info):
+			if isinstance(f, textInfos.FieldCommand) and f.command == "controlStart" and f.field:
+				if f.field.get("table-rownumber") is not None or f.field.get("table-columnnumber") is not None:
+					return True
+		return False
+
+	def _hasColumnHeader(self, info):
+		if info is not None and hasattr(info, "getTextWithFields"):
+			try:
+				for f in info.getTextWithFields():
+					if isinstance(f, textInfos.FieldCommand) and f.command == "controlStart" and f.field:
+						if f.field.get("table-columnheadertext"):
+							return True
+			except Exception:
+				pass
+		for f in self._getConvertedFields(info):
+			if isinstance(f, textInfos.FieldCommand) and f.command == "controlStart" and f.field:
+				if f.field.get("table-columnheadertext"):
+					return True
+		return False
+
+	def _hasRowHeader(self, info):
+		if info is not None and hasattr(info, "getTextWithFields"):
+			try:
+				for f in info.getTextWithFields():
+					if isinstance(f, textInfos.FieldCommand) and f.command == "controlStart" and f.field:
+						if f.field.get("table-rowheadertext"):
+							return True
+			except Exception:
+				pass
+		for f in self._getConvertedFields(info):
+			if isinstance(f, textInfos.FieldCommand) and f.command == "controlStart" and f.field:
+				if f.field.get("table-rowheadertext"):
+					return True
+		return False
+
+	def _hasTableRole(self, info):
+		import controlTypes
+		roles = _structureRoles() or {}
+		tableRoles = {roles.get("table"), "table"} - {None}
+		if hasattr(controlTypes, "Role") and hasattr(controlTypes.Role, "TABLE"):
+			tableRoles.add(controlTypes.Role.TABLE)
+		if info is not None and hasattr(info, "getTextWithFields"):
+			try:
+				for f in info.getTextWithFields():
+					if isinstance(f, textInfos.FieldCommand) and f.command == "controlStart" and f.field:
+						if f.field.get("role") in tableRoles:
+							return True
+			except Exception:
+				pass
+		for f in self._getConvertedFields(info):
+			if isinstance(f, textInfos.FieldCommand) and f.command == "controlStart" and f.field:
+				if f.field.get("role") in tableRoles:
+					return True
+		return False
+
+	def _getColumnHeaderForCell(self, obj, cellInfo, tableID, row, col):
+		if not conf().get("announceTableHeaders", True):
+			return ""
+		if cellInfo is not None and hasattr(cellInfo, "getTextWithFields"):
+			try:
+				for f in cellInfo.getTextWithFields():
+					if isinstance(f, textInfos.FieldCommand) and f.command == "controlStart" and f.field:
+						ht = f.field.get("table-columnheadertext")
+						if ht:
+							return str(ht).strip()
+			except Exception:
+				pass
+
+		try:
+			idx = self._readyIndex(getattr(obj, "rootNVDAObject", None) or obj)
+			if idx is not None and getattr(idx, "layout", None) and idx.layout.get("tables"):
+				for ti, t in enumerate(idx.layout["tables"]):
+					cells = t.get("cells", [])
+					r0, c0 = row - 1, col - 1
+					for ci, c in enumerate(cells):
+						if c[0] <= r0 < c[0] + c[2] and c[1] <= c0 < c[1] + c[3]:
+							_t_attrs, c_attrs = pdfLayout.cellAttrs(idx, ti, ci)
+							ht = c_attrs.get("table-columnheadertext")
+							if ht:
+								return str(ht).strip()
+		except Exception:
+			pass
+
+		if row > 1 and hasattr(obj, "_getTableCellAt"):
+			curSel = getattr(obj, "selection", None)
+			try:
+				h1 = obj._getTableCellAt(tableID, curSel, 1, col)
+				t1 = " ".join((h1.text or "").split()) if h1 else ""
+				if row > 2:
+					try:
+						h2 = obj._getTableCellAt(tableID, curSel, 2, col)
+						t2 = " ".join((h2.text or "").split()) if h2 else ""
+						if t1 and t2 and t1 != t2:
+							return f"{t1} {t2}"
+					except Exception:
+						pass
+				if t1:
+					return t1
+			except Exception:
+				pass
+
+		return ""
+
+	def _getRowHeaderForCell(self, obj, cellInfo, tableID, row, col):
+		if not conf().get("announceTableHeaders", True):
+			return ""
+		if cellInfo is not None and hasattr(cellInfo, "getTextWithFields"):
+			try:
+				for f in cellInfo.getTextWithFields():
+					if isinstance(f, textInfos.FieldCommand) and f.command == "controlStart" and f.field:
+						ht = f.field.get("table-rowheadertext")
+						if ht:
+							return str(ht).strip()
+			except Exception:
+				pass
+
+		try:
+			idx = self._readyIndex(getattr(obj, "rootNVDAObject", None) or obj)
+			if idx is not None and getattr(idx, "layout", None) and idx.layout.get("tables"):
+				for ti, t in enumerate(idx.layout["tables"]):
+					cells = t.get("cells", [])
+					r0, c0 = row - 1, col - 1
+					for ci, c in enumerate(cells):
+						if c[0] <= r0 < c[0] + c[2] and c[1] <= c0 < c[1] + c[3]:
+							_t_attrs, c_attrs = pdfLayout.cellAttrs(idx, ti, ci)
+							ht = c_attrs.get("table-rowheadertext")
+							if ht:
+								return str(ht).strip()
+		except Exception:
+			pass
+
+		if col > 1 and hasattr(obj, "_getTableCellAt"):
+			curSel = getattr(obj, "selection", None)
+			try:
+				h1 = obj._getTableCellAt(tableID, curSel, row, 1)
+				t1 = " ".join((h1.text or "").split()) if h1 else ""
+				if t1:
+					return t1
+			except Exception:
+				pass
+
+		return ""
+
+	def _speakTableCell(self, obj, destInfo, prevCoord, newCoord, enteredTable=False, numRows=None, numCols=None, tableID=None):
+		import speech
+		import controlTypes
+
+		parts = []
+		hasTable = self._hasTableRole(destInfo)
+		hasCoords = self._hasCellCoords(destInfo)
+		hasHeader = self._hasColumnHeader(destInfo)
+		hasRowHeader = self._hasRowHeader(destInfo)
+		newRow = newCoord[0] if newCoord else None
+		newCol = newCoord[1] if newCoord else None
+		prevRow = prevCoord[0] if prevCoord else None
+		prevCol = prevCoord[1] if prevCoord else None
+
+		if enteredTable:
+			if numRows and numCols and numCols >= 2 and not hasTable:
+				# Translators: message when entering table
+				parts.append(_("table with %s rows and %s columns") % (numRows, numCols))
+			if not hasCoords and newRow is not None and newCol is not None:
+				parts.append(_("row %s") % newRow)
+				parts.append(_("column %s") % newCol)
+		elif not hasCoords and newRow is not None and newCol is not None:
+			rowChanged = (prevRow is None or prevRow != newRow)
+			colChanged = (prevCol is None or prevCol != newCol)
+			if rowChanged and colChanged:
+				parts.append(_("row %s") % newRow)
+				parts.append(_("column %s") % newCol)
+			elif rowChanged:
+				parts.append(_("row %s") % newRow)
+			elif colChanged:
+				parts.append(_("column %s") % newCol)
+
+		if conf().get("announceTableHeaders", True) and newRow is not None and newCol is not None:
+			rowChanged = (prevRow is None or prevRow != newRow)
+			colChanged = (prevCol is None or prevCol != newCol)
+			if (colChanged or enteredTable) and newRow > 1 and not hasHeader:
+				ch = self._getColumnHeaderForCell(obj, destInfo, tableID, newRow, newCol)
+				if ch:
+					parts.append(ch)
+			if (rowChanged or enteredTable) and newCol > 1 and not hasRowHeader:
+				rh = self._getRowHeaderForCell(obj, destInfo, tableID, newRow, newCol)
+				if rh:
+					parts.append(rh)
+
+		speech.cancelSpeech()
+		if parts:
+			speech.speakMessage(" ".join(parts))
+
+		reason = getattr(getattr(controlTypes, "OutputReason", None), "CARET", None)
+		k = {"reason": reason} if reason is not None else {}
+		speech.speakTextInfo(destInfo, **k)
+
+	def _probeTableEntry(self, obj, curSel, direction):
+		try:
+			if direction == 1:
+				cand = curSel.copy()
+				cand.expand(textInfos.UNIT_LINE)
+				cand.collapse(end=True)
+				candCell, candNr, candNc = None, 0, 0
+				try:
+					candCell = obj._getTableCellCoords(cand)
+					candNr, candNc = obj._getTableDimensions(cand)
+				except Exception:
+					pass
+				if candCell is None or candNc < 2:
+					cand2 = cand.copy()
+					if cand2.move(textInfos.UNIT_CHARACTER, 1):
+						try:
+							candCell = obj._getTableCellCoords(cand2)
+							candNr, candNc = obj._getTableDimensions(cand2)
+						except Exception:
+							pass
+				if candCell is None or candNc < 2:
+					cand3 = curSel.copy()
+					if cand3.move(textInfos.UNIT_LINE, 1):
+						try:
+							candCell = obj._getTableCellCoords(cand3)
+							candNr, candNc = obj._getTableDimensions(cand3)
+						except Exception:
+							pass
+				if candCell is not None and candNc >= 2:
+					tId = getattr(candCell, "tableID", candCell[0] if isinstance(candCell, (list, tuple)) else 0)
+					if candNr >= 2 and not self._isViewerTableReal(obj, cand, tId, candNr, candNc):
+						candCell = None
+					else:
+						try:
+							firstCell = obj._getTableCellAt(tId, curSel, 1, 1)
+						except LookupError:
+							firstCell = None
+						if firstCell is not None:
+							lines = self._cellLineInfos(obj, firstCell)
+							if lines:
+								return (lines[0], (1, 1), tId, candNr, candNc)
+
+			elif direction == -1:
+				cand = curSel.copy()
+				cand.expand(textInfos.UNIT_LINE)
+				cand.collapse(end=False)
+				candCell, candNr, candNc = None, 0, 0
+				cand2 = cand.copy()
+				if cand2.move(textInfos.UNIT_CHARACTER, -1):
+					try:
+						candCell = obj._getTableCellCoords(cand2)
+						candNr, candNc = obj._getTableDimensions(cand2)
+					except Exception:
+						pass
+				if candCell is None or candNc < 2:
+					cand3 = curSel.copy()
+					if cand3.move(textInfos.UNIT_LINE, -1):
+						try:
+							candCell = obj._getTableCellCoords(cand3)
+							candNr, candNc = obj._getTableDimensions(cand3)
+						except Exception:
+							pass
+				if candCell is not None and candNc >= 2:
+					tId = getattr(candCell, "tableID", candCell[0] if isinstance(candCell, (list, tuple)) else 0)
+					if candNr >= 2 and not self._isViewerTableReal(obj, cand, tId, candNr, candNc):
+						candCell = None
+					else:
+						try:
+							lastCell = obj._getTableCellAt(tId, curSel, candNr, candNc)
+						except LookupError:
+							lastCell = None
+						if lastCell is not None:
+							lines = self._cellLineInfos(obj, lastCell)
+							if lines:
+								return (lines[-1], (candNr, candNc), tId, candNr, candNc)
+		except Exception:
+			diag.exception("probe table entry")
+		return None
+
+	def _handlePdfLineMove(self, obj, gesture, direction, orig):
+		try:
+			curSel = getattr(obj, "selection", None)
+			if curSel is None:
+				return orig(obj, gesture)
+			cell = None
+			nr, nc = 0, 0
+			try:
+				cell = obj._getTableCellCoords(curSel)
+				nr, nc = obj._getTableDimensions(curSel)
+			except Exception:
+				cell = None
+				nr, nc = 0, 0
+
+			# If outside table (or in nc <= 1 card stack), probe if moving in this direction enters a table
+			if cell is None or nc < 2:
+				entryInfo = self._probeTableEntry(obj, curSel, direction)
+				if entryInfo is not None:
+					destLine, newCoord, tId, tNr, tNc = entryInfo
+					caret = destLine.copy()
+					caret.collapse()
+					self._setSelection(obj, caret)
+					self._speakTableCell(obj, destLine, prevCoord=None, newCoord=newCoord,
+					                     enteredTable=True, numRows=tNr, numCols=tNc, tableID=tId)
+					return
+				return orig(obj, gesture)
+
+			if hasattr(cell, "tableID"):
+				tableID, curRow, curCol = cell.tableID, cell.row, cell.col
+			else:
+				tableID, curRow, curCol = cell[0], cell[1], cell[2]
+			curStart = getattr(curSel, "_startOffset", None)
+
+			# Retrieve the lines of the current cell
+			try:
+				curCellInfo = obj._getTableCellAt(tableID, curSel, curRow, curCol)
+			except LookupError:
+				curCellInfo = None
+
+			curLines = self._cellLineInfos(obj, curCellInfo) if curCellInfo is not None else []
+			curLineIdx = 0
+			if curStart is not None and len(curLines) > 1:
+				for i, l in enumerate(curLines):
+					lStart = getattr(l, "_startOffset", None)
+					lEnd = getattr(l, "_endOffset", None)
+					if lStart is not None and lEnd is not None:
+						if lStart <= curStart < lEnd:
+							curLineIdx = i
+							break
+						elif curStart >= lEnd:
+							curLineIdx = i
+			elif curStart is None and len(curLines) > 1:
+				for i, l in enumerate(curLines):
+					if curSel.compareEndPoints(l, "startToStart") >= 0:
+						curLineIdx = i
+
+			curCellStart = getattr(curCellInfo, "_startOffset", None) if curCellInfo is not None else None
+
+			if direction == 1:
+				# 1. If current column has another line, step down to it!
+				if curLineIdx + 1 < len(curLines):
+					destLine = curLines[curLineIdx + 1]
+					caret = destLine.copy()
+					caret.collapse()
+					self._setSelection(obj, caret)
+					self._speakTableCell(obj, destLine, prevCoord=(curRow, curCol), newCoord=(curRow, curCol),
+					                     enteredTable=False, tableID=tableID)
+					return
+
+				# 2. Reached the end of current column: find next column in chronological order
+				destInfo = None
+				r = curRow
+				c = curCol + 1
+				destCoord = None
+				while r <= nr:
+					while c <= nc:
+						try:
+							cand = obj._getTableCellAt(tableID, curSel, r, c)
+							if cand is not None:
+								candStart = getattr(cand, "_startOffset", None)
+								if candStart is not None and curCellStart is not None and candStart == curCellStart:
+									pass
+								else:
+									destInfo = cand
+									destCoord = (r, c)
+									break
+						except LookupError:
+							pass
+						c += 1
+					if destInfo is not None:
+						break
+					r += 1
+					c = 1
+
+				if destInfo is not None:
+					candLines = self._cellLineInfos(obj, destInfo)
+					destLine = candLines[0]
+					caret = destLine.copy()
+					caret.collapse()
+					self._setSelection(obj, caret)
+					self._speakTableCell(obj, destLine, prevCoord=(curRow, curCol), newCoord=destCoord,
+					                     enteredTable=False, tableID=tableID)
+					return
+				else:
+					# Reached end of table: let orig continue naturally to following line
+					return orig(obj, gesture)
+
+			elif direction == -1:
+				# 1. If current column has a previous line, step up to it!
+				if curLineIdx - 1 >= 0:
+					destLine = curLines[curLineIdx - 1]
+					caret = destLine.copy()
+					caret.collapse()
+					self._setSelection(obj, caret)
+					self._speakTableCell(obj, destLine, prevCoord=(curRow, curCol), newCoord=(curRow, curCol),
+					                     enteredTable=False, tableID=tableID)
+					return
+
+				# 2. At line 0 of current column: find previous column in chronological order
+				destInfo = None
+				r = curRow
+				c = curCol - 1
+				destCoord = None
+				while r >= 1:
+					while c >= 1:
+						try:
+							cand = obj._getTableCellAt(tableID, curSel, r, c)
+							if cand is not None:
+								candStart = getattr(cand, "_startOffset", None)
+								if candStart is not None and curCellStart is not None and candStart == curCellStart:
+									pass
+								else:
+									destInfo = cand
+									destCoord = (r, c)
+									break
+						except LookupError:
+							pass
+						c -= 1
+					if destInfo is not None:
+						break
+					r -= 1
+					c = nc
+
+				if destInfo is not None:
+					candLines = self._cellLineInfos(obj, destInfo)
+					destLine = candLines[-1]  # Land on the LAST line of the previous column
+					caret = destLine.copy()
+					caret.collapse()
+					self._setSelection(obj, caret)
+					self._speakTableCell(obj, destLine, prevCoord=(curRow, curCol), newCoord=destCoord,
+					                     enteredTable=False, tableID=tableID)
+					return
+				else:
+					# Reached start of table: let orig continue naturally to preceding line
+					return orig(obj, gesture)
+
+			# Outside table (or in nc <= 1 card stack): move natively without skipping
+			return orig(obj, gesture)
+		except Exception:
+			diag.exception("pdf line move")
+			return orig(obj, gesture)
+
+	def _pdfCellLineOffsets(self, ti, offset, res):
+		"""Splits a visual line in a PDF virtual buffer at table cell boundaries so that
+		Down Arrow / Up Arrow line reading moves chronologically cell-by-cell."""
+		lineStart, lineEnd = res
+		if not (lineStart <= offset < lineEnd) or lineEnd - lineStart > 4000:
+			return None
+		lineText = ti._getTextRange(lineStart, lineEnd)
+		if not lineText:
+			return None
+
+		# 1. Try add-on's PDF DocIndex
+		idx = self._readyIndex(getattr(ti, "obj", None))
+		if idx is not None and getattr(idx, "layout", None) and idx.layout.get("tables"):
+			ids = self._lineWords(ti, idx, lineText)
+			if ids:
+				groups = pdfLayout.lineGroups(idx, ids)
+				multiColCells = False
+				for ctx, _wids in groups:
+					if ctx and ctx[0] == "cell":
+						t = idx.layout["tables"][ctx[1]]
+						if t.get("nc", 0) >= 2:
+							multiColCells = True
+							break
+				if multiColCells:
+					offs = pdfLayout.groupOffsets(lineText, idx, groups)
+					if offs is not None and len(offs) == len(groups):
+						spans = []
+						for k in range(len(groups)):
+							s = lineStart + offs[k]
+							e = lineStart + offs[k + 1] if k + 1 < len(offs) else lineEnd
+							spans.append((s, e))
+						if offs[0] > 0:
+							spans.insert(0, (lineStart, lineStart + offs[0]))
+						if len(spans) > 1:
+							for s, e in spans:
+								if s <= offset < e:
+									return (s, e)
+							if offset >= spans[-1][0]:
+								return spans[-1]
+
+		# 2. Try viewer's own virtual buffer fields
+		try:
+			lineInfo = ti.copy()
+			lineInfo._startOffset = lineStart
+			lineInfo._endOffset = lineEnd
+			fields = lineInfo.getTextWithFields()
+		except Exception:
+			fields = None
+
+		if fields:
+			import controlTypes
+			roles = _structureRoles() or {}
+			tableRoles = {roles.get("table"), "table"} - {None}
+			cellRoles = {roles.get("cell"), roles.get("columnheader"), roles.get("rowheader"),
+				"cell", "columnheader", "rowheader"} - {None}
+			spans = []
+			pos = lineStart
+			cur_start = lineStart
+			cur_col_count = 0
+			has_cell = False
+			for f in fields:
+				if isinstance(f, str):
+					pos += len(f)
+				elif isinstance(f, textInfos.FieldCommand):
+					if f.command == "controlStart" and f.field:
+						role = f.field.get("role")
+						if role in tableRoles:
+							try:
+								cur_col_count = int(f.field.get("table-columncount") or 0)
+							except (ValueError, TypeError):
+								cur_col_count = 0
+						elif role in cellRoles:
+							if cur_col_count >= 2 or cur_col_count == 0:
+								if pos > cur_start:
+									spans.append((cur_start, pos))
+								cur_start = pos
+								has_cell = True
+					elif f.command == "controlEnd" and has_cell:
+						if pos > cur_start:
+							spans.append((cur_start, pos))
+							cur_start = pos
+							has_cell = False
+			if pos > cur_start:
+				spans.append((cur_start, pos))
+			if len(spans) > 1:
+				for s, e in spans:
+					if s <= offset < e:
+						return (s, e)
+				if offset >= spans[-1][0]:
+					return spans[-1]
+
+		return None
+
+	def _isViewerTableReal(self, obj, info, tid, nr, nc):
+		if nc < 2:
+			return False
+		if nr < 2:
+			return True
+		if obj is None or not hasattr(obj, "_getTableCellAt"):
+			return True
+		curSel = getattr(obj, "selection", None) or info
+		has_multi = False
+		# Check rows after the top row (r in 2 .. min(nr, 30))
+		for r in range(2, min(nr + 1, 30)):
+			distinct_cells = set()
+			for c in range(1, nc + 1):
+				try:
+					cell = obj._getTableCellAt(tid, curSel, r, c)
+					if cell is not None:
+						txt = " ".join((cell.text or "").split())
+						if txt:
+							st = getattr(cell, "_startOffset", None)
+							distinct_cells.add(st if st is not None else id(cell))
+				except LookupError:
+					pass
+				except Exception:
+					break
+			if len(distinct_cells) >= 2:
+				has_multi = True
+				break
+		return has_multi
+
+	def _filterPdfViewerTableFields(self, info, fields):
+		"""Adjusts table fields from the viewer in a PDF:
+		- Suppresses table/cell announcements for single-column card stacks (nc <= 1) and
+		  tables with multi-column top row but blank/single-column body rows, reading only text.
+		- Removes table-layout suppression flags for multi-column tables (nc >= 2), so border-0 tables
+		  announce table dimensions and row/column coordinates."""
+		roles = _structureRoles() or {}
+		tableRoles = {roles.get("table"), "table"} - {None}
+		cellRoles = {roles.get("cell"), roles.get("columnheader"), roles.get("rowheader"),
+			"cell", "columnheader", "rowheader"} - {None}
+
+		tableDimensions = {}
+		currentTableId = None
+		for f in fields:
+			if isinstance(f, textInfos.FieldCommand) and f.command == "controlStart" and f.field:
+				role = f.field.get("role")
+				if role in tableRoles:
+					tid = f.field.get("table-id") or id(f.field)
+					currentTableId = tid
+					cc = f.field.get("table-columncount")
+					rc = f.field.get("table-rowcount")
+					try:
+						cc = int(cc) if cc is not None else None
+					except (ValueError, TypeError):
+						cc = None
+					try:
+						rc = int(rc) if rc is not None else None
+					except (ValueError, TypeError):
+						rc = None
+					tableDimensions[tid] = [rc, cc]
+				elif role in cellRoles:
+					colNum = f.field.get("table-columnnumber")
+					try:
+						colNum = int(colNum) if colNum is not None else 1
+					except (ValueError, TypeError):
+						colNum = 1
+					if currentTableId is not None and currentTableId in tableDimensions:
+						prev = tableDimensions[currentTableId][1]
+						if prev is None or colNum > prev:
+							tableDimensions[currentTableId][1] = colNum
+
+		# If dimensions not in field, try obj._getTableDimensions
+		for tid, dims in list(tableDimensions.items()):
+			rc, cc = dims[0], dims[1]
+			if cc is None or cc == 0 or rc is None or rc == 0:
+				try:
+					dNr, dNc = info.obj._getTableDimensions(info)
+					if rc is None or rc == 0:
+						dims[0] = dNr
+					if cc is None or cc == 0:
+						dims[1] = dNc
+				except Exception:
+					if dims[0] is None: dims[0] = 1
+					if dims[1] is None: dims[1] = 1
+
+		# Tables to suppress: single-column tables, or multi-column top row with blank / 1-col rest
+		suppressIds = set()
+		for tid, (rc, cc) in tableDimensions.items():
+			if cc is not None and cc <= 1:
+				suppressIds.add(tid)
+			elif rc is not None and cc is not None and rc >= 2 and cc >= 2:
+				if not self._isViewerTableReal(getattr(info, "obj", None), info, tid, rc, cc):
+					suppressIds.add(tid)
+
+		out = []
+		suppressDepth = 0
+		curId = None
+		for f in fields:
+			if isinstance(f, textInfos.FieldCommand):
+				if f.command == "controlStart" and f.field:
+					role = f.field.get("role")
+					if role in tableRoles:
+						curId = f.field.get("table-id") or id(f.field)
+					tid = f.field.get("table-id") or curId
+					if role in tableRoles and tid in suppressIds:
+						suppressDepth += 1
+						continue
+					if role in cellRoles and (tid in suppressIds or suppressDepth > 0):
+						suppressDepth += 1
+						continue
+					if role in tableRoles or role in cellRoles:
+						f.field.pop("table-layout", None)
+						f.field.pop("is-layout-table", None)
+						f.field.pop("layout-table", None)
+						f.field.pop("layout", None)
+						if role in cellRoles and not conf().get("announceTableHeaders", True):
+							f.field.pop("table-columnheadertext", None)
+							f.field.pop("table-rowheadertext", None)
+				elif f.command == "controlEnd":
+					if suppressDepth > 0:
+						suppressDepth -= 1
+						continue
+			out.append(f)
+		return out
 
 	def _realWordOffsets(self, ti, offset, res):
 		"""(start, end) of the whole real word at `offset`, or None to keep the viewer's word."""
@@ -2322,9 +3242,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			rawTitle = (fg.name if fg else "") or ""
 			title = rawTitle.lower()
 			if app not in WEB_APPS:
-				return ".pdf" in title
-			# a browser: decided once per tab and title (answers that say "no" are asked again after
-			# a few seconds, while a PDF may still be loading)
+				return ".pdf" in title or "pdf" in title
+			# a browser: decided once per tab and title
 			key = (fg.windowHandle if fg else None, title)
 			if not hasattr(self, "_pdfTabs"):
 				self._pdfTabs = _LRU(100)
@@ -2334,16 +3253,26 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				return cached[0]
 			from . import pdfLocate
 			url = (pdfLocate._urlFromObject(obj) or "").lower()
-			if url:
-				# the address decides: a web page whose title mentions a .pdf is not a PDF
-				res = pdfLocate._isPdfUrl(url) or self._isPdfViewerObj(obj)
+			res = False
+			if url and (pdfLocate._isPdfUrl(url) or ".pdf" in url):
+				res = True
+			elif ".pdf" in title:
+				res = True
+			elif self._isPdfViewerObj(obj):
+				res = True
+			elif fg and self._isPdfViewerObj(fg):
+				res = True
 			else:
-				res = ".pdf" in title or self._isPdfViewerObj(obj)
-				if not res and not (cached is not None and cached[2]):
-					# last resort, from the title alone: it may search folders and read files, so it
-					# runs in the background and never holds up speech
-					self._lookUpTitleLater(key, rawTitle, getattr(fg, "processID", None))
-			self._pdfTabs.put(key, (res, now + 5.0, True))
+				try:
+					foc = api.getFocusObject()
+					if foc and self._isPdfViewerObj(foc):
+						res = True
+				except Exception:
+					pass
+			if not res and not (cached is not None and cached[2]):
+				self._lookUpTitleLater(key, rawTitle, getattr(fg, "processID", None))
+			cacheExpiry = now + (10.0 if res else 1.0)
+			self._pdfTabs.put(key, (res, cacheExpiry, True))
 			return res
 		except Exception:
 			return False
@@ -2365,35 +3294,33 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
 	@staticmethod
 	def _isPdfViewerObj(obj):
-		"""Detects if an object is inside Chrome/Edge/Brave PDF viewer from UI cues."""
+		"""Fast check if an object is inside Chrome/Edge/Brave PDF viewer without COM lag or freezes."""
 		try:
-			o = getattr(obj, "rootNVDAObject", None) or obj
-			seen = 0
-			while o is not None and seen < 20:
-				seen += 1
-				name = (getattr(o, "name", None) or "").lower()
-				val = (getattr(o, "value", None) or "").lower()
-				desc = (getattr(o, "description", None) or "").lower()
+			for target in (obj, getattr(obj, "treeInterceptor", None), getattr(obj, "rootNVDAObject", None)):
+				if not target:
+					continue
+				ident = getattr(target, "documentConstantIdentifier", "") or ""
+				if ident:
+					low_id = str(ident).lower()
+					if any(m in low_id for m in (".pdf", "mhjfbmdgcfjbbpaeojofohoefgiehjai", "application/pdf", "type=pdf", "=pdf")):
+						return True
+				name = (getattr(target, "name", None) or "").lower()
+				val = (getattr(target, "value", None) or "").lower()
+				desc = (getattr(target, "description", None) or "").lower()
 				if any(marker in name or marker in val or marker in desc for marker in (
-					"pdf is inaccessible", "add text annotations", "save to google drive",
-					"application/pdf", "finished loading pdf", "rotate counterclockwise",
-					"fit to page", "fit to width", "zoom in", "zoom out",
-					"chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai", "pdf viewer", "pdf plugin"
+					".pdf", "application/pdf", "pdf is inaccessible", "text extracted",
+					"pdf viewer", "pdf plugin", "mhjfbmdgcfjbbpaeojofohoefgiehjai"
 				)):
 					return True
+			ti_obj = getattr(obj, "treeInterceptor", None) or obj
+			if hasattr(ti_obj, "makeTextInfo"):
 				try:
-					ia = getattr(o, "IAccessibleObject", None)
-					if ia:
-						accName = (ia.accName(getattr(o, "IAccessibleChildID", 0)) or "").lower()
-						accVal = (ia.accValue(getattr(o, "IAccessibleChildID", 0)) or "").lower()
-						if any(marker in accName or marker in accVal for marker in (
-							"pdf is inaccessible", "add text annotations", "finished loading pdf",
-							"rotate counterclockwise", "fit to page", "application/pdf", "pdf viewer"
-						)):
-							return True
+					ti = ti_obj.makeTextInfo(textInfos.POSITION_FIRST)
+					txt = (ti.text or "")[:120].lower()
+					if any(m in txt for m in ("pdf is inaccessible", "text extracted", "application/pdf")):
+						return True
 				except Exception:
 					pass
-				o = getattr(o, "parent", None)
 		except Exception:
 			pass
 		return False
@@ -2752,7 +3679,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			return True
 
 	def _convertFieldsInner(self, info, formatConfig, c, unit=None):
-		return self._withLayout(info, self._convertFieldsCore(info, formatConfig, c, unit=unit), unit)
+		fields = self._convertFieldsCore(info, formatConfig, c, unit=unit)
+		if self._isPdfWindow(getattr(info, "obj", None)):
+			fields = self._filterPdfViewerTableFields(info, fields)
+		return self._withLayout(info, fields, unit)
 
 	def _convertFieldsCore(self, info, formatConfig, c, unit=None):
 		try:
@@ -2900,13 +3830,19 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			changes = pdfLayout.pieceStyle(idx, ids[0]) if piece else pdfLayout.styleChanges(text, idx, ids)
 			if changes:
 				fields = _applyStyles(fields, changes)
-			mine = set(roles.values())
-			for f in fields:
-				if isinstance(f, textInfos.FieldCommand) and f.command == "controlStart" and f.field and f.field.get("role") in mine:
-					return fields  # the viewer reports this structure itself
 			groups = pdfLayout.lineGroups(idx, ids)
 			if not any(ctx for ctx, _ids in groups):
 				return fields
+			tableRoles = {roles.get("table"), roles.get("cell"), roles.get("columnheader"), roles.get("rowheader")} - {None}
+			hasCellGroup = any(ctx and ctx[0] == "cell" for ctx, _ids in groups)
+			mine = set(roles.values())
+			for f in fields:
+				if isinstance(f, textInfos.FieldCommand) and f.command == "controlStart" and f.field:
+					r = f.field.get("role")
+					if hasCellGroup and r in tableRoles:
+						return self._filterPdfViewerTableFields(info, fields)
+					if not hasCellGroup and r in mine:
+						return self._filterPdfViewerTableFields(info, fields)
 			offs = [0] if piece and len(groups) == 1 else pdfLayout.groupOffsets(text, idx, groups)
 			if offs is None:
 				diag.write("layout: words not placed in %r" % text[:80])
@@ -2915,6 +3851,11 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			if new is None:
 				diag.write("layout: fields not nested in %r" % text[:80])
 				return fields
+			if not conf().get("announceTableHeaders", True):
+				for f in new:
+					if isinstance(f, textInfos.FieldCommand) and f.command == "controlStart" and f.field:
+						f.field.pop("table-columnheadertext", None)
+						f.field.pop("table-rowheadertext", None)
 			return new
 		except Exception:
 			diag.exception("layout fields")
@@ -3618,6 +4559,9 @@ class NepaliReaderSettingsPanel(SettingsPanel):
 		# Translators: settings label
 		self.webCheck = helper.addItem(wx.CheckBox(self, label=_("On web pages and chat apps, convert only text whose font is Preeti, Kruti Dev or similar")))
 		self.webCheck.SetValue(c["webFontOnly"])
+		# Translators: settings label
+		self.announceHeadersCheck = helper.addItem(wx.CheckBox(self, label=_("Announce table column and row headers when navigating PDF tables")))
+		self.announceHeadersCheck.SetValue(c.get("announceTableHeaders", True))
 
 	def onSave(self):
 		c = conf()
@@ -3633,4 +4577,5 @@ class NepaliReaderSettingsPanel(SettingsPanel):
 		c["switchLanguage"] = self.langCheck.GetValue()
 		c["visualCheck"] = self.visualCheck.GetValue()
 		c["webFontOnly"] = self.webCheck.GetValue()
+		c["announceTableHeaders"] = self.announceHeadersCheck.GetValue()
 		_menuSync[0]()

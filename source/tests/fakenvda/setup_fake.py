@@ -14,9 +14,12 @@ class LangChangeCommand:
     def __repr__(self): return f'Lang({self.lang})'
 class Sect(dict):
     def dict(self): return dict(self)
-conf={'nepaliReader':Sect(enabled=True,pdfFile=True,mode='auto',encoding='preeti',autoDetectKruti=True,useFontNames=True,repairUnicode=True,switchLanguage=True,convertSpelling=True,visualCheck=True,webFontOnly=True,lastOnMode='auto',tesseractPath='',ocrLanguages='nep+hin+eng'),'documentFormatting':Sect(reportFontName=False)}
+conf={'nepaliReader':Sect(enabled=True,pdfFile=True,mode='auto',encoding='preeti',autoDetectKruti=True,useFontNames=True,repairUnicode=True,switchLanguage=True,convertSpelling=True,visualCheck=True,webFontOnly=True,announceTableHeaders=True,lastOnMode='auto',tesseractPath='',ocrLanguages='nep+hin+eng'),'documentFormatting':Sect(reportFontName=False)}
 mod('addonHandler', initTranslation=lambda: None)
-mod('globalCommands', GlobalCommands=type('GlobalCommands',(),{'__gestures':{}}))
+mod('globalCommands', GlobalCommands=type('GlobalCommands',(),{'__gestures':{}}), commands=types.SimpleNamespace(_gestureMap={}))
+mod('virtualBuffers', VirtualBuffer=type('VirtualBuffer', (), {'_tableNav': lambda *a, **k: None, '_tableMovementScriptHelper': lambda *a, **k: None, '_caretMovementScriptHelper': lambda *a, **k: None, '_getTableCellCoords': lambda *a, **k: None, '_getTableDimensions': lambda *a, **k: (0, 0), '_getTableCellAt': lambda *a, **k: None, '_getNearestTableCell': lambda *a, **k: None, 'selection': None, 'setSelection': lambda s, c: setattr(s, 'selection', c)}), VirtualBufferTextInfo=type('VirtualBufferTextInfo', (), {}))
+mod('documentBase', DocumentWithTableNavigation=type('DocumentWithTableNavigation', (), {'_tableMovementScriptHelper': lambda *a, **k: None}), _TableCell=type('_TableCell', (), {'__init__': lambda s, *a: setattr(s, '_fields', a)}))
+
 mod('NVDAObjects', NVDAObject=type('NVDAObject',(),{}))
 class Spec(dict): pass
 mod('config', conf=type('C',(dict,),{'spec':Spec()})(conf))
@@ -41,10 +44,10 @@ class ControlField(dict): pass
 import enum
 class TextAlign(str, enum.Enum):
     LEFT='left'; CENTER='center'; RIGHT='right'; JUSTIFY='justify'
-mod('controlTypes', TextAlign=TextAlign, Role=types.SimpleNamespace(TABLE='table', TABLECELL='cell', TABLECOLUMNHEADER='columnheader', TABLEROWHEADER='rowheader', HEADING='heading'))
+mod('controlTypes', TextAlign=TextAlign, Role=types.SimpleNamespace(TABLE='table', TABLECELL='cell', TABLECOLUMNHEADER='columnheader', TABLEROWHEADER='rowheader', HEADING='heading'), OutputReason=types.SimpleNamespace(CARET='caret'))
 mod('textInfos', FieldCommand=FieldCommand, FormatField=FormatField, ControlField=ControlField, UNIT_CHARACTER='character', UNIT_LINE='line', UNIT_WORD='word', UNIT_PARAGRAPH='paragraph', POSITION_SELECTION='sel')
 mod('api', getForegroundObject=lambda: types.SimpleNamespace(windowHandle=state['fg'], name=state['title']), getFocusObject=lambda: types.SimpleNamespace(windowClassName='X', appModule=types.SimpleNamespace(appName=state['app'])), getCaretPosition=lambda: Info(), getReviewPosition=lambda: Info(), getClipData=lambda: '', copyToClip=lambda t: None)
-mod('globalPluginHandler', GlobalPlugin=type('GP',(),{'__init__':lambda s,*a,**k:None,'terminate':lambda s:None}))
+mod('globalPluginHandler', GlobalPlugin=type('GP',(),{'__init__':lambda s,*a,**k:None,'terminate':lambda s:None}), runningPlugins=[])
 mod('gui', guiHelper=None); mod('gui.guiHelper')
 class NVDASettingsDialog: categoryClasses=[]
 mod('gui.settingsDialogs', NVDASettingsDialog=NVDASettingsDialog, SettingsPanel=object)
@@ -78,6 +81,12 @@ spoken_menu=[]
 def speak(seq,**kw): spoken_menu.append(seq)
 spm.speak=speak; sp.speak=speak
 say=mod('speech.sayAll'); say.SayAllHandler=types.SimpleNamespace(_getTextInfoSpeech=getTextInfoSpeech); sp.sayAll=say
+sp.cancelSpeech = lambda: None
+spm.cancelSpeech = lambda: None
+sp.speakMessage = lambda m: spoken.append(m)
+spm.speakMessage = lambda m: spoken.append(m)
+sp.speakTextInfo = lambda *a, **k: None
+spm.speakTextInfo = lambda *a, **k: None
 
 import ctypes
 class SB:
@@ -90,3 +99,9 @@ sys.modules['textInfos'].convertToCrlf = lambda t: t.replace('\n', '\r\n')
 class _TI:
     def copyToClipboard(self, notify=False): return True
 sys.modules['textInfos'].TextInfo = _TI
+mod('synthDrivers')
+mod('inputCore')
+mod('cursorManager', CursorManager=type('CursorManager', (), {'script_copyToClipboard': lambda s, g: None}))
+spm.speakSelectionChange = lambda *a, **k: None
+sp.speakSelectionChange = lambda *a, **k: None
+

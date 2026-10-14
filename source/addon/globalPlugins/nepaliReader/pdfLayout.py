@@ -393,7 +393,7 @@ def gridTables(hs, vs):
 		ys = _snap(sorted({c[1] for c in group} | {c[3] for c in group}), reverse=True)
 		nc = len(xs) - 1
 		nr = len(ys) - 1
-		if nr < 2 or nc < 2 or len(group) < 3:
+		if nr < 1 or nc < 2 or len(group) < 2:
 			continue
 		tc = []
 		for x0, y0, x1, y1 in (c[:4] for c in group):
@@ -748,7 +748,7 @@ def analyse(struct, pageTables, boxes, order, pageLines=None, pageImages=None):
 					filled += 1
 				th = bool(ws) and sum(1 for i in ws if i in tagCell and struct["tables"][tagCell[i][0]][tagCell[i][1]][tagCell[i][2]]["th"]) * 2 > len(ws)
 				cells.append([r0, c0, rs, cs, 1 if th else 0, ws])
-			if filled < 2:
+			if filled < 2 or t["nc"] < 2 or not _isRealTable(t["nr"], t["nc"], cells):
 				for c in cells:
 					used.difference_update(c[5])
 				continue
@@ -762,7 +762,7 @@ def analyse(struct, pageTables, boxes, order, pageLines=None, pageImages=None):
 			byTag.setdefault(cell[0], {}).setdefault((cell[1], cell[2]), []).append(i)
 		for ti, cellWords in sorted(byTag.items()):
 			rows = struct["tables"][ti]
-			if len(rows) < 2 or len(cellWords) < 2:
+			if len(rows) < 1 or len(cellWords) < 2:
 				continue
 			cells = []
 			ncols = 0
@@ -771,6 +771,8 @@ def analyse(struct, pageTables, boxes, order, pageLines=None, pageImages=None):
 				ws = sorted(cellWords.get((ri, ci), []))
 				cells.append([ri, col, info["rs"], info["cs"], 1 if info["th"] else 0, ws])
 				ncols = max(ncols, col + info["cs"])
+			if ncols < 2 or not _isRealTable(len(rows), ncols, cells):
+				continue
 			allWords = [i for c in cells for i in c[5]]
 			pn = boxes[order.index(min(allWords))][0] if allWords and min(allWords) in order else 0
 			tables.append({"p": pn, "nr": len(rows), "nc": ncols, "cells": cells})
@@ -818,6 +820,24 @@ def _wholeTable(t, words, used):
 	return (beside + loose) * 10 <= inside
 
 
+def _isRealTable(nr, nc, cells):
+	"""A table must have at least 2 columns. If it has 2 or more rows, it cannot be just
+	N columns in the top row while the rest of the rows are all blank or have only one column."""
+	if nc < 2:
+		return False
+	if nr < 2:
+		filled_cells = [c for c in cells if c and len(c) > 5 and c[5]]
+		return len(filled_cells) >= 2
+	has_multi_col_row = False
+	for r in range(1, nr):
+		row_cells = [c for c in cells if c and len(c) > 5 and c[5] and c[0] <= r < c[0] + c[2]]
+		distinct_cols = {c[1] for c in row_cells}
+		if len(distinct_cols) >= 2 or len(row_cells) >= 2:
+			has_multi_col_row = True
+			break
+	return has_multi_col_row
+
+
 # ---------------------------------------------------------------- reading the layout
 
 
@@ -825,6 +845,8 @@ def cellIndex(layout):
 	"""index word -> (table number, cell number)."""
 	out = {}
 	for ti, t in enumerate(layout.get("tables") or ()):
+		if not _isRealTable(t.get("nr", 0), t.get("nc", 0), t.get("cells", [])):
+			continue
 		for ci, c in enumerate(t["cells"]):
 			for i in c[5]:
 				out[i] = (ti, ci)
@@ -984,6 +1006,33 @@ def lineGroups(idx, ids):
 	return out
 
 
+def _detectHeaderRows(t, cells):
+	nr = t.get("nr", 0)
+	nc = t.get("nc", 0)
+	if nr < 2:
+		return set()
+	# 1. Tagged TH cells from PDF structure tree
+	rowsTh = {}
+	for x in cells:
+		if x[5]:
+			rowsTh.setdefault(x[0], []).append(bool(x[4]))
+	tagged = {r for r, v in rowsTh.items() if v and all(v)}
+	if tagged:
+		return tagged
+
+	# 2. Visual ruling table (untagged): row 0 is primary header
+	hRows = {0}
+	# Multi-row / split header check (e.g. row 0 with 2 cols, row 1 with 3 cols):
+	if nr >= 3 and nc >= 2:
+		row0_cells = [x for x in cells if x[0] == 0]
+		row1_cells = [x for x in cells if x[0] == 1]
+		has_spanning = any(x[3] > 1 or x[2] > 1 for x in row0_cells)
+		row0_fewer = len(row0_cells) < nc
+		if (has_spanning or row0_fewer) and row1_cells:
+			hRows.add(1)
+	return hRows
+
+
 def cellAttrs(idx, ti, ci):
 	"""(table attributes, cell attributes) as NVDA's table fields have them; roles as names:
 	"table", "cell", "columnheader", "rowheader"."""
@@ -996,16 +1045,11 @@ def cellAttrs(idx, ti, ci):
 	cells = t["cells"]
 	c = cells[ci]
 	r0, c0, rs, cs, th = c[0], c[1], c[2], c[3], c[4]
-	# header rows: every cell with text in the row is a header cell
-	rowsTh = {}
-	for x in cells:
-		if x[5]:
-			rowsTh.setdefault(x[0], []).append(bool(x[4]))
-	headerRows = {r for r, v in rowsTh.items() if v and all(v)}
+	headerRows = _detectHeaderRows(t, cells)
 	text = lambda x: " ".join(_wordText(idx.words[i]) for i in x[5])
-	colHead = [text(x) for x in cells if x[4] and x[0] in headerRows and x[0] < r0 and x[1] <= c0 < x[1] + x[3] and x[5]]
-	rowHead = [text(x) for x in cells if x[4] and x[0] not in headerRows and x[0] <= r0 < x[0] + x[2] and x[1] < c0 and x[5]]
-	if th:
+	colHead = [text(x) for x in cells if (x[4] or x[0] in headerRows) and x[0] in headerRows and x[0] < r0 and x[1] <= c0 < x[1] + x[3] and x[5]]
+	rowHead = [text(x) for x in cells if (x[4] or x[0] in headerRows) and x[0] not in headerRows and x[0] <= r0 < x[0] + x[2] and x[1] < c0 and x[5]]
+	if th or r0 in headerRows:
 		role = "columnheader" if r0 in headerRows else "rowheader"
 	else:
 		role = "cell"

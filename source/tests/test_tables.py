@@ -177,6 +177,10 @@ class VirtualBuffer:
     def _getTableCellAt(self, tableID, startPos, row, column): raise LookupError
     def _getNearestTableCell(self, startPos, cell, movement, axis): raise LookupError
     def _iterNodesByType(self, itemType, direction='next', pos=None): return iter(())
+    def _tableNav(self, movement, axis): pass
+    def _tableMovementScriptHelper(self, movement, axis): pass
+    def script_moveByLine_forward(self, gesture): pass
+    def script_moveByLine_back(self, gesture): pass
 vb = F.mod('virtualBuffers', VirtualBuffer=VirtualBuffer); vb.__path__=[]
 class QNItem:
 	def __init__(self, itemType, document, textInfo):
@@ -314,5 +318,401 @@ check('cell in the middle of a line: its own row', rows, [2])
 got = p._withLayout(TInfo(five, five + 1), [FC('formatChange', TI.FormatField()), '५'], 'character')
 rows = [f.field.get('table-rownumber') for f in got if isinstance(f, FC) and f.command == 'controlStart' and f.field.get('table-rownumber')]
 check('a character keeps its cell (no "out of table")', rows, [2])
+# single-column table rejected in gridTables
+hs_1col = [(0, 300, 100), (0, 200, 100), (0, 100, 100)]
+vs_1col = [(0, 100, 300), (100, 100, 300)]
+tables_1col = L.gridTables(hs_1col, vs_1col)
+check('single-column grid rejected', len(tables_1col), 0)
+
+# 1-row, 2-col table accepted in gridTables
+hs_1row = [(200, 0, 200), (100, 0, 200)]
+vs_1row = [(0, 100, 200), (100, 100, 200), (200, 100, 200)]
+tables_1row = L.gridTables(hs_1row, vs_1row)
+check('1-row multi-col grid accepted', len(tables_1row), 1)
+check('1-row multi-col dimensions', (tables_1row[0]['nr'], tables_1row[0]['nc']), (1, 2))
+
+# Viewer table with border=0 (table-layout: 1) and 2 columns: table-layout stripped
+tbl_fields = [
+    FC('controlStart', TI.ControlField(role='table', **{'table-id': 10, 'table-rowcount': 2, 'table-columncount': 2, 'table-layout': '1'})),
+    FC('controlStart', TI.ControlField(role='cell', **{'table-id': 10, 'table-rownumber': 1, 'table-columnnumber': 1, 'table-layout': '1'})),
+    'युद्ध',
+    FC('controlEnd', None),
+    FC('controlEnd', None)
+]
+filtered = p._filterPdfViewerTableFields(LineInfo('test', []), tbl_fields)
+check('border-0 multi-col table removes layout flag', [f.field.get('table-layout') for f in filtered if isinstance(f, FC) and f.command == 'controlStart'], [None, None])
+check('border-0 multi-col preserves table role', [f.field.get('role') for f in filtered if isinstance(f, FC) and f.command == 'controlStart'], ['table', 'cell'])
+
+# Viewer table with 1 column (e.g. 6 rows 1 column cards): table and cell fields stripped
+card_fields = [
+    FC('controlStart', TI.ControlField(role='table', **{'table-id': 20, 'table-rowcount': 6, 'table-columncount': 1})),
+    FC('controlStart', TI.ControlField(role='cell', **{'table-id': 20, 'table-rownumber': 1, 'table-columnnumber': 1})),
+    'कार्ड १',
+    FC('controlEnd', None),
+    FC('controlEnd', None)
+]
+filtered_cards = p._filterPdfViewerTableFields(LineInfo('test', []), card_fields)
+check('single-column table fields stripped', [f for f in filtered_cards if isinstance(f, FC)], [])
+check('single-column table text kept', ''.join(f for f in filtered_cards if isinstance(f, str)), 'कार्ड १')
+
+# Down arrow line offset splitting: chronologically cell-by-cell
+import types
+tinfo = TInfo(0, len('क ५ ख'))
+tinfo.obj = types.SimpleNamespace(rootNVDAObject=object())
+offsets0 = p._pdfCellLineOffsets(tinfo, 0, (0, len('क ५ ख')))
+check('line offset for cell 0', offsets0, (0, 2))
+offsets1 = p._pdfCellLineOffsets(tinfo, 2, (0, len('क ५ ख')))
+check('line offset for cell 1', offsets1, (2, 4))
+offsets2 = p._pdfCellLineOffsets(tinfo, 4, (0, len('क ५ ख')))
+check('line offset for cell 2', offsets2, (4, 5))
+
+# Multi-line cell table navigation with Ctrl+Alt+Arrows
+ml_story = 'शीर्षक\nपहिलो लाइन दोस्रो लाइन\n'
+story = ml_story
+spoken_nav = []
+F.sp.speakTextInfo = lambda info, *a, **k: spoken_nav.append(info.text)
+doc._getNearestTableCell = lambda info, cell, movement, axis: TInfo(7, len(ml_story) - 1)
+doc.selection = TInfo(0, 0)
+doc._getTableCellCoords = lambda info: TC(L.TABLE_ID_BASE, 1, 1)
+doc._tableNav('next', 'column')
+check('tableNav speaks full cell across lines', spoken_nav[-1], 'पहिलो लाइन दोस्रो लाइन')
+
+# Chronological Down Arrow navigation in a table (cell-by-cell)
+tbl_cells = {
+	(1, 1): TInfo(0, 5),   # Row 1 Col 1
+	(1, 2): TInfo(6, 12),  # Row 1 Col 2
+	(2, 1): TInfo(13, 20), # Row 2 Col 1
+	(2, 2): TInfo(21, 30), # Row 2 Col 2
+}
+def mock_getTableCellAt(tid, sPos, r, c):
+	if (r, c) in tbl_cells:
+		return tbl_cells[(r, c)]
+	raise LookupError
+doc._getTableCellAt = mock_getTableCellAt
+doc._getTableDimensions = lambda info: (2, 2)
+def mock_coords(info):
+	st = getattr(info, '_startOffset', 0)
+	for (r, c), ti in tbl_cells.items():
+		if ti._startOffset <= st < ti._endOffset:
+			return TC(L.TABLE_ID_BASE, r, c)
+	raise LookupError
+doc._getTableCellCoords = mock_coords
+
+# Caret at Row 1, Col 1
+doc.selection = tbl_cells[(1, 1)].copy()
+spoken_down = []
+F.sp.speakTextInfo = lambda info, *a, **k: spoken_down.append((info._startOffset, info._endOffset))
+
+# Down Arrow 1: moves to Row 1, Col 2
+doc.script_moveByLine_forward(None)
+check('down arrow moves to row 1 col 2', spoken_down[-1], (6, 12))
+
+# Down Arrow 2: moves to Row 2, Col 1
+doc.script_moveByLine_forward(None)
+check('down arrow moves to row 2 col 1', spoken_down[-1], (13, 20))
+
+# Down Arrow 3: moves to Row 2, Col 2
+doc.script_moveByLine_forward(None)
+check('down arrow moves to row 2 col 2', spoken_down[-1], (21, 30))
+
+# Up Arrow 1: moves back to Row 2, Col 1
+doc.script_moveByLine_back(None)
+check('up arrow moves back to row 2 col 1', spoken_down[-1], (13, 20))
+
+# Multi-line column navigation test:
+# Row 1 Col 1 has 3 lines: 'क १\nक २\nक ३' (0..11)
+# Row 1 Col 2 has 1 line: 'ख १' (12..16)
+ml_cells = {
+	(1, 1): TInfo(0, 11),  # text = 'क १\nक २\nक ३'
+	(1, 2): TInfo(12, 16), # text = 'ख १'
+}
+story = 'क १\nक २\nक ३\nख १\n'
+doc._getTableCellAt = lambda tid, sPos, r, c: ml_cells.get((r, c)) or (_ for _ in ()).throw(LookupError)
+doc._getTableDimensions = lambda info: (1, 2)
+def mock_ml_coords(info):
+	st = getattr(info, '_startOffset', 0)
+	for (r, c), ti in ml_cells.items():
+		if ti._startOffset <= st < ti._endOffset:
+			return TC(L.TABLE_ID_BASE, r, c)
+	raise LookupError
+doc._getTableCellCoords = mock_ml_coords
+
+# Start at Line 1 of Col 1
+doc.selection = TInfo(0, 4)
+ml_spoken = []
+F.sp.speakTextInfo = lambda info, *a, **k: ml_spoken.append(info.text.strip())
+
+# Down Arrow 1: moves to Line 2 of Col 1
+doc.script_moveByLine_forward(None)
+check('multiline col1 down arrow step 1: line 2', ml_spoken[-1], 'क २')
+
+# Down Arrow 2: moves to Line 3 of Col 1
+doc.script_moveByLine_forward(None)
+check('multiline col1 down arrow step 2: line 3', ml_spoken[-1], 'क ३')
+
+# Down Arrow 3: moves to Col 2
+doc.script_moveByLine_forward(None)
+check('multiline col1 down arrow step 3: col 2', ml_spoken[-1], 'ख १')
+
+# Up Arrow 1 from Col 2: moves back to LAST line of Col 1 (Line 3)
+doc.script_moveByLine_back(None)
+check('multiline up arrow back to last line of col 1', ml_spoken[-1], 'क ३')
+
+# Up Arrow 2: moves to Line 2 of Col 1
+doc.script_moveByLine_back(None)
+check('multiline up arrow back to line 2 of col 1', ml_spoken[-1], 'क २')
+
+# Up Arrow 3: moves to Line 1 of Col 1
+doc.script_moveByLine_back(None)
+check('multiline up arrow back to line 1 of col 1', ml_spoken[-1], 'क १')
+
+# Text above table test:
+orig_called = []
+def fake_orig(s, g):
+	orig_called.append(True)
+	return True
+doc.selection = TInfo(100, 105)
+doc._getTableCellCoords = lambda info: (_ for _ in ()).throw(LookupError)
+p._handlePdfLineMove(doc, None, 1, fake_orig)
+check('text above table calls orig without skipping', len(orig_called) > 0, True)
+
+# Table exit boundaries cleanly calling orig:
+# 1. Down Arrow past last cell of table
+doc._getTableCellCoords = mock_ml_coords
+doc.selection = TInfo(12, 16) # Col 2 (last cell)
+orig_down = []
+p._handlePdfLineMove(doc, None, 1, lambda s, g: orig_down.append(True))
+check('down arrow past last cell cleanly calls orig', len(orig_down) > 0, True)
+
+# 2. Up Arrow before first cell of table
+doc.selection = TInfo(0, 4) # Col 1 Line 1 (first line of first cell)
+orig_up = []
+p._handlePdfLineMove(doc, None, -1, lambda s, g: orig_up.append(True))
+check('up arrow before first cell cleanly calls orig', len(orig_up) > 0, True)
+
+# Chrome AI / OCR PDF detection test
+class MockOcrDoc:
+	def makeTextInfo(self, pos):
+		return types.SimpleNamespace(text="This PDF is inaccessible. Text extracted, powered by Google AI\nTable data...", expand=lambda u: None)
+mock_ocr = MockOcrDoc()
+check('detects Chrome AI extracted PDF', p._isPdfViewerObj(mock_ocr), True)
+
+# Quick Nav thumbnail protection tests:
+# 1. When viewer has native headings, running out of headings at pos does NOT synthesize off-screen items
+native_heading = QNItem('heading', doc, TInfo(0, 5))
+def fake_orig_with_native(obj, itemType, direction, pos):
+	if pos is None:
+		yield native_heading
+	# at pos != None (e.g. end of page), return empty
+qn_result = list(p._pdfQuickNav(doc, iter(()), 'heading', 'next', TInfo(10, 10), orig=fake_orig_with_native))
+check('native headings present stops synthesis at page boundary', qn_result, [])
+
+# 2. Candidate items matching thumbnail text are blocked
+doc_thumb = Doc()
+doc_thumb.makeTextInfo = lambda pos: types.SimpleNamespace(text="Page 2 thumbnail", expand=lambda u: None, copy=lambda: types.SimpleNamespace(text="Page 2 thumbnail", collapse=lambda: None))
+thumb_qn = list(p._pdfQuickNav(doc_thumb, iter(()), 'heading', 'next', None))
+check('thumbnail text is blocked from quick nav', thumb_qn, [])
+
+# Table lookahead entry from text above table:
+story = 'शीर्षक\nघटना जिल्ला\nसर्पदंश सिरहा\nपछि\n'
+doc_entry = Doc()
+g_start = story.find('घटना')
+j_start = story.find('जिल्ला')
+s_start = story.find('सर्पदंश')
+si_start = story.find('सिरहा')
+p_start = story.find('पछि')
+
+doc_entry_cells = {
+	(1, 1): TInfo(g_start, g_start + len('घटना')),
+	(1, 2): TInfo(j_start, j_start + len('जिल्ला')),
+	(2, 1): TInfo(s_start, s_start + len('सर्पदंश')),
+	(2, 2): TInfo(si_start, si_start + len('सिरहा')),
+}
+doc_entry._getTableDimensions = lambda info: (2, 2)
+def mock_entry_coords(info):
+	st = getattr(info, '_startOffset', 0)
+	for (r, c), ti in doc_entry_cells.items():
+		if ti._startOffset <= st < ti._endOffset:
+			return TC(L.TABLE_ID_BASE, r, c)
+	raise LookupError
+doc_entry._getTableCellCoords = mock_entry_coords
+doc_entry._getTableCellAt = lambda tid, sp, r, c: doc_entry_cells.get((r, c)) or (_ for _ in ()).throw(LookupError)
+
+# Caret on line above table: 'शीर्षक'
+doc_entry.selection = TInfo(0, 5)
+entry_orig_called = []
+entry_spoken = []
+F.sp.speakTextInfo = lambda info, *a, **k: entry_spoken.append(info.text.strip())
+F.spoken.clear()
+p._handlePdfLineMove(doc_entry, None, 1, lambda o, g: entry_orig_called.append(True))
+check('table entry lookahead Down Arrow does not call orig', len(entry_orig_called), 0)
+check('table entry lookahead lands on row 1 col 1', (doc_entry.selection._startOffset, doc_entry.selection._endOffset), (g_start, g_start))
+check('table entry lookahead speaks row 1 col 1 cell text', entry_spoken[-1], 'घटना')
+check('table entry lookahead speaks table dimensions and coordinates', any('table with 2 rows and 2 columns' in s for s in F.spoken), True)
+
+# Table lookahead entry from text below table:
+# Caret on line below table: 'पछि'
+doc_entry.selection = TInfo(p_start, p_start + len('पछि'))
+entry_up_orig_called = []
+entry_up_spoken = []
+F.sp.speakTextInfo = lambda info, *a, **k: entry_up_spoken.append(info.text.strip())
+p._handlePdfLineMove(doc_entry, None, -1, lambda o, g: entry_up_orig_called.append(True))
+check('table entry lookahead Up Arrow does not call orig', len(entry_up_orig_called), 0)
+check('table entry lookahead Up Arrow lands on last cell (row 2 col 2)', (doc_entry.selection._startOffset, doc_entry.selection._endOffset), (si_start, si_start))
+
+# Cell containing <h2> heading preserves both heading and table cell structure:
+p._readyIndex = lambda o: idx
+h2_fields = [FC('controlStart', TI.ControlField(role='heading', level=2)), 'सर्पदंश सिरहा', FC('controlEnd', None)]
+h2_got = p._withLayout(LineInfo('line2', []), h2_fields)
+check('cell styled as h2 has table role', any(f.command == 'controlStart' and dict(f.field or {}).get('role') == 'table' for f in h2_got if isinstance(f, FC)), True)
+check('cell styled as h2 has cell role', any(f.command == 'controlStart' and dict(f.field or {}).get('role') == 'cell' for f in h2_got if isinstance(f, FC)), True)
+check('cell styled as h2 preserves heading role', any(f.command == 'controlStart' and dict(f.field or {}).get('role') == 'heading' for f in h2_got if isinstance(f, FC)), True)
+
+# Split / 2-row multi-level table header detection:
+# Table with 3 rows, 2 cols:
+# Row 0: spanning header 'मुख्य' (1 cell spanning 2 cols, or fewer than nc)
+# Row 1: sub-headers 'क', 'ख'
+# Row 2: data cells '१', '२'
+split_idx = Idx()
+split_idx.words = [(w, None, None, w) for w in ['मुख्य', 'क', 'ख', '१', '२']]
+split_idx.lineStart = [True, True, False, True, False]
+split_idx.layout = {'tables': [{
+	'p': 0, 'nr': 3, 'nc': 2, 'cells': [
+		[0, 0, 1, 2, 0, [0]], # Row 0, col 0, spans 2 cols: 'मुख्य'
+		[1, 0, 1, 1, 0, [1]], # Row 1, col 0: 'क'
+		[1, 1, 1, 1, 0, [2]], # Row 1, col 1: 'ख'
+		[2, 0, 1, 1, 0, [3]], # Row 2, col 0: '१'
+		[2, 1, 1, 1, 0, [4]], # Row 2, col 1: '२'
+	]
+}], 'blocks': None, 'heads': {}, 'wpage': [0] * 5}
+L._layoutCache(split_idx)
+split_hrows = L._detectHeaderRows(split_idx.layout['tables'][0], split_idx.layout['tables'][0]['cells'])
+check('split header detects row 0 and row 1 as header rows', split_hrows, {0, 1})
+_, split_data_cell = L.cellAttrs(split_idx, 0, 3) # cell 3 is row 2 col 0 ('१')
+check('split header combines row 0 and row 1 text into column header', split_data_cell.get('table-columnheadertext'), 'मुख्य क')
+
+# announceTableHeaders toggle in settings:
+F.conf['nepaliReader']['announceTableHeaders'] = False
+got_no_headers = p._withLayout(LineInfo('line2', []), [FC('controlStart', para), 'सर्पदंश सिरहा', FC('controlEnd', None)])
+check('announceTableHeaders=False removes column header text', any(dict(f.field or {}).get('table-columnheadertext') for f in got_no_headers if isinstance(f, FC) and f.command == 'controlStart'), False)
+F.conf['nepaliReader']['announceTableHeaders'] = True
+
+# Duplicate announcement prevention in _speakTableCell:
+test_layout_idx = Idx()
+test_layout_idx.words = [('नाम', None, None, 'नाम'), ('थर', None, None, 'थर'), ('रोशन', None, None, 'रोशन'), ('गौतम', None, None, 'गौतम')]
+test_layout_idx.lineStart = [True, False, True, False]
+test_layout_idx.layout = {'tables': [{
+	'p': 0, 'nr': 2, 'nc': 2, 'cells': [
+		[0, 0, 1, 1, 0, [0]], # Header cell 'नाम'
+		[0, 1, 1, 1, 0, [1]], # Header cell 'थर'
+		[1, 0, 1, 1, 0, [2]], # Data cell 'रोशन'
+		[1, 1, 1, 1, 0, [3]], # Data cell 'गौतम'
+	]
+}], 'blocks': None, 'heads': {}, 'wpage': [0, 0, 0, 0]}
+L._layoutCache(test_layout_idx)
+def mock_locate_layout(text, before, after, part=None, where=None):
+	if 'नाम' in text: return [0]
+	if 'थर' in text: return [1]
+	if 'रोशन' in text: return [2]
+	if 'गौतम' in text: return [3]
+	return None
+test_layout_idx.locate = mock_locate_layout
+
+class TestDoc: pass
+class TestCellInfo:
+	def __init__(self, text):
+		self.text = text
+		self.obj = TestDoc()
+	def getTextWithFields(self, fc=None):
+		return [self.text]
+
+test_cell_info = TestCellInfo('रोशन')
+p._readyIndex = lambda o: test_layout_idx
+p._isPdfWindow = lambda o: True
+
+check('layout cell hasCoords returns True', p._hasCellCoords(test_cell_info), True)
+check('layout cell hasHeader returns True', p._hasColumnHeader(test_cell_info), True)
+
+F.spoken.clear()
+p._speakTableCell(test_cell_info.obj, test_cell_info, prevCoord=(1, 1), newCoord=(2, 1), enteredTable=False, tableID=0)
+check('cell move with layout does not emit redundant speakMessage', len(F.spoken), 0)
+
+# Fallback when layout is absent:
+fallback_info = TestCellInfo('रोशन')
+p._readyIndex = lambda o: None
+p._isPdfWindow = lambda o: False
+F.spoken.clear()
+p._speakTableCell(fallback_info.obj, fallback_info, prevCoord=(1, 1), newCoord=(2, 1), enteredTable=False, tableID=0)
+check('cell move without layout uses fallback speakMessage', F.spoken, ['row 2'])
+
+# Rejecting tables with N cols in top row and blank / 1-col rest:
+# 1. Top row 2 cols, rest blank: rejected in pdfLayout
+c_blank_body = [
+	[0, 0, 1, 1, 0, [0]], [0, 1, 1, 1, 0, [1]],
+	[1, 0, 1, 1, 0, []], [1, 1, 1, 1, 0, []],
+	[2, 0, 1, 1, 0, []], [2, 1, 1, 1, 0, []],
+]
+check('top row multi-col with blank body rows rejected', L._isRealTable(3, 2, c_blank_body), False)
+
+# 2. Top row 2 cols, rest only 1 col (e.g. spanning across): rejected in pdfLayout
+c_1col_body = [
+	[0, 0, 1, 1, 0, [0]], [0, 1, 1, 1, 0, [1]],
+	[1, 0, 1, 2, 0, [2]],
+	[2, 0, 1, 2, 0, [3]],
+]
+check('top row multi-col with 1-col body rows rejected', L._isRealTable(3, 2, c_1col_body), False)
+
+# 3. Top row 2 cols, rest has only col 0 filled (col 1 blank): rejected in pdfLayout
+c_partial_1col = [
+	[0, 0, 1, 1, 0, [0]], [0, 1, 1, 1, 0, [1]],
+	[1, 0, 1, 1, 0, [2]], [1, 1, 1, 1, 0, []],
+	[2, 0, 1, 1, 0, [3]], [2, 1, 1, 1, 0, []],
+]
+check('top row multi-col with only 1 column populated in body rejected', L._isRealTable(3, 2, c_partial_1col), False)
+
+# 4. Real 2x2 table: accepted in pdfLayout
+c_real_table = [
+	[0, 0, 1, 1, 0, [0]], [0, 1, 1, 1, 0, [1]],
+	[1, 0, 1, 1, 0, [2]], [1, 1, 1, 1, 0, [3]],
+]
+check('real 2x2 table accepted', L._isRealTable(2, 2, c_real_table), True)
+
+# 5. Viewer table with top row 2 cols and body rows blank: stripped in _filterPdfViewerTableFields
+class MockViewerTableDoc:
+	def __init__(self, cells):
+		self.cells = cells
+	def _getTableDimensions(self, info):
+		return (3, 2)
+	def _getTableCellAt(self, tid, sel, r, c):
+		if (r, c) in self.cells:
+			txt = self.cells[(r, c)]
+			return types.SimpleNamespace(text=txt, _startOffset=(r * 100 + c) if txt else None)
+		raise LookupError
+
+mock_blank_doc = MockViewerTableDoc({(1, 1): 'शीर्षक', (1, 2): 'मिति', (2, 1): '', (2, 2): '', (3, 1): '', (3, 2): ''})
+check('viewer table with blank body rejected by _isViewerTableReal', p._isViewerTableReal(mock_blank_doc, None, 50, 3, 2), False)
+
+mock_1col_doc = MockViewerTableDoc({(1, 1): 'शीर्षक', (1, 2): 'मिति', (2, 1): 'अनुच्छेद १', (2, 2): '', (3, 1): 'अनुच्छेद २', (3, 2): ''})
+check('viewer table with 1-col body rejected by _isViewerTableReal', p._isViewerTableReal(mock_1col_doc, None, 50, 3, 2), False)
+
+mock_real_doc = MockViewerTableDoc({(1, 1): 'नाम', (1, 2): 'थर', (2, 1): 'रोशन', (2, 2): 'गौतम', (3, 1): 'हरि', (3, 2): 'शर्मा'})
+check('viewer table with multi-col body accepted by _isViewerTableReal', p._isViewerTableReal(mock_real_doc, None, 50, 3, 2), True)
+
+# Filter fields for mock_blank_doc: table and cell fields must be stripped
+blank_tbl_info = LineInfo('test', [])
+blank_tbl_info.obj = mock_blank_doc
+blank_tbl_fields = [
+	FC('controlStart', TI.ControlField(role='table', **{'table-id': 50, 'table-rowcount': 3, 'table-columncount': 2})),
+	FC('controlStart', TI.ControlField(role='cell', **{'table-id': 50, 'table-rownumber': 1, 'table-columnnumber': 1})),
+	'शीर्षक',
+	FC('controlEnd', None),
+	FC('controlEnd', None)
+]
+filtered_blank = p._filterPdfViewerTableFields(blank_tbl_info, blank_tbl_fields)
+check('viewer table with blank body has table/cell fields stripped', [f for f in filtered_blank if isinstance(f, FC)], [])
+check('viewer table with blank body keeps text', ''.join(f for f in filtered_blank if isinstance(f, str)), 'शीर्षक')
+
 print('FAILED' if bad else 'ALL OK', bad)
 sys.exit(1 if bad else 0)
+
+
