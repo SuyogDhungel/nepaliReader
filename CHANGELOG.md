@@ -2,6 +2,10 @@
 
 All notable changes to the **Nepali Reader** NVDA add-on are documented here.
 
+## [2.0.2] - 2026-10-15
+
+- Table detection and table reading is now possible, other formatting is preserved, and some reading related bugs has been fixed. Copying will preserve formatting.
+
 ## [2.0.1] - 2026-10-13
 
 ### Added

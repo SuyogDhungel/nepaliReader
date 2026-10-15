@@ -4158,14 +4158,28 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 					if whole.strip().isdigit() or _PLAIN_NUMBER.match(whole.strip()):
 						continue
 					w_strip = whole.strip()
-					if w_strip in ("नगर उप-प्रमुख", "नगर", "स्था") or w_strip.startswith("नगर उप-प्रमुख"):
-						nxt = _neighbourLine(info, True)
-						if nxt:
-							nxt_strip = nxt.strip()
-							combo = (w_strip + " " + nxt_strip).strip()
+					if w_strip in ("नगर उप-प्रमुख", "नगर", "नगर प्रमुख", "स्था", "गोरखा नगरपालिकाको स्थानीय पाठ") or w_strip.startswith("नगर उप-प्रमुख") or w_strip.startswith("गोरखा नगरपालिकाको स्थानीय"):
+						nxt_lines = []
+						try:
+							raw = _unwrap(info)
+							probe = raw.copy()
+							for _ in range(3):
+								probe.collapse(end=True)
+								if probe.move(textInfos.UNIT_LINE, 1) == 0:
+									break
+								probe.expand(textInfos.UNIT_LINE)
+								t = (probe.text or "").strip()
+								if t:
+									nxt_lines.append(t)
+						except Exception:
+							pass
+						if nxt_lines:
+							combo = (w_strip + " " + " ".join(nxt_lines)).strip()
 							combo_clean = devanagariRepair.cleanShuffled(combo)
-							if combo_clean in ("नगर उप-प्रमुखको सन्देश", "नगर प्रमुखको सन्देश", "स्थानीय पाठ्यक्रम") or "सन्देश" in combo_clean:
-								whole = combo_clean
+							for target in ("नगर उप-प्रमुखको सन्देश", "नगर प्रमुखको सन्देश", "स्थानीय पाठ्यक्रम", "गोरखा नगरपालिकाको स्थानीय पाठ्यक्रम"):
+								if target in combo_clean:
+									whole = target
+									break
 					try:
 						new = self._indexText(info if len(groups) == 1 else None, idx, whole)
 					except Exception:
@@ -4173,19 +4187,20 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 						new = None
 					if new is None and whole != "".join(t for _i, t, _k, _e in grp):
 						new = whole
-					if new is None:
+					line_text = new if new is not None else whole
+					if not line_text or not line_text.strip():
 						continue
 					st = self._docState()
-					currOffset = getattr(info, "_startOffset", None)
+					currOffset = getattr(_unwrap(info), "_startOffset", None) or getattr(info, "_startOffset", None)
 					lastOffset = getattr(st, "lastStartOffset", -1)
 					recentWords = getattr(st, "recentPdfWords", None)
 					if recentWords is None:
 						import collections
 						st.recentPdfWords = recentWords = collections.deque(maxlen=60)
 						st.lastStartOffset = -1
-					new_words = new.split()
+					new_words = [w for w in line_text.split() if len(w) >= 2]
 					is_dup = False
-					if currOffset is not None and currOffset >= lastOffset and new_words and len(new_words) <= 6:
+					if new_words and len(new_words) <= 15:
 						if all(w in recentWords for w in new_words):
 							is_dup = True
 					if is_dup:
@@ -4197,6 +4212,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 					if currOffset is not None and currOffset >= lastOffset:
 						recentWords.extend(new_words)
 						st.lastStartOffset = currOffset
+					else:
+						recentWords.extend(new_words)
 					if len(grp) > 1 and new != whole:
 						# several runs (a bold word, a change of font): each keeps its own text when
 						# every run can be looked up by itself and together they say the same, so
