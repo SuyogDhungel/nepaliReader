@@ -881,10 +881,6 @@ def cleanShuffled(text):
 	text = re.sub(r'(^|\s|/)(ज्ञ|द्द|द्ध)(?=\s*/|/\s*[\d०-९]|$)', lambda m: m.group(1) + _pk_dict[m.group(2)], text)
 	text = re.sub(r'^[-\s–—]*(ज्ञ|द्द|द्ध)[-\s–—]*$', lambda m: _pk_dict[m.group(1)], text)
 
-	# Isolated combining marks without base consonant (artifacts of font/PDF segmentation)
-	if text and re.fullmatch(r'[\u0901-\u0903\u093a-\u094f\u0951-\u0954\u0962\u0963\u094d\s]+', text):
-		return ''
-
 	_DEVA_BOUND_L = r'(?<![\u0900-\u097f])'
 	_DEVA_BOUND_R = r'(?![\u0900-\u097f])'
 
@@ -903,7 +899,8 @@ def cleanShuffled(text):
 	text = re.sub(_DEVA_BOUND_L + r'आधार\s+भि(?:\s+त)?' + _DEVA_BOUND_R, 'आधारभूत', text)
 	text = re.sub(r'(^|\s)त\s+(?=तह\b)', r'\1', text)
 	text = re.sub(_DEVA_BOUND_L + r'प्रमख(को|का|की|मा|ले|लाई|बाट|हरू)?' + _DEVA_BOUND_R, r'प्रमुख\1', text)
-	text = re.sub(_DEVA_BOUND_L + r'सन्देि' + _DEVA_BOUND_R, 'सन्देश', text)
+	text = re.sub(_DEVA_BOUND_L + r'सन्दे[ििश]' + _DEVA_BOUND_R, 'सन्देश', text)
+	text = re.sub(r'\bसन्दिे\b', 'सन्देश', text)
 
 	# Multi-digit numbers glued to Devanagari words without spaces (e.g. बस्ने१८ -> बस्ने १८, वर्षीय२५ -> वर्षीय २५)
 	text = re.sub(r'(?<=[क-ह\u093e-\u094c])([0-9\u0966-\u096f]{2,})' + _BOUNDARY, r' \1', text)

@@ -1514,41 +1514,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		"""NVDA's quick navigation to tables and headings (T, H, 1 to 6), and its elements list:
 		the viewer's own first; when the document has none, the PDF's tables and the headings its tags name."""
 		got = False
-		if str(itemType).startswith("heading"):
-			merged = []
-			for item in gen:
-				t = (getattr(item, "textInfo", None) and item.textInfo.text or "").strip()
-				if not t or re.fullmatch(r'[\u0901-\u0903\u093a-\u094f\u0951-\u0954\u0962\u0963\u094d\s]+', t) or t in ("ु", "मु"):
-					continue
-				if merged:
-					prev = merged[-1]
-					try:
-						if direction == "previous":
-							between = item.textInfo.copy()
-							between.setEndPoint(item.textInfo, "startToEnd")
-							between.setEndPoint(prev.textInfo, "endToStart")
-							b_text = between.text or ""
-							if len(b_text) <= 25 and not b_text.strip():
-								prev.textInfo.setEndPoint(item.textInfo, "startToStart")
-								continue
-						else:
-							between = prev.textInfo.copy()
-							between.setEndPoint(prev.textInfo, "startToEnd")
-							between.setEndPoint(item.textInfo, "endToStart")
-							b_text = between.text or ""
-							if len(b_text) <= 25 and not b_text.strip():
-								prev.textInfo.setEndPoint(item.textInfo, "endToEnd")
-								continue
-					except Exception:
-						pass
-				merged.append(item)
-			for item in merged:
-				got = True
-				yield item
-		else:
-			for item in gen:
-				got = True
-				yield item
+		for item in gen:
+			got = True
+			yield item
 		if got or direction not in ("next", "previous"):
 			return
 
@@ -4089,8 +4057,6 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 					s_item = item.strip()
 					if s_item in ("ज्ञ", "द्द", "द्ध"):
 						fields[i] = item = {"ज्ञ": "१", "द्द": "२", "द्ध": "४"}[s_item]
-				if item and self._isPdfWindow(info.obj) and re.fullmatch(r'[\u0901-\u0903\u093a-\u094f\u0951-\u0954\u0962\u0963\u094d\s]+', item):
-					fields[i] = item = ""
 				if item:
 					runs.append((i, item, "unicode" if unicodeFont else fontKnown, curEnc))
 			elif isinstance(item, textInfos.FieldCommand) and item.command == "formatChange":
@@ -4145,8 +4111,6 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 						continue
 					elif isinstance(item, str):
 						continue
-					elif isinstance(item, textInfos.FieldCommand) and item.command in ("controlStart", "controlEnd") and (getattr(item, "field", None) or {}).get("role") == "heading":
-						continue
 					else:
 						if cur:
 							groups.append(cur)
@@ -4157,63 +4121,13 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 					whole = "".join(t for _i, t, _k, _e in grp)
 					if whole.strip().isdigit() or _PLAIN_NUMBER.match(whole.strip()):
 						continue
-					w_strip = whole.strip()
-					if w_strip in ("नगर उप-प्रमुख", "नगर", "नगर प्रमुख", "स्था", "गोरखा नगरपालिकाको स्थानीय पाठ") or w_strip.startswith("नगर उप-प्रमुख") or w_strip.startswith("गोरखा नगरपालिकाको स्थानीय"):
-						nxt_lines = []
-						try:
-							raw = _unwrap(info)
-							probe = raw.copy()
-							for _ in range(3):
-								probe.collapse(end=True)
-								if probe.move(textInfos.UNIT_LINE, 1) == 0:
-									break
-								probe.expand(textInfos.UNIT_LINE)
-								t = (probe.text or "").strip()
-								if t:
-									nxt_lines.append(t)
-						except Exception:
-							pass
-						if nxt_lines:
-							combo = (w_strip + " " + " ".join(nxt_lines)).strip()
-							combo_clean = devanagariRepair.cleanShuffled(combo)
-							for target in ("नगर उप-प्रमुखको सन्देश", "नगर प्रमुखको सन्देश", "स्थानीय पाठ्यक्रम", "गोरखा नगरपालिकाको स्थानीय पाठ्यक्रम"):
-								if target in combo_clean:
-									whole = target
-									break
 					try:
 						new = self._indexText(info if len(groups) == 1 else None, idx, whole)
 					except Exception:
 						log.debugWarning("Nepali Reader: PDF text lookup failed", exc_info=True)
 						new = None
-					if new is None and whole != "".join(t for _i, t, _k, _e in grp):
-						new = whole
-					line_text = new if new is not None else whole
-					if not line_text or not line_text.strip():
+					if new is None:
 						continue
-					st = self._docState()
-					currOffset = getattr(_unwrap(info), "_startOffset", None) or getattr(info, "_startOffset", None)
-					lastOffset = getattr(st, "lastStartOffset", -1)
-					recentWords = getattr(st, "recentPdfWords", None)
-					if recentWords is None:
-						import collections
-						st.recentPdfWords = recentWords = collections.deque(maxlen=60)
-						st.lastStartOffset = -1
-					new_words = [w for w in line_text.split() if len(w) >= 2]
-					is_dup = False
-					if new_words and len(new_words) <= 15:
-						if all(w in recentWords for w in new_words):
-							is_dup = True
-					if is_dup:
-						for i, _t, _k, _e in grp:
-							out[i] = ""
-							rebuilt[i] = True
-						changed = True
-						continue
-					if currOffset is not None and currOffset >= lastOffset:
-						recentWords.extend(new_words)
-						st.lastStartOffset = currOffset
-					else:
-						recentWords.extend(new_words)
 					if len(grp) > 1 and new != whole:
 						# several runs (a bold word, a change of font): each keeps its own text when
 						# every run can be looked up by itself and together they say the same, so
