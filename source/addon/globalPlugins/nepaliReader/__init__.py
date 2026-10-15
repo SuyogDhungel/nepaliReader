@@ -3368,15 +3368,19 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				"more actions", "current page", "number of pages", "presentation mode",
 				"two page view", "single page view", "thumbnails"
 			)
-			for target in (obj, getattr(obj, "parent", None)):
-				if not target:
-					continue
-				name = (getattr(target, "name", "") or "").strip().lower()
+			curr = obj
+			for _ in range(4):
+				if not curr:
+					break
+				name = (getattr(curr, "name", "") or "").strip().lower()
+				if any(n in name for n in ("page number", "zoom level", "current page", "number of pages", "zoom in", "zoom out", "fit to page")):
+					return True
 				if name in names:
 					return True
-				desc = (getattr(target, "description", "") or "").strip().lower()
-				if desc in names:
+				desc = (getattr(curr, "description", "") or "").strip().lower()
+				if any(n in desc for n in ("page number", "zoom level", "current page", "number of pages")):
 					return True
+				curr = getattr(curr, "parent", None)
 		except Exception:
 			pass
 		return False

@@ -414,7 +414,38 @@ class PdfFont:
 
 	def resolveGlyphs(self):
 		"""Work out the real letters of every used Devanagari glyph from the glyph outlines."""
-		if not self.cid or not self.program or not self.used:
+		if not self.cid or not self.used:
+			return
+
+		# Check for systematic CMap corruption signatures in Devanagari fonts (e.g. Kokila / Kalimati export bugs)
+		if getattr(self, "toUnicode", None):
+			if self.toUnicode.get(108) == 'ल' and self.toUnicode.get(97) == 'ि' and self.toUnicode.get(101) == 'ि':
+				self.toUnicode[108] = 'ि'
+				self.toUnicode[97] = 'ल'
+				self.toUnicode[101] = 'श'
+				self.truth[108] = 'ि'
+				self.truth[97] = 'ल'
+				self.truth[101] = 'श'
+				if self.toUnicode.get(49) == '\u0941\u0901':
+					self.toUnicode[49] = 'ँ'
+					self.truth[49] = 'ँ'
+				if self.toUnicode.get(51) == '\u093f\u0903':
+					self.toUnicode[51] = 'ः'
+					self.truth[51] = 'ः'
+				if self.toUnicode.get(170) == 'ा' and self.widths.get(170, 1.0) == 0.0:
+					self.toUnicode[170] = 'र्'
+					self.truth[170] = 'र्'
+				if self.toUnicode.get(229) == 'र':
+					self.toUnicode[229] = 'ि'
+					self.truth[229] = 'ि'
+
+			# Non-spacing combining mark with width 0 mapped to 'ा' (U+093E) is overhead reph
+			for c, t_uni in list(self.toUnicode.items()):
+				if t_uni == 'ा' and self.widths.get(c, 1.0) == 0.0 and (self.cid or isDeva(self.baseFont) or any(isDeva(v) for v in self.toUnicode.values())):
+					self.toUnicode[c] = 'र्'
+					self.truth[c] = 'र्'
+
+		if not self.program:
 			return
 		try:
 			font = sfnt.Font(self.program)
@@ -758,7 +789,7 @@ def _isSpace(font, code, span=None):
 		return False
 	if span is not None and span[1]:
 		return True  # ActualText of spaces or control characters only (some producers write "\x03")
-	tr = font.truth.get(code)
+	tr = getattr(font, "truth", {}).get(code)
 	if tr and tr.strip() and tr.isprintable():
 		# the glyph's real letters win: Word often maps letters like ज/ह to a space in its text table
 		return False
@@ -776,12 +807,11 @@ def _isTrailingSign(font, code):
 	"""A glyph that can only follow a letter (a vowel sign after its consonant, ं, ्), so it never
 	begins a word however far it is drawn from the letter before (ि is drawn first: not this)."""
 	t = font.text(code)
-	if not t:
-		return False
-	if font.legacy:
-		if font.legacy == "krutidev":
+	legacy = getattr(font, "legacy", None)
+	if legacy:
+		if legacy == "krutidev":
 			return False
-		v = legacyFonts.keyTable(font.legacy).get(t[0])
+		v = legacyFonts.keyTable(legacy).get(t[0])
 		return bool(v) and v[0] in _TRAILING
 	return t[0] in _TRAILING
 
@@ -862,6 +892,66 @@ def _words(glyphs, page):
 		endU = max(endU, u + adv)
 	if cur is not None and cur.glyphs:
 		words.append(cur)
+
+	# If glyphs on the same horizontal line were drawn out of horizontal order (Word/InDesign out-of-order chunks),
+	# sort the words in each line run left-to-right so reading order matches visual reading order.
+	has_out_of_order = False
+	for i in range(len(words) - 1):
+		w1, w2 = words[i], words[i + 1]
+		if not w1.glyphs or not w2.glyphs:
+			continue
+		v1 = sum(g[3] for g in w1.glyphs) / len(w1.glyphs)
+		v2 = sum(g[3] for g in w2.glyphs) / len(w2.glyphs)
+		s = max(g[4] or 12.0 for g in w1.glyphs)
+		if abs(v1 - v2) <= 0.4 * s and min(g[2] for g in w2.glyphs) < min(g[2] for g in w1.glyphs) - 1.0:
+			has_out_of_order = True
+			break
+
+	if has_out_of_order:
+		lines = []
+		cur_line = []
+		cur_v = None
+		for w in words:
+			if not w.glyphs:
+				continue
+			v = sum(g[3] for g in w.glyphs) / len(w.glyphs)
+			s = max(g[4] or 12.0 for g in w.glyphs)
+			if cur_v is None or abs(v - cur_v) <= 0.4 * s:
+				cur_line.append(w)
+				cur_v = v if cur_v is None else (cur_v * 0.8 + v * 0.2)
+			else:
+				lines.append(cur_line)
+				cur_line = [w]
+				cur_v = v
+		if cur_line:
+			lines.append(cur_line)
+
+		sorted_words = []
+		for line in lines:
+			out_of_order = any(min(g[2] for g in line[i+1].glyphs) < min(g[2] for g in line[i].glyphs) - 1.0 for i in range(len(line)-1))
+			if out_of_order:
+				line.sort(key=lambda w: min(g[2] for g in w.glyphs))
+				merged = []
+				i = 0
+				while i < len(line):
+					w = line[i]
+					x1 = max(g[2] + g[5] for g in w.glyphs)
+					if i + 1 < len(line):
+						next_w = line[i + 1]
+						next_x0 = min(g[2] for g in next_w.glyphs)
+						if abs(next_x0 - x1) <= 1.5:
+							w.glyphs.extend(next_w.glyphs)
+							i += 1
+					merged.append(w)
+					i += 1
+				line = merged
+			if line:
+				line[0].page = (page, True)
+				for w in line[1:]:
+					w.page = (page, False)
+			sorted_words.extend(line)
+		words = sorted_words
+
 	return words
 
 
