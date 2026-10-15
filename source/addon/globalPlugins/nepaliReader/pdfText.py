@@ -1724,14 +1724,24 @@ class DocIndex:
 						break
 			if not split:
 				toks.append(t)
+		try:
+			from . import devanagariRepair
+			cl_text = devanagariRepair.cleanShuffled(text)
+			if cl_text != text:
+				text = cl_text
+		except Exception:
+			pass
 		out = []
 		found = 0
 		i = 0
+		# Drop leading orphan single-letter consonant if next token starts a known word
+		if len(toks) > 1 and len(toks[0]) == 1 and toks[0] in "तकमपयरलवसषदढठट" and matchKey(toks[1]) in self._byKey:
+			i = 1
 		while i < len(toks):
 			done = False
-			for span in (1, 2, 3):
+			for span in (3, 2, 1):
 				if i + span > len(toks):
-					break
+					continue
 				k = matchKey("".join(toks[i:i + span]))
 				if not k:
 					continue
@@ -1739,6 +1749,13 @@ class DocIndex:
 				if f is None and ("\xbf" in k or "'" in k):
 					k_alt = k.replace("\xbf", "'") if "\xbf" in k else k.replace("'", "\xbf")
 					f = self._byKey.get(k_alt) or self._byBag.get("".join(sorted(k_alt)))
+				if f is None:
+					try:
+						from . import devanagariRepair
+						k_cl = matchKey(devanagariRepair.cleanShuffled("".join(toks[i:i + span])))
+						f = self._byKey.get(k_cl) or self._byBag.get("".join(sorted(k_cl)))
+					except Exception:
+						pass
 				if f is not None:
 					out.append((f, True))
 					found += 1
@@ -1746,8 +1763,24 @@ class DocIndex:
 					done = True
 					break
 			if not done:
-				out.append((toks[i], False))
-				i += 1
+				# Check prefix matching with next unmapped token (e.g. 'आधार' + 'भि' -> 'आधारभूत')
+				k = matchKey(toks[i])
+				matched_prefix = False
+				if k and i + 1 < len(toks):
+					h = getattr(self, "_hint", 0) or 0
+					w_idx = bisect.bisect_right(self.starts, h) - 1
+					near_words = self.words[max(0, w_idx - 20):min(len(self.words), w_idx + 60)]
+					for w in near_words:
+						fixed = w[0] or w[3]
+						if fixed and fixed.startswith(k) and len(fixed) > len(k):
+							out.append((fixed, True))
+							found += 1
+							i += 2
+							done = matched_prefix = True
+							break
+				if not matched_prefix:
+					out.append((toks[i], False))
+					i += 1
 		return out if found else None
 
 	# -- saving ------------------------------------------------------------------

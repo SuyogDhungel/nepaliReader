@@ -876,9 +876,19 @@ def cleanShuffled(text):
 	# list numbers typed unshifted: only ज्ञ. द्द. द्ध. (घ. छ. ट. ठ. and (घ) (छ) are real clause letters)
 	text = re.sub(r'(^|\s)(ज्ञ|द्द|द्ध)\.', lambda m: m.group(1) + _pk_dict[m.group(2)] + '.', text)
 	text = re.sub(r'\((ज्ञ|द्द|द्ध)\)', lambda m: '(' + _pk_dict[m.group(1)] + ')', text)
+	# Page numbers / toolbar numbers typed unshifted (e.g. Page number edit ज्ञ -> 1, ज्ञ / 1 -> 1 / 1, -ज्ञ- -> -1-)
+	text = re.sub(r'(?i)\b(page|पृष्ठ|पेज)(?:\s*(?:number|नं\.?|no\.?|edit))?\s*[:\-]?\s*(ज्ञ|द्द|द्ध)\b', lambda m: m.group(1) + ' ' + _pk_dict[m.group(2)], text)
+	text = re.sub(r'(^|\s|/)(ज्ञ|द्द|द्ध)(?=\s*/|/\s*[\d०-९]|$)', lambda m: m.group(1) + _pk_dict[m.group(2)], text)
+	text = re.sub(r'^[-\s–—]*(ज्ञ|द्द|द्ध)[-\s–—]*$', lambda m: _pk_dict[m.group(1)], text)
 
 	_DEVA_BOUND_L = r'(?<![\u0900-\u097f])'
 	_DEVA_BOUND_R = r'(?![\u0900-\u097f])'
+
+	# Sliced / corrupted Devanagari words from PDF layout engines:
+	text = re.sub(_DEVA_BOUND_L + r'आधार\s+भि(?:\s+त)?' + _DEVA_BOUND_R, 'आधारभूत', text)
+	text = re.sub(r'(^|\s)त\s+(?=तह\b)', r'\1', text)
+	text = re.sub(_DEVA_BOUND_L + r'प्रमख(को|का|की|मा|ले|लाई|बाट|हरू)?' + _DEVA_BOUND_R, r'प्रमुख\1', text)
+	text = re.sub(_DEVA_BOUND_L + r'सन्देि' + _DEVA_BOUND_R, 'सन्देश', text)
 
 	# Multi-digit numbers glued to Devanagari words without spaces (e.g. बस्ने१८ -> बस्ने १८, वर्षीय२५ -> वर्षीय २५)
 	text = re.sub(r'(?<=[क-ह\u093e-\u094c])([0-9\u0966-\u096f]{2,})' + _BOUNDARY, r' \1', text)

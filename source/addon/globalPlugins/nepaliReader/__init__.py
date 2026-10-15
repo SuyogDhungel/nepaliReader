@@ -834,6 +834,28 @@ class _NepaliNormalizedObject(NVDAObjects.NVDAObject):
 			return devanagariRepair.cleanShuffled(orig)
 		return orig
 
+	def _get_value(self):
+		try:
+			getter = getattr(super(), "_get_value", None)
+			orig = getter() if getter else None
+		except Exception:
+			orig = None
+		if not orig:
+			try:
+				orig = getattr(super(), "value", None)
+			except Exception:
+				orig = None
+		if not orig or not isOn():
+			return orig
+		s_orig = str(orig).strip()
+		if s_orig in ("ज्ञ", "द्द", "द्ध"):
+			return {"ज्ञ": "१", "द्द": "२", "द्ध": "४"}[s_orig]
+		if "\u00e0" in s_orig:
+			s_orig = devanagariRepair.decodeMojibake(s_orig)
+		if devanagariRepair.hasDevanagari(s_orig):
+			return devanagariRepair.cleanShuffled(s_orig)
+		return orig
+
 
 class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
@@ -3116,6 +3138,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		trail = text[j:]
 		result_text = lead + " ".join(out) + trail
 		if devanagariRepair.hasDevanagari(result_text):
+			result_text = devanagariRepair.cleanShuffled(result_text)
 			# what the PDF itself says is final: nothing downstream may "repair" it again (the
 			# pieces the index did not know were already repaired one by one above)
 			goodToks = set()
@@ -3435,11 +3458,13 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				return None
 			start = time.perf_counter()
 			verdicts = []
-			for r in list(info.boundingRects)[:6]:
-				if r.width > 4 and r.height > 4:
-					v = self._grab(r.left, r.top, r.width, r.height)
-					if v:
-						verdicts.append(v)
+			rects = getattr(info, "boundingRects", None)
+			if rects:
+				for r in list(rects)[:6]:
+					if r.width > 4 and r.height > 4:
+						v = self._grab(r.left, r.top, r.width, r.height)
+						if v:
+							verdicts.append(v)
 			if time.perf_counter() - start > VISUAL_SLOW:
 				self._visSlow[wcls] = now + 60
 		except Exception:
@@ -4014,6 +4039,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		fontKnown = False
 		curEnc = None
 		unicodeFont = False
+		inPdfUi = False
+		pdfUiIndices = set()
 		for i, item in enumerate(fields):
 			if isinstance(item, str):
 				if "&" in item and ";" in item and any(ent in item for ent in ("&#", "&amp;", "&quot;", "&gt;", "&lt;", "&apos;")):
@@ -4023,6 +4050,11 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 					dec = devanagariRepair.decodeMojibake(item)
 					if dec != item:
 						fields[i] = item = dec
+				if inPdfUi:
+					pdfUiIndices.add(i)
+					s_item = item.strip()
+					if s_item in ("ज्ञ", "द्द", "द्ध"):
+						fields[i] = item = {"ज्ञ": "१", "द्द": "२", "द्ध": "४"}[s_item]
 				if item:
 					runs.append((i, item, "unicode" if unicodeFont else fontKnown, curEnc))
 			elif isinstance(item, textInfos.FieldCommand) and item.command == "formatChange":
@@ -4032,25 +4064,30 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				lower = (name or "").lower()
 				unicodeFont = bool(name) and any(f in lower for f in UNICODE_DEVANAGARI_FONTS)
 			elif isinstance(item, textInfos.FieldCommand) and item.command == "controlStart" and item.field:
-				for attr in ("table-rowheadertext", "table-columnheadertext", "name", "description"):
+				ctrlName = ((item.field.get("name") or "") + " " + (item.field.get("description") or "")).lower()
+				if any(n in ctrlName for n in ("page number", "zoom", "fit to page", "rotate", "download", "print", "more actions", "current page")):
+					inPdfUi = True
+				for attr in ("table-rowheadertext", "table-columnheadertext", "name", "description", "value"):
 					val = item.field.get(attr)
 					if isinstance(val, str) and val:
 						if "&" in val and ";" in val and any(ent in val for ent in ("&#", "&amp;", "&quot;", "&gt;", "&lt;", "&apos;")):
 							import html
 							val = html.unescape(val)
 							item.field[attr] = val
-						if curEnc:
+						if curEnc and not inPdfUi:
 							conv = legacyFonts.convert(val, curEnc)
 							if conv and conv != val:
 								item.field[attr] = conv
-						elif self._isPdfWindow(info.obj) and detector.looksLegacy(val, "preeti"):
+						elif self._isPdfWindow(info.obj) and not inPdfUi and detector.looksLegacy(val, "preeti"):
 							conv = detector.convertMixed(val, legacyFonts.preetiFamilyToUnicode)
 							if conv and conv != val:
 								item.field[attr] = conv
-						elif devanagariRepair.hasDevanagari(val):
+						elif devanagariRepair.hasDevanagari(val) or val.strip() in ("ज्ञ", "द्द", "द्ध"):
 							val_clean = devanagariRepair.cleanShuffled(val)
 							if val_clean and val_clean != val:
 								item.field[attr] = val_clean
+			elif isinstance(item, textInfos.FieldCommand) and item.command == "controlEnd":
+				inPdfUi = False
 		if not runs:
 			return fields
 		out = list(fields)
@@ -4089,6 +4126,28 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 						new = None
 					if new is None:
 						continue
+					st = self._docState()
+					currOffset = getattr(info, "_startOffset", None)
+					lastOffset = getattr(st, "lastStartOffset", -1)
+					recentWords = getattr(st, "recentPdfWords", None)
+					if recentWords is None:
+						import collections
+						st.recentPdfWords = recentWords = collections.deque(maxlen=60)
+						st.lastStartOffset = -1
+					new_words = new.split()
+					is_dup = False
+					if currOffset is not None and currOffset >= lastOffset and new_words and len(new_words) <= 6:
+						if all(w in recentWords for w in new_words):
+							is_dup = True
+					if is_dup:
+						for i, _t, _k, _e in grp:
+							out[i] = ""
+							rebuilt[i] = True
+						changed = True
+						continue
+					if currOffset is not None and currOffset >= lastOffset:
+						recentWords.extend(new_words)
+						st.lastStartOffset = currOffset
 					if len(grp) > 1 and new != whole:
 						# several runs (a bold word, a change of font): each keeps its own text when
 						# every run can be looked up by itself and together they say the same, so
@@ -4154,7 +4213,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		inPdf = self._isPdfWindow(info.obj)
 		ctxEnc = self._inContext()
 		for i, text, known, enc in runs:
-			if not any(ch in _LEGACY_TRIGGER for ch in text):
+			if i in pdfUiIndices or not any(ch in _LEGACY_TRIGGER for ch in text):
 				continue
 			if enc:
 				convert[i] = (enc, False)  # the font says so
