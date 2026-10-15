@@ -4,17 +4,13 @@ All notable changes to the **Nepali Reader** NVDA add-on are documented here.
 
 ## [2.0.2] - 2026-10-15
 
-### Added
-- **Table Detection & Table Reading**: Table detection and table reading is now possible, other formatting is preserved, and copying will preserve formatting.
-
-### Fixed
-- **Reading Related Bugs**: Fixed reading order, sliced Devanagari text, heading pieces, and document title reading.
-- **Headings read once, whole**: Chrome breaks a line of a PDF wherever a sign is drawn below its letter, so a large heading came as pieces ("गोरखा नगरपालिकाको स्थानीय पाठ", "्", "यक्रम"; "नगर प्रमख", "ु", "को सन्दिे") and was read with words repeated. Such a line is now one line, as the page shows it: गोरखा नगरपालिकाको स्थानीय पाठ्यक्रम, नगर प्रमुखको सन्देश. Up and Down Arrow, say all, word navigation and copying take it whole.
-- **A page, heading or paragraph begins a line of its own**: the last line of a page no longer runs on into the next page's heading, and NVDA's line wrap no longer puts a heading's first word at the end of the line before it.
-- **PDFs joined from two Word documents** read far better: a glyph whose text table is wrong in one part (the स् of स्थानीय given as थ) takes the reading its other part shows, and readings that make compound words (कक्षाकार्य, गर्नुपर्छ, पालिकाभित्रका) are trusted. In the Gorkha curriculum about 500 more words read right (कार्य, स्थानीय, मूल्याङ्कन, व्यवस्थापन), in other PDFs गर्ने, पर्ने, अन्तर्गतका, पूर्वानुमान, सूर्योदय.
-- **What the viewer shows is never changed by a guess**: a fix for one font's text table changed the add-on's copy of Chrome's text, so whole lines were no longer found (लिक्षा, खेिकुद िाखा were read लिक्षा, खेदि माखा); rules written for one PDF that dropped or swapped words were removed (a line beginning with र lost it). A line no longer gets a stray letter at its end.
-- **The same PDF reads the same every time**: working out a font's glyphs counts its own processor time, so NVDA's pauses and a busy computer no longer cut it short.
-- **Document name and window title**: a PDF's file address (file:///C:/.../%E0%A4...) is read as its file name and never as Preeti; a Devanagari file name whose letters were lost when it was saved (à¤¸à¥_à¤¥à¤¾à¤¨à¥_à¤¯) is read where exactly one word fits (स्थानीय), the PDF's own words deciding between several.
+- Reading issues fixed, and table and formatting is now preserved while reading and copying.
+- Headings read once, whole: Chrome breaks a line of a PDF wherever a sign is drawn below its letter, so a large heading came as pieces ("गोरखा नगरपालिकाको स्थानीय पाठ", "्", "यक्रम"; "नगर प्रमख", "ु", "को सन्दिे") and was read with words repeated. Such a line is now one line, as the page shows it: गोरखा नगरपालिकाको स्थानीय पाठ्यक्रम, नगर प्रमुखको सन्देश. Up and Down Arrow, say all, word navigation and copying take it whole.
+- A page, heading or paragraph begins a line of its own: the last line of a page no longer runs on into the next page's heading, and NVDA's line wrap no longer puts a heading's first word at the end of the line before it.
+- PDFs joined from two Word documents read far better: a glyph whose text table is wrong in one part (the स् of स्थानीय given as थ) takes the reading its other part shows, and readings that make compound words (कक्षाकार्य, गर्नुपर्छ, पालिकाभित्रका) are trusted.
+- What the viewer shows is never changed by a guess: removed heuristic rules that dropped or swapped valid words.
+- The same PDF reads the same every time: working out a font's glyphs counts its own processor time for consistent, repeatable results.
+- Document name and window title: file URLs are read as file names and never as Preeti; Devanagari file names with lost mojibake bytes are cleanly decoded where exactly one word fits (स्थानीय).
 
 ## [2.0.1] - 2026-10-13
 
