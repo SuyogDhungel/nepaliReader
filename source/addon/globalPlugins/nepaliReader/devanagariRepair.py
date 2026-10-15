@@ -881,10 +881,20 @@ def cleanShuffled(text):
 	text = re.sub(r'(^|\s|/)(ज्ञ|द्द|द्ध)(?=\s*/|/\s*[\d०-९]|$)', lambda m: m.group(1) + _pk_dict[m.group(2)], text)
 	text = re.sub(r'^[-\s–—]*(ज्ञ|द्द|द्ध)[-\s–—]*$', lambda m: _pk_dict[m.group(1)], text)
 
+	# Isolated combining marks without base consonant (artifacts of font/PDF segmentation)
+	if text and re.fullmatch(r'[\u0901-\u0903\u093a-\u094f\u0951-\u0954\u0962\u0963\u094d\s]+', text):
+		return ''
+
 	_DEVA_BOUND_L = r'(?<![\u0900-\u097f])'
 	_DEVA_BOUND_R = r'(?![\u0900-\u097f])'
 
-	# Sliced / corrupted Devanagari words from PDF layout engines:
+	# Sliced / corrupted Devanagari words and headings from PDF layout engines:
+	text = re.sub(r'नगर\s+उप[\s\-–—]*प्रमुख(?:\s*[ुमु])?(?:\s+को|\s*को)?\s+सन्दे[शि]', 'नगर उप-प्रमुखको सन्देश', text)
+	text = re.sub(r'नगर\s+प्रमुख(?:\s+मु)?(?:\s+को|\s*को)?\s+सन्दे[शि]', 'नगर प्रमुखको सन्देश', text)
+	text = re.sub(r'(^|\s)स्था\s+पाठ्यक्रम', r'\1स्थानीय पाठ्यक्रम', text)
+	text = re.sub(r'(^|\s)उप[\s\-–—]*प्रमुख(?:\s*[ुमु])?(?:\s+को|\s*को)?\s+सन्दे[शि]', r'\1उप-प्रमुखको सन्देश', text)
+	text = re.sub(r'(^|\s)प्रमुख(?:\s+मु)?(?:\s+को|\s*को)?\s+सन्दे[शि]', r'\1प्रमुखको सन्देश', text)
+	text = re.sub(r'(?<=\s)[\u093a-\u094f\u0901-\u0903\u094d]+(?=\s|$)', '', text)
 	text = re.sub(_DEVA_BOUND_L + r'आधार\s+भि(?:\s+त)?' + _DEVA_BOUND_R, 'आधारभूत', text)
 	text = re.sub(r'(^|\s)त\s+(?=तह\b)', r'\1', text)
 	text = re.sub(_DEVA_BOUND_L + r'प्रमख(को|का|की|मा|ले|लाई|बाट|हरू)?' + _DEVA_BOUND_R, r'प्रमुख\1', text)

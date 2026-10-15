@@ -1514,9 +1514,41 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		"""NVDA's quick navigation to tables and headings (T, H, 1 to 6), and its elements list:
 		the viewer's own first; when the document has none, the PDF's tables and the headings its tags name."""
 		got = False
-		for item in gen:
-			got = True
-			yield item
+		if str(itemType).startswith("heading"):
+			merged = []
+			for item in gen:
+				t = (getattr(item, "textInfo", None) and item.textInfo.text or "").strip()
+				if not t or re.fullmatch(r'[\u0901-\u0903\u093a-\u094f\u0951-\u0954\u0962\u0963\u094d\s]+', t) or t in ("ु", "मु"):
+					continue
+				if merged:
+					prev = merged[-1]
+					try:
+						if direction == "previous":
+							between = item.textInfo.copy()
+							between.setEndPoint(item.textInfo, "startToEnd")
+							between.setEndPoint(prev.textInfo, "endToStart")
+							b_text = between.text or ""
+							if len(b_text) <= 25 and not b_text.strip():
+								prev.textInfo.setEndPoint(item.textInfo, "startToStart")
+								continue
+						else:
+							between = prev.textInfo.copy()
+							between.setEndPoint(prev.textInfo, "startToEnd")
+							between.setEndPoint(item.textInfo, "endToStart")
+							b_text = between.text or ""
+							if len(b_text) <= 25 and not b_text.strip():
+								prev.textInfo.setEndPoint(item.textInfo, "endToEnd")
+								continue
+					except Exception:
+						pass
+				merged.append(item)
+			for item in merged:
+				got = True
+				yield item
+		else:
+			for item in gen:
+				got = True
+				yield item
 		if got or direction not in ("next", "previous"):
 			return
 
@@ -3073,7 +3105,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		if not key:
 			return None
 		s_text = text.strip()
-		if s_text.isdigit() or _PLAIN_NUMBER.match(s_text):
+		if not s_text or s_text.isdigit() or _PLAIN_NUMBER.match(s_text):
+			return None
+		if all("\u0900" <= c <= "\u0903" or "\u093a" <= c <= "\u094f" or "\u0951" <= c <= "\u0957" or "\u0962" <= c <= "\u0963" for c in s_text):
 			return None
 		lines = text.splitlines(True)
 		if len(lines) > 2:
@@ -4055,6 +4089,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 					s_item = item.strip()
 					if s_item in ("ज्ञ", "द्द", "द्ध"):
 						fields[i] = item = {"ज्ञ": "१", "द्द": "२", "द्ध": "४"}[s_item]
+				if item and self._isPdfWindow(info.obj) and re.fullmatch(r'[\u0901-\u0903\u093a-\u094f\u0951-\u0954\u0962\u0963\u094d\s]+', item):
+					fields[i] = item = ""
 				if item:
 					runs.append((i, item, "unicode" if unicodeFont else fontKnown, curEnc))
 			elif isinstance(item, textInfos.FieldCommand) and item.command == "formatChange":
@@ -4109,6 +4145,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 						continue
 					elif isinstance(item, str):
 						continue
+					elif isinstance(item, textInfos.FieldCommand) and item.command in ("controlStart", "controlEnd") and (getattr(item, "field", None) or {}).get("role") == "heading":
+						continue
 					else:
 						if cur:
 							groups.append(cur)
@@ -4119,11 +4157,22 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 					whole = "".join(t for _i, t, _k, _e in grp)
 					if whole.strip().isdigit() or _PLAIN_NUMBER.match(whole.strip()):
 						continue
+					w_strip = whole.strip()
+					if w_strip in ("नगर उप-प्रमुख", "नगर", "स्था") or w_strip.startswith("नगर उप-प्रमुख"):
+						nxt = _neighbourLine(info, True)
+						if nxt:
+							nxt_strip = nxt.strip()
+							combo = (w_strip + " " + nxt_strip).strip()
+							combo_clean = devanagariRepair.cleanShuffled(combo)
+							if combo_clean in ("नगर उप-प्रमुखको सन्देश", "नगर प्रमुखको सन्देश", "स्थानीय पाठ्यक्रम") or "सन्देश" in combo_clean:
+								whole = combo_clean
 					try:
 						new = self._indexText(info if len(groups) == 1 else None, idx, whole)
 					except Exception:
 						log.debugWarning("Nepali Reader: PDF text lookup failed", exc_info=True)
 						new = None
+					if new is None and whole != "".join(t for _i, t, _k, _e in grp):
+						new = whole
 					if new is None:
 						continue
 					st = self._docState()

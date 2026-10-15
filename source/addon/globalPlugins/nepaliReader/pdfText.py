@@ -1334,6 +1334,9 @@ class DocIndex:
 	def lookup(self, text):
 		"""Real text for what the viewer gave: list of (piece, certain) or None if unknown here.
 		Pieces are words; uncertain pieces are the viewer's own text (to be repaired by the caller)."""
+		s_text = text.strip()
+		if s_text and all("\u0900" <= c <= "\u0903" or "\u093a" <= c <= "\u094f" or "\u0951" <= c <= "\u0957" or "\u0962" <= c <= "\u0963" for c in s_text):
+			return None
 		key = matchKey(text)
 		if not key:
 			return None
