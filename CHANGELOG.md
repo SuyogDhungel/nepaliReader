@@ -4,9 +4,11 @@ All notable changes to the **Nepali Reader** NVDA add-on are documented here.
 
 ## [2.0.2] - 2026-10-15
 
-- Table detection and table reading is now possible, other formatting is preserved, and some reading related bugs has been fixed. Copying will preserve formatting.
+### Added
+- **Table Detection & Table Reading**: Table detection and table reading is now possible, other formatting is preserved, and copying will preserve formatting.
 
 ### Fixed
+- **Reading Related Bugs**: Fixed reading order, sliced Devanagari text, heading pieces, and document title reading.
 - **Headings read once, whole**: Chrome breaks a line of a PDF wherever a sign is drawn below its letter, so a large heading came as pieces ("गोरखा नगरपालिकाको स्थानीय पाठ", "्", "यक्रम"; "नगर प्रमख", "ु", "को सन्दिे") and was read with words repeated. Such a line is now one line, as the page shows it: गोरखा नगरपालिकाको स्थानीय पाठ्यक्रम, नगर प्रमुखको सन्देश. Up and Down Arrow, say all, word navigation and copying take it whole.
 - **A page, heading or paragraph begins a line of its own**: the last line of a page no longer runs on into the next page's heading, and NVDA's line wrap no longer puts a heading's first word at the end of the line before it.
 - **PDFs joined from two Word documents** read far better: a glyph whose text table is wrong in one part (the स् of स्थानीय given as थ) takes the reading its other part shows, and readings that make compound words (कक्षाकार्य, गर्नुपर्छ, पालिकाभित्रका) are trusted. In the Gorkha curriculum about 500 more words read right (कार्य, स्थानीय, मूल्याङ्कन, व्यवस्थापन), in other PDFs गर्ने, पर्ने, अन्तर्गतका, पूर्वानुमान, सूर्योदय.
