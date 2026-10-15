@@ -12,7 +12,9 @@ def check(name, got, want):
     bad += not ok
     print(('ok   ' if ok else 'FAIL ') + name + ('' if ok else f'\n     got  {got!r}\n     want {want!r}'))
 
-# Test CMap signature detection and repair on simulated font
+# What the viewer shows for a glyph (the PDF's ToUnicode) is never changed: the index looks up
+# exactly that text (Chrome's "लिक्षा" for शिक्षा in a Kokila PDF from Word); the real letters come
+# from the glyphs themselves, not from guessing at the text table
 class MockFont:
     def __init__(self):
         self.cid = True
@@ -31,15 +33,10 @@ class MockFont:
         self.gidOf = {}
 
 f = MockFont()
+shown = dict(f.toUnicode)
 pdfText.PdfFont.resolveGlyphs(f)
-
-check("CMap repair: 108 is short-i", f.toUnicode[108], 'ि')
-check("CMap repair: 97 is la", f.toUnicode[97], 'ल')
-check("CMap repair: 101 is sha", f.toUnicode[101], 'श')
-check("CMap repair: 49 is chandrabindu", f.toUnicode[49], 'ँ')
-check("CMap repair: 51 is visarga", f.toUnicode[51], 'ः')
-check("CMap repair: 170 is reph", f.toUnicode[170], 'र्')
-check("CMap repair: 229 is short-i", f.toUnicode[229], 'ि')
+check("the viewer's text of each glyph is kept", f.toUnicode, shown)
+check("no letters guessed without the glyphs", f.truth, {})
 
 # Test out-of-order horizontal chunk sorting on the same line
 # Simulate line 8 of Page 4:

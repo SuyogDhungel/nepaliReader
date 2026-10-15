@@ -461,6 +461,49 @@ class _StoryMap:
 		return best
 
 
+_PATHLIKE = re.compile(r"^\s*(?:[A-Za-z]:[\\/]|\\\\|file:)")
+
+# a viewer line that begins with a sign that follows its letter (not ि, which is drawn before its
+# letter and so can begin a line of the page in a PDF whose text is in drawing order)
+_SIGN_START = re.compile("^[  ]*[ऀ-ःऺ-ाी-ॏ॑-ॗॢॣ]")
+_SIGNS_ONLY = re.compile("^[  ]*[ऀ-ःऺ-ॏ॑-ॗॢॣ]+[  ]*$")
+
+
+def _sameLine(idx, before, prev, nxt):
+	"""True when the viewer's line `nxt` is the rest of the line of the page that its line `prev`
+	is on (`before`: the viewer line before `prev`). PDFium breaks a line of the page wherever a
+	glyph is drawn outside the height of the text before it: in a large heading the ् of पाठ्यक्रम
+	or the ु of प्रमुख drawn below its letter becomes a line of its own, and the rest of the word
+	another ("पाठ", "्", "यक्रम"). Such a sign cannot begin a line of the page; the text after a line
+	of signs only is the same line when the document has it there."""
+	p = prev.rstrip("\r\n")
+	n = nxt.rstrip("\r\n")
+	if not p.strip() or not n.strip():
+		return False
+	if _SIGN_START.match(n):
+		return True
+	if _SIGNS_ONLY.match(p):
+		got = idx.continuesLine(before, n) if idx is not None and before else None
+		if got is None:
+			return p.strip().endswith("्")  # a conjunct goes on
+		return got
+	return False
+
+
+def _joinBrokenLines(idx, text):
+	"""The text with the line breaks the viewer put inside a line of the page (_sameLine) taken out."""
+	body = text.rstrip("\r\n")
+	if "\n" not in body and "\r" not in body:
+		return text
+	parts = text.splitlines(True)
+	out = [parts[0]]
+	for k in range(1, len(parts)):
+		if _sameLine(idx, parts[k - 2] if k > 1 else "", parts[k - 1], parts[k]):
+			out[-1] = out[-1].rstrip("\r\n")
+		out.append(parts[k])
+	return "".join(out)
+
+
 def _neighbourLine(info, forward):
 	"""The text of the line before (or after) a TextInfo's text, or ""."""
 	try:
@@ -828,6 +871,8 @@ class _NepaliNormalizedObject(NVDAObjects.NVDAObject):
 				orig = None
 		if not orig or not isOn():
 			return orig
+		if "%" in orig and ("://" in orig or _PATHLIKE.match(orig)):
+			orig = devanagariRepair.decodeUrlName(orig)
 		if "\u00e0" in orig:
 			orig = devanagariRepair.decodeMojibake(orig)
 		if devanagariRepair.hasDevanagari(orig):
@@ -898,6 +943,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			self._patchTableNavigation()
 		except Exception:
 			log.debugWarning("Nepali Reader: could not hook table navigation", exc_info=True)
+		devanagariRepair.docWords = self._docWordSet
 		NVDASettingsDialog.categoryClasses.append(NepaliReaderSettingsPanel)
 		self._menu = None
 		try:
@@ -987,6 +1033,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
 	def terminate(self):
 		self._unpatch()
+		if devanagariRepair.docWords == self._docWordSet:
+			devanagariRepair.docWords = None
 		try:
 			multilangIntegration.uninstall()
 		except Exception:
@@ -1189,6 +1237,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			if not item or item.isspace():
 				out.append(item)
 				continue
+			# a web address or file path (a PDF's document name is its file URL) is never Preeti
+			urlish = "://" in item or bool(_PATHLIKE.match(item))
+			if urlish and "%" in item:
+				item = devanagariRepair.decodeUrlName(item)  # file:///C:/.../%E0%A4%A7... as its name
 			if "\u00e0" in item:
 				item = devanagariRepair.decodeMojibake(item)  # a Devanagari file name shown as à¤§à¤°...
 			text = item
@@ -1199,7 +1251,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			except Exception:
 				isPdf = False
 			inCtx = bool(ctxEnc or isPdf)
-			if mode != "off":
+			if mode != "off" and not urlish:
 				# a short piece (a table header, a cell) only in a Preeti document or a PDF, and never a
 				# plain number or page count ("/14", "100%", "1.5" are what they say)
 				if (len(text.strip()) <= 4 and inCtx and not _PLAIN_NUMBER.match(text.strip())
@@ -1871,6 +1923,12 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 							rootObj = getattr(obj, "rootNVDAObject", None)
 							if not plugin._isPdfWindow(obj) and not plugin._isPdfWindow(rootObj):
 								return res
+							page = plugin._pdfPageLine(self, offset)
+							if page is not None:
+								res = page
+							joined = plugin._pdfJoinedLine(self, res)
+							if joined is not None:
+								res = joined
 							new = plugin._pdfCellLineOffsets(self, offset, res)
 							return new if new is not None else res
 						except Exception:
@@ -2443,6 +2501,138 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			diag.exception("pdf line move")
 			return orig(obj, gesture)
 
+	_BLOCK_ROLES = frozenset(("heading", "paragraph", "region", "landmark", "statusbar", "status"))
+
+	def _pdfPageLine(self, ti, offset):
+		"""(start, end) of the line at offset as the page shows it, or None (NVDA's own line then).
+		Chrome gives NVDA a PDF's text as runs that do not all end with a line break: the last line
+		of a page, the next page and its heading ran on as one line, and NVDA's wrap at its maximum
+		line length then put the first word of a heading at the end of the line before it. A line
+		here ends at a line break and where a page, heading or paragraph begins or ends; a longer
+		line is wrapped at NVDA's maximum line length, as NVDA does."""
+		try:
+			total = ti._getStoryLength()
+			if total <= 0 or not 0 <= offset < total:
+				return None
+			w0 = max(0, offset - 600)
+			w1 = min(total, offset + 600)
+			text = ti._getTextRange(w0, w1)
+		except Exception:
+			return None
+		if len(text) != w1 - w0 or any(ord(ch) > 0xFFFF for ch in text):
+			return None  # (offsets would not be characters)
+		rel = offset - w0
+		hb = text.rfind("\n", 0, rel)
+		if hb < 0 and w0 > 0:
+			return None
+		a = w0 + hb + 1
+		nb = text.find("\n", rel)
+		if nb < 0 and w1 < total:
+			return None
+		z = w0 + nb + 1 if nb >= 0 else w1
+		key = (id(getattr(ti, "obj", None)), total, a, z, hash(text[a - w0:z - w0]))
+		cache = self.__dict__.setdefault("_pageLineCache", OrderedDict())
+		cuts = cache.get(key)
+		if cuts is None:
+			cuts = []
+			try:
+				span = ti.copy()
+				span._startOffset = a
+				span._endOffset = z
+				fields = span.getTextWithFields()
+			except Exception:
+				return None
+			pos = a
+			stack = []
+			pending = False
+			for f in fields:
+				if isinstance(f, str):
+					if f:
+						if pending and pos > a:
+							cuts.append(pos)
+						pending = False
+						pos += len(f)
+				elif isinstance(f, textInfos.FieldCommand):
+					if f.command == "controlStart":
+						field = f.field or {}
+						role = field.get("role")
+						name = str(getattr(role, "name", role) or "").lower()
+						block = name in self._BLOCK_ROLES or bool(field.get("landmark"))
+						stack.append(block)
+						if block:
+							pending = True
+					elif f.command == "controlEnd":
+						if stack and stack.pop():
+							pending = True
+			if pos != z:
+				return None  # the fields did not cover the text exactly
+			cache[key] = cuts
+			if len(cache) > 400:
+				cache.popitem(last=False)
+		start = max([a] + [c for c in cuts if c <= offset])
+		end = min([z] + [c for c in cuts if c > offset])
+		try:
+			maxLen = int(config.conf["virtualBuffers"]["maxLineLength"])
+		except Exception:
+			maxLen = 100
+		maxLen = max(maxLen, 10)
+		seg = start
+		while end - seg > maxLen:
+			piece = text[seg - w0:seg - w0 + maxLen]
+			cut = piece.rfind(" ")
+			nxt = seg + cut + 1 if cut > 0 else seg + maxLen
+			if offset < nxt:
+				return (seg, nxt)
+			seg = nxt
+		return (seg, end)
+
+	def _pdfJoinedLine(self, ti, res):
+		"""(start, end) of a line of the page that the viewer gave as several lines (_sameLine: a
+		sign drawn below its letter in a large heading), or None: Up and Down Arrow, say all and
+		line reading take the whole line, as it is seen on the page."""
+		start, end = res
+		if end <= start:
+			return None
+		try:
+			total = ti._getStoryLength()
+		except Exception:
+			return None
+		idx = self._readyIndex(getattr(ti, "obj", None))
+		text = ti._getTextRange
+
+		def lineAt(o):
+			return self._pdfPageLine(ti, o) or ti._getLineOffsets(o)
+
+		def joins(prev, nxt, before):
+			pt = text(*prev)
+			nt = text(*nxt)
+			if before is None and _SIGNS_ONLY.match(pt.rstrip("\r\n")) and not _SIGN_START.match(nt):
+				before = ""
+				if prev[0] > 0:
+					bs, be = lineAt(prev[0] - 1)
+					if be == prev[0]:
+						before = text(bs, be)
+			return _sameLine(idx, before or "", pt, nt)
+
+		lines = [(start, end)]
+		while len(lines) < 8 and lines[-1][1] < total:
+			ns, ne = lineAt(lines[-1][1])
+			if ns != lines[-1][1] or ne <= ns:
+				break
+			if not joins(lines[-1], (ns, ne), text(*lines[-2]) if len(lines) > 1 else None):
+				break
+			lines.append((ns, ne))
+		while len(lines) < 8 and lines[0][0] > 0:
+			ps, pe = lineAt(lines[0][0] - 1)
+			if pe != lines[0][0] or pe <= ps:
+				break
+			if not joins((ps, pe), lines[0], None):
+				break
+			lines.insert(0, (ps, pe))
+		if len(lines) == 1:
+			return None
+		return (lines[0][0], lines[-1][1])
+
 	def _pdfCellLineOffsets(self, ti, offset, res):
 		"""Splits a visual line in a PDF virtual buffer at table cell boundaries so that
 		Down Arrow / Up Arrow line reading moves chronologically cell-by-cell."""
@@ -2922,6 +3112,21 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			diag.write("pdf: waited %.1f s for the first pages (%s)" % (time.monotonic() - t0, st.status))
 		return st.index if st.status == "ready" else None
 
+	def _docWordSet(self):
+		"""The words of the PDF in the foreground window (a set), once its index is ready, or None."""
+		idx = self._readyIndex(None)
+		if idx is None:
+			return None
+		ws = getattr(idx, "_wordSet", None)
+		if ws is None:
+			ws = set()
+			for fixed, _amap, _enc, key in idx.words:
+				w = (fixed if fixed is not None else key).strip(".,;:!?()[]{}\"'‘’“”-–—।॥|/")
+				if w:
+					ws.add(w)
+			idx._wordSet = ws
+		return ws
+
 	def _readyIndex(self, obj):
 		"""The PDF index of the foreground window if it is already built (never starts or waits)."""
 		try:
@@ -3063,6 +3268,11 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
 	def _indexText(self, info, idx, text):
 		"""The real text for one run of what the viewer gave, or None if the index doesn't know it."""
+		joined = _joinBrokenLines(idx, text)
+		if joined != text:
+			# one line of the page that the viewer broke into several (a sign below its letter)
+			got = self._indexText(None if "\n" in joined.rstrip("\r\n") else info, idx, joined)
+			return got if got is not None else joined
 		for pre in ("Finished loading PDF", "Loading PDF"):
 			# Brave/Chrome put their status message in front of the first line of the page
 			if text.startswith(pre) and len(text) > len(pre):
@@ -3108,6 +3318,12 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			pieces = None
 		if pieces and (s_text.isdigit() or _PLAIN_NUMBER.match(s_text)) and any(devanagariRepair.hasDevanagariLetters(pc) for pc, _ in pieces):
 			pieces = None
+		if pieces and not any(ok for _p, ok in pieces):
+			got = pdfText.matchKey("".join(pc for pc, _ok in pieces))
+			if got != pdfText.matchKey(text) and sorted(got) == sorted(pdfText.matchKey(text)):
+				# the document's own letters in its own order (PDFium puts a sign after the next
+				# letter: प्रमखु for प्रमुख): what line reading says for these words
+				pieces = [(pc, True) for pc, _ok in pieces]
 		if not pieces or not any(ok for _p, ok in pieces):
 			mixed = self._mixedRuns(idx, text)
 			if mixed is not None:

@@ -884,24 +884,6 @@ def cleanShuffled(text):
 	_DEVA_BOUND_L = r'(?<![\u0900-\u097f])'
 	_DEVA_BOUND_R = r'(?![\u0900-\u097f])'
 
-	# Sliced / corrupted Devanagari words and headings from PDF layout engines:
-	text = re.sub(r'नगर\s+उप[\s\-–—]*प्रमुख(?:\s*[ुमु])?(?:\s+को|\s*को)?\s+सन्दे[शि]', 'नगर उप-प्रमुखको सन्देश', text)
-	text = re.sub(r'नगर\s+प्रमुख(?:\s+मु)?(?:\s+को|\s*को)?\s+सन्दे[शि]', 'नगर प्रमुखको सन्देश', text)
-	text = re.sub(r'(^|\s)स्था\s+पाठ्यक्रम', r'\1स्थानीय पाठ्यक्रम', text)
-	text = re.sub(r'(^|\s)उप[\s\-–—]*प्रमुख(?:\s*[ुमु])?(?:\s+को|\s*को)?\s+सन्दे[शि]', r'\1उप-प्रमुखको सन्देश', text)
-	text = re.sub(r'(^|\s)प्रमुख(?:\s+मु)?(?:\s+को|\s*को)?\s+सन्दे[शि]', r'\1प्रमुखको सन्देश', text)
-	text = re.sub(r'पाठ\s*्\s*यक्रम', 'पाठ्यक्रम', text)
-	text = re.sub(r'स्थानीय\s+पाठ(?:\s*्)?(?:\s*यक्रम)?', 'स्थानीय पाठ्यक्रम', text)
-	text = re.sub(r'आधारभत(?:\s*ू)?', 'आधारभूत', text)
-	text = re.sub(_DEVA_BOUND_L + r'धारभूत' + _DEVA_BOUND_R, 'आधारभूत', text)
-	text = re.sub(r'(^|\s)ू\s+(?=तह\b)', r'\1', text)
-	text = re.sub(r'(?<=\s)[\u093a-\u094f\u0901-\u0903\u094d]+(?=\s|$)', '', text)
-	text = re.sub(_DEVA_BOUND_L + r'आधार\s+भि(?:\s+त)?' + _DEVA_BOUND_R, 'आधारभूत', text)
-	text = re.sub(r'(^|\s)त\s+(?=तह\b)', r'\1', text)
-	text = re.sub(_DEVA_BOUND_L + r'प्रमख(को|का|की|मा|ले|लाई|बाट|हरू)?' + _DEVA_BOUND_R, r'प्रमुख\1', text)
-	text = re.sub(_DEVA_BOUND_L + r'सन्दे[ििश]' + _DEVA_BOUND_R, 'सन्देश', text)
-	text = re.sub(r'\bसन्दिे\b', 'सन्देश', text)
-
 	# Multi-digit numbers glued to Devanagari words without spaces (e.g. बस्ने१८ -> बस्ने १८, वर्षीय२५ -> वर्षीय २५)
 	text = re.sub(r'(?<=[क-ह\u093e-\u094c])([0-9\u0966-\u096f]{2,})' + _BOUNDARY, r' \1', text)
 
@@ -1718,7 +1700,8 @@ def finalClean(fixed, isWord=None):
 # ---------------------------------------------------------------------------
 # Devanagari file names / titles shown as mojibake (UTF-8 bytes read as Windows-1252):
 # "à¤§à¤°à¥_à¤®" is धर्म. Bytes that Windows-1252 has no character for (0x81 0x8D 0x8F 0x90 0x9D)
-# are lost and shown as "_"; such a letter is filled in only where exactly one choice makes a
+# are lost and shown as "_" (a name read as Latin-1 loses all of 0x80-0x9F: स्थानीय is
+# "à¤¸à¥_à¤¥à¤¾à¤¨à¥_à¤¯"); such a letter is filled in only where exactly one choice makes a
 # dictionary word, otherwise the word is left as it is.
 # ---------------------------------------------------------------------------
 
@@ -1730,6 +1713,11 @@ for _b in range(0x80, 0xC0):
 		pass
 _MOJI_RUN = re.compile("(?:\u00e0[\u00a4\u00a5][" + re.escape("".join(_CP1252_TAIL)) + "_])+")
 _LOST_BYTES = (0x81, 0x8D, 0x8F, 0x90, 0x9D)
+# (the letters Nepali uses among U+0900-091F and U+0940-095F)
+_C1_BYTES = {0xA4: tuple(b for b in range(0x80, 0xA0) if b not in (0x80, 0x84, 0x8C, 0x8D, 0x8E, 0x91, 0x92)),
+	0xA5: tuple(b for b in range(0x80, 0xA0) if b in (0x80, 0x81, 0x82, 0x83, 0x87, 0x88, 0x8B, 0x8C, 0x8D, 0x90))}
+_MOJI_CACHE = {}
+docWords = None  # () -> the words of the document in the foreground (set), or None
 
 
 def decodeMojibake(text):
@@ -1753,13 +1741,57 @@ def decodeMojibake(text):
 			return "".join(chars)
 		if len(lost) > 3 or not neLexicon.isLoaded():
 			return s
+		hit = _MOJI_CACHE.get(s)
+		if hit is not None:
+			return hit
 		import itertools
-		found = set()
-		for combo in itertools.product(*[[bytes([0xE0, b2, b]).decode("utf-8") for b in _LOST_BYTES] for b2 in lost]):
-			it = iter(combo)
-			cand = "".join(c if c is not None else next(it) for c in chars)
-			if _known(cand):
-				found.add(cand)
-		return found.pop() if len(found) == 1 else s
+		got = s
+		for c1 in (False, True):
+			found = set()
+			for combo in itertools.product(*[[bytes([0xE0, b2, b]).decode("utf-8") for b in (_C1_BYTES[b2] if c1 else _LOST_BYTES)] for b2 in lost]):
+				it = iter(combo)
+				cand = "".join(c if c is not None else next(it) for c in chars)
+				if _known(cand):
+					found.add(cand)
+			if len(found) > 1 and docWords is not None:
+				# several words fit: the one the document itself has (गोरखा in a Gorkha PDF)
+				try:
+					inDoc = docWords()
+				except Exception:
+					inDoc = None
+				if inDoc:
+					found = {w for w in found if w in inDoc} or found
+			if len(found) == 1:
+				got = found.pop()
+				break
+			if found:
+				break  # more than one word fits: left as it is
+		if got != s:  # (a word left as it is may be told once the document is read)
+			if len(_MOJI_CACHE) > 500:
+				_MOJI_CACHE.clear()
+			_MOJI_CACHE[s] = got
+		return got
 
 	return _MOJI_RUN.sub(run, text)
+
+
+_PERCENT_RUN = re.compile(r"(?:%[0-9A-Fa-f]{2})+")
+
+
+def decodeUrlName(text):
+	"""A Devanagari file name in a URL (file:///C:/Users/.../%E0%A4%A7%E0%A4%B0...pdf, or the same
+	name stored as mojibake and then percent-encoded) as its letters; `text` unchanged when no
+	Devanagari comes out of it."""
+	if not text or "%" not in text:
+		return text
+	import urllib.parse
+
+	def dec(m):
+		try:
+			return urllib.parse.unquote(m.group(0), errors="strict")
+		except Exception:
+			return m.group(0)
+	out = _PERCENT_RUN.sub(dec, text)
+	if "\u00e0" in out:
+		out = decodeMojibake(out)
+	return out if hasDevanagari(out) else text

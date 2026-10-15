@@ -41,7 +41,7 @@ NUKTA = "़"
 REPH = "र्"
 DEP_SIGNS = set("ऺऻािीुूृॄॅॆेैॉॊोौॎॏॕॖॗॢॣऀँंः़")
 INDEPENDENT = set(chr(c) for c in range(0x0904, 0x0915)) | set("ॠॡॲॳॴॵॶॷ")
-INDEX_VERSION = 29
+INDEX_VERSION = 30
 STYLE_BOLD = 1
 STYLE_ITALIC = 2
 STYLE_UNDERLINE = 4
@@ -414,38 +414,7 @@ class PdfFont:
 
 	def resolveGlyphs(self):
 		"""Work out the real letters of every used Devanagari glyph from the glyph outlines."""
-		if not self.cid or not self.used:
-			return
-
-		# Check for systematic CMap corruption signatures in Devanagari fonts (e.g. Kokila / Kalimati export bugs)
-		if getattr(self, "toUnicode", None):
-			if self.toUnicode.get(108) == 'ल' and self.toUnicode.get(97) == 'ि' and self.toUnicode.get(101) == 'ि':
-				self.toUnicode[108] = 'ि'
-				self.toUnicode[97] = 'ल'
-				self.toUnicode[101] = 'श'
-				self.truth[108] = 'ि'
-				self.truth[97] = 'ल'
-				self.truth[101] = 'श'
-				if self.toUnicode.get(49) == '\u0941\u0901':
-					self.toUnicode[49] = 'ँ'
-					self.truth[49] = 'ँ'
-				if self.toUnicode.get(51) == '\u093f\u0903':
-					self.toUnicode[51] = 'ः'
-					self.truth[51] = 'ः'
-				if self.toUnicode.get(170) == 'ा' and self.widths.get(170, 1.0) == 0.0:
-					self.toUnicode[170] = 'र्'
-					self.truth[170] = 'र्'
-				if self.toUnicode.get(229) == 'र':
-					self.toUnicode[229] = 'ि'
-					self.truth[229] = 'ि'
-
-			# Non-spacing combining mark with width 0 mapped to 'ा' (U+093E) is overhead reph
-			for c, t_uni in list(self.toUnicode.items()):
-				if t_uni == 'ा' and self.widths.get(c, 1.0) == 0.0 and (self.cid or isDeva(self.baseFont) or any(isDeva(v) for v in self.toUnicode.values())):
-					self.toUnicode[c] = 'र्'
-					self.truth[c] = 'र्'
-
-		if not self.program:
+		if not self.cid or not self.program or not self.used:
 			return
 		try:
 			font = sfnt.Font(self.program)
@@ -475,6 +444,7 @@ class PdfFont:
 		self.gidOf = gids
 		family = glyphRefs.norm(self.baseFont)
 		hashes = {code: font.glyphHash(g) for code, g in gids.items()}
+		self.hashOf = hashes
 
 		def familyHits():
 			tabs = glyphRefs.familyTables(family)
@@ -1140,6 +1110,41 @@ class DocIndex:
 			pos.append(m.start())
 		self.SBpos = pos
 
+	def continuesLine(self, prev, nxt):
+		"""True when the viewer's text `nxt` follows `prev` on the same line of the page, False when
+		it begins the next line of the page, None when the document does not tell. PDFium starts
+		a new line wherever a glyph is drawn outside the height of the text before it: a sign
+		drawn below its letter (the ् of पाठ्यक्रम, the ु of प्रमुख in a large heading) becomes a
+		line of its own, and the rest of the word another line."""
+		SB = getattr(self, "SB", None)
+		if not SB:
+			return None
+		a = _MARKS.sub("", matchKey(prev))[-12:]
+		b = _MARKS.sub("", matchKey(nxt))[:12]
+		if len(a) < 2 or not b:
+			return None
+		pos = self.SBpos
+		hs = bisect.bisect_left(pos, self._hint) if self._hint else 0
+		best = -1
+		q = SB.find(a + b)
+		tries = 0
+		while q >= 0 and tries < 40:
+			if best < 0 or abs(q - hs) < abs(best - hs):
+				best = q
+			tries += 1
+			q = SB.find(a + b, q + 1)
+		if best < 0:
+			return None
+		last = pos[best + len(a) - 1]   # the last letter of prev, in B
+		first = pos[best + len(a)]      # the first letter of nxt
+		i = bisect.bisect_right(self.starts, first) - 1
+		if i < 0:
+			return None
+		if self.starts[i] <= last:
+			return True  # one word of the page: the viewer broke it
+		# a word of its own: on this line of the page unless it begins the next one
+		return not self.lineStart[i]
+
 	def _findF(self, key, tolerant=True):
 		F = getattr(self, "F", "")
 		if not F:
@@ -1737,9 +1742,6 @@ class DocIndex:
 		out = []
 		found = 0
 		i = 0
-		# Drop leading orphan single-letter consonant if next token starts a known word
-		if len(toks) > 1 and len(toks[0]) == 1 and toks[0] in "तकमपयरलवसषदढठट" and matchKey(toks[1]) in self._byKey:
-			i = 1
 		while i < len(toks):
 			done = False
 			for span in (3, 2, 1):
@@ -1766,24 +1768,8 @@ class DocIndex:
 					done = True
 					break
 			if not done:
-				# Check prefix matching with next unmapped token (e.g. 'आधार' + 'भि' -> 'आधारभूत')
-				k = matchKey(toks[i])
-				matched_prefix = False
-				if k and i + 1 < len(toks):
-					h = getattr(self, "_hint", 0) or 0
-					w_idx = bisect.bisect_right(self.starts, h) - 1
-					near_words = self.words[max(0, w_idx - 20):min(len(self.words), w_idx + 60)]
-					for w in near_words:
-						fixed = w[0] or w[3]
-						if fixed and fixed.startswith(k) and len(fixed) > len(k):
-							out.append((fixed, True))
-							found += 1
-							i += 2
-							done = matched_prefix = True
-							break
-				if not matched_prefix:
-					out.append((toks[i], False))
-					i += 1
+				out.append((toks[i], False))
+				i += 1
 		return out if found else None
 
 	# -- saving ------------------------------------------------------------------
@@ -1927,7 +1913,7 @@ def _wordTexts(w):
 			return shownText, None, None, None
 		cand = "".join(t for t, g in reorder(toks))
 		core = cand.strip(_PUNCT)
-		if not core or not isDeva(core) or not all(_wordCheck(p) for p in re.split(r"[-/]", core) if p):
+		if not core or not isDeva(core) or not all(_wordish(p, _wordCheck) for p in re.split(r"[-/]", core) if p):
 			if isDeva(shownText):
 				rep = devanagariRepair.repair(shownText)
 				if rep and rep != shownText:
@@ -1940,7 +1926,7 @@ def _wordTexts(w):
 		# readings worked out from the document: trusted only when they make a real word
 		checker = next((getattr(f, "isWord", None) for f, _i in segs if getattr(f, "isWord", None)), None)
 		core = fixed.strip(_PUNCT)
-		if checker is None or len(core) < 3 or not checker(core):
+		if checker is None or len(core) < 3 or not _wordish(core, checker):
 			# a reading that helps most words can still be wrong in this one: the PDF's own text
 			# wins when it makes a dictionary word
 			if checker is not None and len(plainToks) == len(toks):
@@ -1993,6 +1979,31 @@ _PUA = re.compile("[\ue000-\uf8ff\U000f0000-\U0010ffff]")
 _CONTROL = re.compile("[\x00-\x08\x0e-\x1f]")
 
 
+# endings written on to a word (कार्यहरु, पालिकाभित्रका)
+_ENDINGS = tuple(sorted(("हरु", "हरू", "लाई", "को", "का", "की", "मा", "ले", "बाट", "द्वारा", "सँग", "भित्र", "देखि",
+	"सम्म", "तिर", "पछि", "अनुसार"), key=len, reverse=True))
+
+
+def _wordish(w, isWord, depth=0):
+	"""A dictionary word, one with endings written on to it (प्रकोपहरुको), or two dictionary words
+	written as one (कक्षाकार्य, गर्नुपर्छ). Used to trust readings worked out from the document."""
+	if isWord(w):
+		return True
+	if depth > 2:
+		return False
+	for e in _ENDINGS:
+		if w.endswith(e) and len(w) - len(e) >= 2 and _wordish(w[:-len(e)], isWord, depth + 1):
+			return True
+	if depth == 0:
+		aks = aksharas(w)
+		for i in range(2, len(aks) - 1):
+			a = "".join(aks[:i])
+			b = "".join(aks[i:])
+			if isWord(a) and _wordish(b, isWord, 1):
+				return True
+	return False
+
+
 def _keepDigit(t, letters):
 	"""A glyph whose PDF text is a digit is that digit (२०८३, 10:00 are read as written), not a
 	reading worked out from the document - except a Latin digit inside a Nepali word: some
@@ -2041,6 +2052,8 @@ def _candidates(t):
 			out.append(core[-1])
 	if I_SIGN in t:
 		out.append(I_SIGN)
+	if len(t) == 1 and t in DEP_SIGNS:
+		out.append(REPH + t)  # a sign drawn with the reph above it as one glyph (the ै of गर्दै)
 	out += ["", REPH]
 	seen = []
 	for c in out:
@@ -2192,14 +2205,21 @@ def _inferFonts(fonts, allWords, isWord, deadline, pause=None):
 				if seen is None:
 					seen = set()
 				seen.add(fi)
-	# (glyph inference is a help, never worth a long wait: a few seconds for a short document,
-	# at most 40 seconds for a big book, in the background while it is already being read)
-	deadline = min(deadline, time.monotonic() + max(2.0, min(40.0, 1.0 + len(allWords) / 800.0)))
+	# (glyph inference is a help, never worth a long wait: a few seconds of work for a short
+	# document, at most 40 seconds for a big book, in the background while it is already being
+	# read. The work is counted in this thread's own processor time: NVDA's pauses and a busy
+	# computer must not cut it short, or the same PDF would read differently from one day to the
+	# next)
+	clock = getattr(time, "thread_time", time.monotonic)
+	work = clock() + max(5.0, min(40.0, 1.0 + len(allWords) / 800.0))
 	if deadline <= time.monotonic():
 		return
+
+	def late():
+		return time.monotonic() > deadline or clock() > work
 	# the most used fonts first: if time runs out, the rare ones are left
 	for base, flist in sorted(groups.items(), key=lambda kv: -sum(sum(f.used.values()) for f in kv[1])):
-		if time.monotonic() > deadline:
+		if late():
 			break
 		fset = set(id(f) for f in flist)
 		isT3 = base == "\x00type3"
@@ -2223,6 +2243,7 @@ def _inferFonts(fonts, allWords, isWord, deadline, pause=None):
 			gj |= set(gkey(f, c) for c in junk.get(id(f), ()))
 		known = {}
 		text0 = {}
+		src = {}  # the subset whose text a glyph's first reading is
 		for f in flist:
 			for c in f.used:
 				t = f.text(c)
@@ -2230,7 +2251,9 @@ def _inferFonts(fonts, allWords, isWord, deadline, pause=None):
 				if c in f.truth and c not in f.weak:
 					known[k] = f.truth[c]
 				elif k in gj:
-					text0.setdefault(k, f.truth.get(c) or t)
+					if k not in text0:
+						text0[k] = f.truth.get(c) or t
+						src[k] = f
 				elif not _isUnknownText(t):
 					known.setdefault(k, f.truth.get(c) or t)
 		for f in flist:
@@ -2288,7 +2311,7 @@ def _inferFonts(fonts, allWords, isWord, deadline, pause=None):
 				ids = usedBy.get(c)
 				if not ids or c not in todo:
 					continue
-				if time.monotonic() > deadline:
+				if late():
 					break
 				if pause:
 					pause()
@@ -2343,11 +2366,81 @@ def _inferFonts(fonts, allWords, isWord, deadline, pause=None):
 			if not changed:
 				break
 			todo = nextTodo
-		# a glued ASCII sign no reading improved stays as it was (not a guess)
-		res = {c: v for c, v in assign.items() if not (c in gj and v == text0[c])}
+		# a glued ASCII sign no reading improved stays as it was (not a guess); subsets of one font
+		# share their glyph numbers but not their text tables (two Word PDFs joined into one: the
+		# स् of स्थानीय is "स्" in one subset and "थ" in the other), so each subset takes what was
+		# worked out wherever its own text differs from it
 		for f in flist:
-			f.inferred = {c: res[gkey(f, c)] for c in f.used if gkey(f, c) in res} if isT3 else res
+			if isT3:
+				res = {c: v for c, v in assign.items() if not (c in gj and v == text0[c])}
+				f.inferred = {c: res[gkey(f, c)] for c in f.used if gkey(f, c) in res}
+			else:
+				inf = {c: v for c, v in assign.items() if not (c in gj and v == text0[c])}
+				if len(flist) > 1:
+					inf.update(_subsetReadings(f, fset, assign, known, gj, inf, wordsOf, isWord, src))
+				f.inferred = inf
 			f.isWord = isWord
+
+
+def _subsetReadings(f, fset, assign, known, gj, inf, wordsOf, isWord, src):
+	"""Readings for one subset of a font whose subsets share glyph numbers but not their text
+	tables (two Word PDFs joined into one: the स् of स्थानीय is "स्" in one subset and "थ" in the
+	other): a glyph (the very same outline) whose text here differs from its text in the subset
+	whose text was right there takes that text, when that clearly makes more of this subset's
+	own words dictionary words."""
+	out = {}
+	cache = {}
+
+	def score(font, w, c, t):
+		# the subset's word as it reads it, with only this glyph's reading changed
+		toks = []
+		for gi, g in enumerate(w.glyphs):
+			if g[0] is font and g[1] == c:
+				x = t
+			else:
+				x = g[0].truth.get(g[1])
+				if x is None:
+					x = g[0].text(g[1])
+			toks.append((x, gi))
+		word = "".join(x for x, _g in reorder(toks)).strip(_PUNCT)
+		r = cache.get(word)
+		if r is None:
+			r = cache[word] = len(word) >= 3 and isDeva(word) and bool(isWord(word))
+		return r
+
+	def wordsWith(font, c):
+		ws = []
+		for w in wordsOf.get(id(font), ()):
+			if len(ws) >= 300:
+				break
+			if any(g[0] is font and g[1] == c for g in w.glyphs):
+				ws.append(w)
+		return ws
+
+	for c, v in assign.items():
+		if c in inf or c not in gj or c not in f.used:
+			continue
+		own = f.truth.get(c) or f.text(c)
+		if not own or own == v or _isUnknownText(own) or not isDeva(own):
+			continue
+		# only the very same glyph (its outline): fonts of one name from different documents can
+		# number their glyphs differently
+		h = getattr(f, "hashOf", {}).get(c)
+		s0 = src.get(c)
+		if not h or s0 is None or s0 is f or getattr(s0, "hashOf", {}).get(c) != h:
+			continue
+		# the subset the reading comes from reads its own words right with it
+		sw = wordsWith(s0, c)
+		if not sw or sum(score(s0, w, c, v) for w in sw) < 0.7 * len(sw):
+			continue
+		ws = wordsWith(f, c)
+		n = len(ws)
+		mine = sum(score(f, w, c, own) for w in ws)
+		theirs = sum(score(f, w, c, v) for w in ws)
+		# only where this subset's own text makes few words and the other reading clearly more
+		if n and mine < 0.5 * n and theirs - mine >= max(3, 0.3 * n):
+			out[c] = v
+	return out
 
 
 def _gidForSimple(font, sf, code):
