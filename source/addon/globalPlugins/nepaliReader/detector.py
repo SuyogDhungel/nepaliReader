@@ -33,6 +33,7 @@ alt windows desktop folder name date time size type modified one two three four 
 ten first last please thank thanks hello hi welcome sign log login logout account password email user
 mail inbox sent draft reply forward send message chat call video share like comment follow more less
 show hide play pause stop volume mute copy cut paste undo redo find replace print zoom full screen
+nvda wcag wai aria html css javascript python json unicode utf api pdf docx xlsx url otp ui ux github web app chrome edge brave firefox word excel
 """.split())
 
 _A11Y_GLUED_AFTER = re.compile(
@@ -59,10 +60,10 @@ _DOT_BULLET_AFTER = re.compile(r'([^\s•A-Za-z0-9])(•)')
 def cleanGluedTokens(s):
 	if not s:
 		return s
-	s = _A11Y_GLUED_AFTER.sub(r'\1 \2', s)
-	s = _A11Y_GLUED_BEFORE.sub(r'\1 \2', s)
-	s = _PAREN_NUM_AFTER.sub(r'\1 \2', s)
-	s = _PAREN_NUM_BEFORE.sub(r'\1 \2', s)
+	s = _A11Y_GLUED_AFTER.sub(
+		lambda m: m.group(1) + " " + m.group(2) if "\u0900" <= m.group(1) <= "\u097f" else m.group(0), s)
+	s = _A11Y_GLUED_BEFORE.sub(
+		lambda m: m.group(1) + " " + m.group(2) if "\u0900" <= m.group(2) <= "\u097f" else m.group(0), s)
 	s = _BULLET_GLUED_BEFORE.sub(r'\1 \2', s)
 	s = _BULLET_GLUED_AFTER.sub(r'\1 \2', s)
 	s = _DOT_BULLET_BEFORE.sub(r'\1 \2', s)
@@ -86,11 +87,13 @@ def _looksLikeCode(text):
 
 # Full offline English dictionary (Webster's 2nd + modern words), loaded once in the background.
 _ENGLISH_DICT = frozenset()
+_load_attempted = False
 
 
 def loadDictionary(path=None):
 	"""Load the compressed English word list. Safe to call from a background thread."""
-	global _ENGLISH_DICT
+	global _ENGLISH_DICT, _load_attempted
+	_load_attempted = True
 	import os
 	import zlib
 	if path is None:
@@ -105,7 +108,7 @@ _SUFFIXES = ("'s", "s'", "ies", "es", "s", "ed", "ing", "ly", "er", "est")
 
 def isEnglishWord(word):
 	global _ENGLISH_DICT
-	if not _ENGLISH_DICT:
+	if not _ENGLISH_DICT and not _load_attempted:
 		try:
 			loadDictionary()
 		except Exception:
@@ -208,7 +211,12 @@ def decide(text, encoding="preeti", context=False):
 	if _MOJIBAKE.search(text):
 		# UTF-8 Devanagari shown through a Latin code page (à¤§à¤°...): not Preeti, left as it is
 		return [(t, False) for t in re.split(r"(\s+)", text)]
-	if not context and _looksLikeCode(text):
+	if _looksLikeCode(text):
+		return [(t, False) for t in re.split(r"(\s+)", text)]
+	# An isolated known English word has no independent font evidence.
+	# Even two-letter dictionary entries can resemble a legacy key sequence.
+	# A verified font or positive screen check bypasses this text-only path.
+	if isEnglishWord(_core(text.strip())):
 		return [(t, False) for t in re.split(r"(\s+)", text)]
 	tokens = re.split(r"(\s+)", text)
 	scored = []
@@ -234,8 +242,8 @@ def decide(text, encoding="preeti", context=False):
 		hasScorable = any(sc is not None and sc > 0 for _, sc in scored)
 		if context and hasScorable:
 			# ambiguous fragment inside a legacy document: only convert if it has ASCII letters and is not a bullet/arrow/emoji/number
-			return [(t, bool(t) and any(c.isascii() and c.isalpha() for c in t) and not isNonLegacySymbolOrEmoji(t) and not _NUM_TOKEN.match(t.strip(_STRIP)) and not _URLISH.search(t)) for t, _ in scored]
-		if any(isPreetiSymbolNumber(t) for t, _ in scored):
+			return [(t, bool(t) and any(c.isascii() and c.isalpha() for c in t) and not isNonLegacySymbolOrEmoji(t) and not _NUM_TOKEN.match(t.strip(_STRIP)) and not _URLISH.search(t) and not isEnglishWord(_core(t))) for t, _ in scored]
+		if context and any(isPreetiSymbolNumber(t) for t, _ in scored):
 			return [(t, isPreetiSymbolNumber(t)) for t, _ in scored]
 		return [(t, False) for t, _ in scored]
 	if context and not hasDeva:
@@ -403,7 +411,7 @@ def forceDecide(text, protectEnglish=True):
 		if _NUM_TOKEN.match(core) or _NUM_TOKEN.match(t):
 			out.append((t, False))
 			continue
-		keep = _URLISH.search(t) or (protectEnglish and core.lower() in COMMON_ENGLISH and len(core) > 2)
+		keep = _URLISH.search(t) or (protectEnglish and (core.lower() in COMMON_ENGLISH or isEnglishWord(core)) and len(core) > 2)
 		out.append((t, not keep))
 	return out
 

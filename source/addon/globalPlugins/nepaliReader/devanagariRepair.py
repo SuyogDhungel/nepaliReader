@@ -545,7 +545,6 @@ def normalizeFilenameSlugs(text):
 	"""
 	is_slug_context = (
 		'_' in text or
-		'-' in text or
 		bool(re.search(r'\.(?:pdf|docx|xlsx|doc|txt|html|htm|epub)(?:\b|$)', text, re.I)) or
 		bool(re.search(r'[-–—]\s*(?:Google Chrome|Brave|Microsoft Edge|Edge|Firefox|Acrobat|Adobe|Foxit|SumatraPDF|File Explorer)', text, re.I)) or
 		bool(re.search(r'(?:^|\s)[०-९0-9]{4}[-/_][०-९0-9]{1,2}[-/_][०-९0-9]{1,2}', text))
@@ -824,15 +823,17 @@ def _hasGluedJunk(text):
 	return False
 
 
-def cleanShuffled(text):
-	"""Fixes viewer / PDFium artifacts: leaked syllables, OCR misrecognitions, and fake-bold repeats."""
+def cleanShuffled(text, legacyArtifacts=False):
+	"""NFC cleanup by default; extraction/OCR reconstruction only with explicit damage context."""
 	if not _DEVANAGARI.search(text):
 		return text
 	if isExact(text):
 		return text
-	mixed = _aroundExact(text, cleanShuffled)
+	mixed = _aroundExact(text, lambda t: cleanShuffled(t, legacyArtifacts))
 	if mixed is not None:
 		return mixed
+	if not legacyArtifacts:
+		return unicodedata.normalize("NFC", text)
 	# (repeated words are NOT removed here: "जय जय", "बिस्तारै बिस्तारै" are real; text a PDF
 	#  draws twice is removed by the PDF engine, which knows what the document contains)
 
@@ -863,23 +864,9 @@ def cleanShuffled(text):
 	text = re.sub(r'लैि·क', 'लैङ्गिक', text)
 	text = _I_DOT.sub('ङ्ग', text)
 
-	# Keyboard-shifted digit typo confusions (dates like द्द)टघ।ड।द्दद्द -> २०६३।८।२२, द्द)ठद्द -> २०७२, list numbers ज्ञ. -> १., द्द. -> २.)
-	_preeti_keys = [('द्द', '२'), ('द्ध', '४'), ('ज्ञ', '१'), ('छ', '५'), ('ट', '६'), ('ठ', '७'), ('ड', '८'), ('ढ', '९'), ('घ', '३')]
-	_pk_dict = dict(_preeti_keys)
-	def _rep_preeti_num(m):
-		s = m.group(0).replace(')', '०')
-		for k, v in _preeti_keys:
-			s = s.replace(k, v)
-		return s
-	# a year typed with unshifted keys always starts "2 0" = द्द) ("हुनेछ)।" must stay)
-	text = re.sub(r'(?<![\u0900-\u097f])द्द\)(?:द्द|द्ध|ज्ञ|छ|ट|ठ|ड|ढ|घ|\)|।|\.|\-)+', _rep_preeti_num, text)
-	# list numbers typed unshifted: only ज्ञ. द्द. द्ध. (घ. छ. ट. ठ. and (घ) (छ) are real clause letters)
-	text = re.sub(r'(^|\s)(ज्ञ|द्द|द्ध)\.', lambda m: m.group(1) + _pk_dict[m.group(2)] + '.', text)
-	text = re.sub(r'\((ज्ञ|द्द|द्ध)\)', lambda m: '(' + _pk_dict[m.group(1)] + ')', text)
-	# Page numbers / toolbar numbers typed unshifted (e.g. Page number edit ज्ञ -> 1, ज्ञ / 1 -> 1 / 1, -ज्ञ- -> -1-)
-	text = re.sub(r'(?i)\b(page|पृष्ठ|पेज)(?:\s*(?:number|नं\.?|no\.?|edit))?\s*[:\-]?\s*(ज्ञ|द्द|द्ध)\b', lambda m: m.group(1) + ' ' + _pk_dict[m.group(2)], text)
-	text = re.sub(r'(^|\s|/)(ज्ञ|द्द|द्ध)(?=\s*/|/\s*[\d०-९]|$)', lambda m: m.group(1) + _pk_dict[m.group(2)], text)
-	text = re.sub(r'^[-\s–—]*(ज्ञ|द्द|द्ध)[-\s–—]*$', lambda m: _pk_dict[m.group(1)], text)
+	# Numbers are recovered from the actual legacy font/glyph mapping.
+	# ज्ञ/द्द/द्ध are also legitimate conjuncts; word position is not proof
+	# that they mean १/२/४. Page control repair belongs in the UI handler.
 
 	_DEVA_BOUND_L = r'(?<![\u0900-\u097f])'
 	_DEVA_BOUND_R = r'(?![\u0900-\u097f])'
@@ -964,7 +951,8 @@ def cleanShuffled(text):
 
 
 def cleanForCharNav(text):
-	"""Cleans hybrid PDF / Preeti residue in text for character navigation without swapping reph order."""
+	"""Cleans hybrid PDF / Preeti residue in text for character navigation, normalizing matra composition,
+	glued digits, trailing reph, and broken conjunct glyphs."""
 	if not _DEVANAGARI.search(text) and not any(c in text for c in '[]{}¬'):
 		return text
 	_DEVA_BOUND_L = r'(?<![\u0900-\u097f])'
@@ -1027,7 +1015,7 @@ def repair(text, broken=None):
 		return mixed
 	if broken is None:
 		broken = isBroken(text)
-	text = cleanShuffled(text)
+	text = cleanShuffled(text, legacyArtifacts=bool(broken))
 	text = _JUNK.sub("", text)
 	if broken:
 		text = _GLUED_I.sub(_gluedIFix, text)
@@ -1234,8 +1222,8 @@ def _readingsUncached(core, allowSwaps):
 	found = []
 	seen = set()
 	stripped = core.lstrip("".join(_SIGN_CHARS) + "\u094d")
-	if _known(core):
-		return core  # a real word is never changed
+	if _known(core) or re.fullmatch(_CLUSTER, core):
+		return core  # dictionary words and valid isolated conjuncts are not damaged
 	if isSpellingVariant(core) and not _DOUBLED.search(core) and not _GLUED_I.search(core):
 		return core  # the writer's own spelling of a real word: read as written
 	decoded = _decodeWord(core) if _DOC_SWAPS else None
@@ -1253,7 +1241,8 @@ def _readingsUncached(core, allowSwaps):
 				found.append(f)
 	if not found:
 		return None
-	return max(found, key=len)
+	unique = set(found)
+	return next(iter(unique)) if len(unique) == 1 else None
 
 
 def _isRealPiece(piece):
@@ -1265,6 +1254,9 @@ def _isRealPiece(piece):
 
 def _bestForm(pieces):
 	"""(score, text) for one group of pieces read as one word."""
+	phrase = " ".join(pieces)
+	if len(pieces) > 1 and _known(phrase):
+		return (_wscore(phrase), phrase)
 	g = _groupWord(pieces)
 	if g is None:
 		return None
@@ -1326,6 +1318,9 @@ def _joinSplitWords(text):
 
 
 def _segment(pieces):
+	original = " ".join(pieces)
+	if _known(original):
+		return original
 	pieces = [_DANDA_REPEAT.sub(lambda m: m.group(1) + m.group(2) if m.group(3).strip(_EDGE_PUNCT) and m.group(1).endswith(m.group(3).strip(_EDGE_PUNCT)) else m.group(0), p) for p in pieces]
 	n = len(pieces)
 	best = [(0.0, [])] + [None] * n
@@ -1466,18 +1461,23 @@ def _structuralSwaps(w):
 
 
 def swapFix(word, maxSwaps=3):
-	"""Correct a word damaged by letter swaps; None if no dictionary word is reached."""
+	"""Return an unambiguous minimum-edit dictionary reading, otherwise None."""
 	if not _CONFUSIONS or not neLexicon.isLoaded() or len(word) < 2 or len(word) > 25 or _DIGITS.search(word):
 		return None
-	if word in _swapCache:
-		return _swapCache[word]
-	found = None
+	cacheKey = (word, maxSwaps)
+	if cacheKey in _swapCache:
+		return _swapCache[cacheKey]
 	frontier = [word]
 	seen = {word}
+	found = None
 	for _depth in range(maxSwaps):
 		nxt = []
+		readings = set()
+		complete = True
 		for w in frontier:
 			for src, dst, _count in _DOC_SWAPS + ([] if len(_DOC_SWAPS) >= 5 else _CONFUSIONS) + _structuralSwaps(w):
+				if not src:
+					continue
 				start = w.find(src)
 				while start >= 0:
 					cand = w[:start] + dst + w[start + len(src):]
@@ -1485,20 +1485,30 @@ def swapFix(word, maxSwaps=3):
 						seen.add(cand)
 						logical = unicodedata.normalize("NFC", fromVisual(cand))
 						if logical and neLexicon.isWord(logical):
-							found = logical
-							break
+							readings.add(logical)
+							if len(readings) > 1:
+								complete = False
+								break
 						nxt.append(cand)
+						if len(seen) > 1500:
+							complete = False
+							break
 					start = w.find(src, start + 1)
-				if found:
+				if not complete:
 					break
-			if found:
+			if not complete:
 				break
-		if found or len(seen) > 1500:
+		if not complete:
+			break  # ambiguity or truncated search is not evidence for a correction
+		if readings:
+			found = next(iter(readings))
 			break
-		frontier = nxt[:150]
+		if len(nxt) > 150:
+			break
+		frontier = nxt
 	if len(_swapCache) > 20000:
 		_swapCache.clear()
-	_swapCache[word] = found
+	_swapCache[cacheKey] = found
 	return found
 
 
@@ -1558,11 +1568,14 @@ def _decodings(w, swaps, limit=48):
 
 def _decodeWord(w):
 	"""A dictionary word this damaged word stands for under this document's pattern, or None."""
+	readings = set()
 	for cand in _decodings(w, _DOC_SWAPS):
 		logical = unicodedata.normalize("NFC", fromVisual(cand))
 		if logical != w and _known(logical):
-			return logical
-	return None
+			readings.add(logical)
+			if len(readings) > 1:
+				return None
+	return next(iter(readings)) if readings else None
 
 
 def learnDocumentSwaps(text, maxWords=300, minWords=5, rounds=12, timeLimit=60.0):
@@ -1657,9 +1670,10 @@ def _basicClean(text):
 def setDocumentSwaps(swaps, key):
 	"""Use `swaps` (from learnDocumentSwaps) for the document identified by `key`."""
 	global _DOC_SWAPS, _docSwapKey
-	if key == _docSwapKey:
+	swaps_list = list(swaps) if swaps else []
+	if key == _docSwapKey and _DOC_SWAPS == swaps_list:
 		return
-	_DOC_SWAPS = list(swaps)
+	_DOC_SWAPS = swaps_list
 	_docSwapKey = key
 	_swapCache.clear()
 	_readCache.clear()

@@ -29,13 +29,16 @@ _COMMON_NEPALI = frozenset({
 	"संहिताको", "अभियोगपत्र", "संरक्षकले", "अधिकारक्षेत्रको", "इजलासबाट", "रजिष्ट्रार",
 	"औषधोपयोगी", "मुलुकी", "उपदफाबमोजिम", "सम्झनुपर्छ", "सम्झनु", "मिति", "परिच्छेद",
 	"प्रस्तावना", "संशोधन", "प्रमाणीकरण", "राजपत्र", "अनुसूची", "बालबालिका", "बालबालिकाको",
+	"कार्यपालिका", "व्यवस्थापिका", "न्यायपालिका", "विनियोजन", "प्रत्यायोजन", "पहुँचयोग्यता",
 })
 _loaded = False
+_load_attempted = False
 _SKELETON_INDEX = {}
 
 
 def load(path=None):
-	global _STEMS, _SFX, _PFX, _SFX_LENGTHS, _SKELETON_INDEX, _loaded
+	global _STEMS, _SFX, _PFX, _SFX_LENGTHS, _SKELETON_INDEX, _loaded, _load_attempted
+	_load_attempted = True
 	if path is None:
 		path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nepaliWords.dat")
 	with open(path, "rb") as f:
@@ -65,23 +68,30 @@ def load(path=None):
 			_NAMES = frozenset(zlib.decompress(f.read()).decode("utf-8").split("\n"))
 
 	# Build reverse skeleton index for stripped Devanagari slugs
+	# Collect all candidate words per consonant skeleton to detect and avoid ambiguous guesses
 	sk_idx = {}
+	all_candidates = {}
+
 	def _sk(w):
 		return re.sub(r'[\u093e-\u094c\u0901-\u0903\u094d]', '', w)
 
-	for w in _COMMON_NEPALI:
+	for w in sorted(_COMMON_NEPALI):
 		s = _sk(w)
-		if s and s not in sk_idx:
-			sk_idx[s] = w
-	for w in _NAMES:
+		if s:
+			all_candidates.setdefault(s, set()).add(w)
+	for w in sorted(_NAMES):
 		s = _sk(w)
-		if s and s not in sk_idx:
-			sk_idx[s] = w
-	for w in stems:
+		if s:
+			all_candidates.setdefault(s, set()).add(w)
+	for w in sorted(stems.keys()):
 		if len(w) >= 2:
 			s = _sk(w)
-			if s and s not in sk_idx:
-				sk_idx[s] = w
+			if s:
+				all_candidates.setdefault(s, set()).add(w)
+
+	for s, cands in all_candidates.items():
+		if len(cands) == 1:
+			sk_idx[s] = next(iter(cands))
 	_SKELETON_INDEX = sk_idx
 
 	_loaded = True
@@ -94,7 +104,7 @@ def isLoaded():
 
 def getSkeletonWord(slug):
 	"""Returns the full Devanagari dictionary word for a stripped consonant slug, or None."""
-	if not _loaded:
+	if not _loaded and not _load_attempted:
 		try:
 			load()
 		except Exception:
@@ -106,7 +116,7 @@ def isWord(word):
 	"""True if `word` is a Nepali word form known to the dictionary."""
 	if not word:
 		return False
-	if not _loaded:
+	if not _loaded and not _load_attempted:
 		try:
 			load()
 		except Exception:

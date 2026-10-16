@@ -21,6 +21,7 @@ import zlib
 try:
 	from . import glyphRefs
 	from . import legacyFonts
+	from . import legacyGlyphs
 	from . import pdfReader
 	from . import sfnt
 	from . import devanagariRepair
@@ -29,6 +30,7 @@ try:
 except ImportError:
 	import glyphRefs
 	import legacyFonts
+	import legacyGlyphs
 	import pdfReader
 	import sfnt
 	import devanagariRepair
@@ -41,7 +43,7 @@ NUKTA = "़"
 REPH = "र्"
 DEP_SIGNS = set("ऺऻािीुूृॄॅॆेैॉॊोौॎॏॕॖॗॢॣऀँंः़")
 INDEPENDENT = set(chr(c) for c in range(0x0904, 0x0915)) | set("ॠॡॲॳॴॵॶॷ")
-INDEX_VERSION = 30
+INDEX_VERSION = 32
 STYLE_BOLD = 1
 STYLE_ITALIC = 2
 STYLE_UNDERLINE = 4
@@ -58,6 +60,20 @@ def isCons(c):
 
 def isDeva(s):
 	return any("ऀ" <= c <= "ॿ" for c in s)
+
+
+# Only dependent vowels/nasal marks may be displaced by viewer positioning.
+# Consonants, nukta, virama and punctuation retain their order. A sorted bag
+# of all letters confuses कमल with कलम and नाम with मान.
+_MOVABLE_SIGNS = re.compile("[\u0900-\u0903\u093e-\u094c\u0962\u0963]")
+
+
+def movementKey(text):
+	return (_MOVABLE_SIGNS.sub("", text), "".join(sorted(_MOVABLE_SIGNS.findall(text))))
+
+
+def sameSignReordering(a, b):
+	return movementKey(a) == movementKey(b)
 
 
 def _isBase(tok):
@@ -286,6 +302,7 @@ class PdfFont:
 		self.program = None
 		self.encodingMap = {}
 		self.legacy = legacyFonts.encodingForFontName(self.baseFont)
+		self.legacyTrusted = bool(self.legacy)
 		self.used = {}         # code -> count
 		self.truth = {}        # code -> real text (from the glyph)
 		self.weak = set()      # codes whose truth only the embedded subset's tables give
@@ -414,7 +431,7 @@ class PdfFont:
 
 	def resolveGlyphs(self):
 		"""Work out the real letters of every used Devanagari glyph from the glyph outlines."""
-		if not self.cid or not self.program or not self.used:
+		if not self.program or not self.used:
 			return
 		try:
 			font = sfnt.Font(self.program)
@@ -436,7 +453,9 @@ class PdfFont:
 			pass
 		gids = {}
 		for code in self.used:
-			if self.cidToGid is None:
+			if not self.cid:
+				g = _gidForSimple(self, font, code) or 0
+			elif self.cidToGid is None:
 				g = code
 			else:
 				g = self.cidToGid[code] if code < len(self.cidToGid) else 0
@@ -464,7 +483,7 @@ class PdfFont:
 				for code, g in gids.items():
 					if g < len(adv) and hashes.get(code):
 						tot += 1
-						if g < len(tadv) and tadv[g] * upm == adv[g] * tupm:
+						if g < len(tadv) and tadv[g] * upm == adv[g] * tupm and thash.get(hashes[code]) == (tstr[g] if g < len(tstr) else None):
 							ok += 1
 				if tot and ok >= 0.95 * tot and ok > best:
 					best = ok
@@ -776,7 +795,11 @@ _TRAILING = set("\u093e\u0940\u0941\u0942\u0943\u0944\u0945\u0946\u0947\u0948\u0
 def _isTrailingSign(font, code):
 	"""A glyph that can only follow a letter (a vowel sign after its consonant, ं, ्), so it never
 	begins a word however far it is drawn from the letter before (ि is drawn first: not this)."""
-	t = font.text(code)
+	truth_map = getattr(font, "truth", {})
+	truth_char = truth_map.get(code) if isinstance(truth_map, dict) else None
+	t = getattr(font, "legacyKeys", {}).get(code, truth_char or font.text(code))
+	if not t:
+		return False
 	legacy = getattr(font, "legacy", None)
 	if legacy:
 		if legacy == "krutidev":
@@ -784,6 +807,18 @@ def _isTrailingSign(font, code):
 		v = legacyFonts.keyTable(legacy).get(t[0])
 		return bool(v) and v[0] in _TRAILING
 	return t[0] in _TRAILING
+
+
+def _isSymbolFont(font):
+	"""Keep pictographic/notation fonts outside Nepali linguistic inference.
+
+	A footnote marker touching a word is not an unknown Devanagari letter.
+	Legacy identification takes precedence over a misleading font name.
+	"""
+	if getattr(font, "legacy", None):
+		return False
+	family = glyphRefs.norm(getattr(font, "baseFont", ""))
+	return family.startswith(("webdings", "wingdings")) or family == "symbol"
 
 
 def _words(glyphs, page):
@@ -818,6 +853,7 @@ def _words(glyphs, page):
 		size = size or 1.0
 		blank = _isSpace(font, code, span)
 		is_bullet = (span and span[0] == "bullet") or font.text(code) == "•" or ("wingdings" in font.baseFont.lower())
+		symbolBoundary = bool(cur and cur.glyphs and _isSymbolFont(font) != _isSymbolFont(cur.glyphs[-1][0]))
 		prev_is_bullet = cur.glyphs and ((cur.glyphs[-1][6] and cur.glyphs[-1][6][0] == "bullet") or cur.glyphs[-1][0].text(cur.glyphs[-1][1]) == "•" or ("wingdings" in cur.glyphs[-1][0].baseFont.lower())) if cur else False
 		if lineV is None or (abs(v - lineV) > 0.5 * size and (lastV is None or abs(v - lastV) > 0.5 * size)) or u < endU - 2.5 * size:
 			if cur is not None and cur.glyphs:
@@ -848,11 +884,11 @@ def _words(glyphs, page):
 					keep.append((su, sadv))  # drawn before the space: it still separates what follows
 				# else: drawn over the space - a joiner, no break
 			pend = keep
-			if brk or is_bullet or prev_is_bullet:
+			if brk or is_bullet or prev_is_bullet or symbolBoundary:
 				if cur.glyphs:
 					words.append(cur)
 					cur = Word((page, False))
-		elif (u - endU > 0.2 * size and not (cur.glyphs and _isTrailingSign(font, code))) or is_bullet or prev_is_bullet:
+		elif (u - endU > 0.2 * size and not (cur.glyphs and _isTrailingSign(font, code))) or is_bullet or prev_is_bullet or symbolBoundary:
 			if cur.glyphs:
 				words.append(cur)
 				cur = Word((page, False))
@@ -909,7 +945,7 @@ def _words(glyphs, page):
 					if i + 1 < len(line):
 						next_w = line[i + 1]
 						next_x0 = min(g[2] for g in next_w.glyphs)
-						if abs(next_x0 - x1) <= 1.5:
+						if abs(next_x0 - x1) <= 1.5 and _isSymbolFont(w.glyphs[-1][0]) == _isSymbolFont(next_w.glyphs[0][0]):
 							w.glyphs.extend(next_w.glyphs)
 							i += 1
 					merged.append(w)
@@ -945,6 +981,9 @@ class DocIndex:
 		self.stats = {}
 		self.layout = None     # tables, headings, paragraphs (pdfLayout), or None
 		self.touched = None    # a list while a copy collects the index words it read
+		self.trustedLegacy = set()
+		self.legacySource = {}
+		self.legacyTables = {}
 
 	# -- building -------------------------------------------------------------
 
@@ -1004,6 +1043,9 @@ class DocIndex:
 				pause()
 		global _wordCheck
 		_wordCheck = isWord
+		# Establish outline-verified legacy fonts before grouping marks into words.
+		if detector is not None:
+			_detectLegacyFonts(realFonts, [], detector)
 		allWords = []
 		for pn, gl in pageGlyphs:
 			allWords.extend(_words(gl, pn))
@@ -1050,13 +1092,9 @@ class DocIndex:
 			if pause and not n & 255:
 				pause()
 			shown, fixed, amap, enc = _wordTexts(w)
-			if fixed == "महव":
-				fixed = "महत्त्व"
-			elif fixed and fixed.startswith("महव") and fixed[3:] in ("को", "का", "की", "मा", "ले", "लाई", "बाट", "हरू", "पूर्ण"):
-				fixed = "महत्त्व" + fixed[3:]
-			elif fixed == "महवराख्ने":
-				fixed = "महत्त्व राख्ने"
-			if fixed and enc is None and _wordCheck is not None:
+			glyphCertain = all(g[1] in g[0].truth and g[1] not in g[0].weak for g in w.glyphs)
+
+			if fixed and enc is None and not glyphCertain and _wordCheck is not None:
 				cl = devanagariRepair.finalClean(fixed, _wordCheck)
 				if cl is not None:
 					fixed, amap = cl, None
@@ -1068,12 +1106,7 @@ class DocIndex:
 				core = dd.strip(_PUNCT)
 				if dd != shown and core and _wordCheck(core) and not _wordCheck(shown.strip(_PUNCT)):
 					fixed = dd
-			if fixed and ")" in fixed and enc not in ("krutidev", "fontasy"):
-				fixed = legacyFonts._DECIMAL_ZERO.sub("\u0966", fixed)  # ६.)% is ६.०%
-			if fixed and enc not in ("krutidev", "fontasy") and "%" in fixed:
-				m = _KEYS_PERCENT.match(fixed)
-				if m:  # "#%" is ३% (Preeti digit key, then a percent sign from another font)
-					fixed = "".join(legacyFonts._LONE_DIGIT_KEYS[c] for c in m.group(1)) + m.group(2)
+
 			key = keyOf(shown)
 			if not key:
 				order.append(None)
@@ -1084,6 +1117,14 @@ class DocIndex:
 			if fixed is not None and fixed != shown:
 				self.fixedWords += 1
 			self.words.append((fixed, amap, enc, key))
+			if enc and all(getattr(g[0], "legacyTrusted", False) for g in w.glyphs if g[0].legacy):
+				wi = len(self.words) - 1
+				self.trustedLegacy.add(wi)
+				if all(g[0].legacy == enc for g in w.glyphs):
+					canonical = keyOf("".join(getattr(g[0], "legacyKeys", {}).get(g[1], g[0].text(g[1])) for g in w.glyphs))
+					if len(canonical) == len(key):
+						self.legacySource[wi] = canonical
+						self.legacyTables[wi] = getattr(w.glyphs[0][0], "legacyTable", None)
 			B.append(key.translate(_NORM))
 			pos += len(key)
 		self.B = "".join(B)
@@ -1181,7 +1222,7 @@ class DocIndex:
 						break
 				if best[0] >= 0.8 * n:
 					break
-			if best[0] >= 0.9 * n:
+			if best[0] >= 0.9 * n and _MOVABLE_SIGNS.sub("", F[best[1]:best[1] + n]) == _MOVABLE_SIGNS.sub("", key):
 				return best[1]
 		return -1
 
@@ -1263,7 +1304,7 @@ class DocIndex:
 			return -1
 		lead = len(key) - len(key.lstrip("\u0900\u0901\u0902\u0903\u093a\u093b\u093c\u093d\u093e\u093f\u0940\u0941\u0942\u0943\u0944\u0945\u0946\u0947\u0948\u0949\u094a\u094b\u094c\u094d\u094e\u094f"))
 		n = len(key)
-		want = sorted(key)
+		want = movementKey(key)
 		B = self.B
 		pos = self.SBpos
 		hs = bisect.bisect_left(pos, self._hint) if self._hint else 0
@@ -1273,7 +1314,7 @@ class DocIndex:
 			while q >= 0 and tries < 60:
 				tries += 1
 				a = pos[q] - lead
-				if a >= 0 and sorted(B[a:a + n]) == want:
+				if a >= 0 and movementKey(B[a:a + n]) == want:
 					return a
 				q = SB.find(sk, q + 1)
 		return -1
@@ -1294,7 +1335,7 @@ class DocIndex:
 			p = self._findSkel(key)
 		if p < 0 and len(key) >= 10:
 			n = len(key)
-			want = sorted(key)
+			want = movementKey(key)
 			for a in sorted({0, n // 4, n // 2, (3 * n) // 4, max(0, n - 8)}):
 				chunk = key[a:a + 8]
 				if len(chunk) < 6:
@@ -1303,7 +1344,7 @@ class DocIndex:
 					q = B.find(chunk, start)
 					while q >= 0:
 						cand = q - a
-						if cand >= 0 and sorted(B[cand:cand + n]) == want:
+						if cand >= 0 and movementKey(B[cand:cand + n]) == want:
 							p = cand
 							break
 						q = B.find(chunk, q + 1) if start == self._hint else -1
@@ -1330,7 +1371,7 @@ class DocIndex:
 						score = sum((cw & Counter(B[cand:cand + n])).values())
 						if score > best[0]:
 							best = (score, cand)
-				if best[0] >= 0.9 * n:
+				if best[0] >= 0.9 * n and _MOVABLE_SIGNS.sub("", B[best[1]:best[1] + n]) == _MOVABLE_SIGNS.sub("", key):
 					p = best[1]
 		if p >= 0:
 			self._hint = p
@@ -1345,6 +1386,15 @@ class DocIndex:
 		key = matchKey(text)
 		if not key:
 			return None
+		if not any(c.isspace() for c in text.strip()):
+			conflicts = self.__dict__.get("_ambiguousShown")
+			if conflicts is None:
+				candidates = {}
+				for fixed, amap, enc, shown in self.words:
+					candidates.setdefault(matchKey(shown), set()).add(fixed if fixed is not None else shown)
+				conflicts = self._ambiguousShown = {k for k, v in candidates.items() if len(v) > 1}
+			if key in conflicts:
+				return None
 		cache = self.__dict__.setdefault("_lookupCache", {})
 		hit = cache.get(text) if self.touched is None else None  # (a copy collects the words it reads)
 		if hit is not None:
@@ -1616,11 +1666,11 @@ class DocIndex:
 				own.append(k)
 		if hi - lo == 1 and (enc or len(fixed) == len(key)):
 			if enc:
-				conv = legacyFonts.convert(key[lo], enc)
+				conv = legacyFonts.convert(self.legacySource.get(i, key)[lo], enc, trusted=i in self.trustedLegacy, table=self.legacyTables.get(i))
 				if conv and conv.isascii() and key[lo].isascii() and lo < len(fixed) and not fixed.isascii():
 					# a lone digit/sign key is a letter inside a Preeti word: take it from the word
-					pre = legacyFonts.convert(key[:lo], enc) or "" if lo else ""
-					whole = legacyFonts.convert(key[:lo + 1], enc) or ""
+					pre = legacyFonts.convert(self.legacySource.get(i, key)[:lo], enc, trusted=i in self.trustedLegacy, table=self.legacyTables.get(i)) or "" if lo else ""
+					whole = legacyFonts.convert(self.legacySource.get(i, key)[:lo + 1], enc, trusted=i in self.trustedLegacy, table=self.legacyTables.get(i)) or ""
 					if whole.startswith(pre) and whole[len(pre):] and not whole[len(pre):].isascii():
 						return (whole[len(pre):], True)
 					return (fixed[min(amap[lo], len(aks) - 1)] if False else aks[min(amap[lo], len(aks) - 1)], True)
@@ -1641,7 +1691,7 @@ class DocIndex:
 		total = len(aksharas(fixed))
 		m = []
 		for k in range(len(key)):
-			part = legacyFonts.convert(key[:k + 1], enc) or ""
+			part = legacyFonts.convert(self.legacySource.get(i, key)[:k + 1], enc, trusted=i in self.trustedLegacy, table=self.legacyTables.get(i)) or ""
 			m.append(min(max(len(aksharas(part)) - 1, 0), max(total - 1, 0)))
 		m = tuple(m)
 		self.words[i] = (fixed, m, enc, key)
@@ -1654,11 +1704,20 @@ class DocIndex:
 			ks = self._keySet = {w[3].translate(_NORM) for w in self.words}
 		return matchKey(token) in ks
 
+	def _ambiguousSourceKeys(self):
+		conflicts = self.__dict__.get("_ambiguousShown")
+		if conflicts is None:
+			candidates = {}
+			for fixed, amap, enc, shown in self.words:
+				candidates.setdefault(matchKey(shown), set()).add(fixed if fixed is not None else shown)
+			conflicts = self._ambiguousShown = {k for k, v in candidates.items() if len(v) > 1}
+		return conflicts
+
 	def spanAt(self, lineText, offset, length):
 		"""Real text for `length` characters at `offset` of the viewer's line (character / word
 		navigation): list of (piece, certain) or None."""
 		key = matchKey(lineText)
-		if not key:
+		if not key or key in self._ambiguousSourceKeys():
 			return None
 		p = self._find(key)
 		if p < 0:
@@ -1675,7 +1734,7 @@ class DocIndex:
 		key = matchKey(lineText)
 		pre = keyOf(lineText[:offset])
 		here = keyOf(lineText[offset:offset + max(length, 1)])
-		if not key or not here:
+		if not key or not here or key in self._ambiguousSourceKeys():
 			return None
 		p = self._find(key)
 		if p < 0:
@@ -1689,31 +1748,25 @@ class DocIndex:
 	def _tokens(self, text):
 		"""The viewer's text is not found as a whole: match it word by word."""
 		if self._byKey is None:
-			self._byKey = {}
-			self._byBag = {}
+			exact = {}
+			moved = {}
 			for fixed, amap, enc, key in self.words:
 				if fixed is None:
 					continue
-				self._byKey.setdefault(key.translate(_NORM), fixed)
-				self._byBag.setdefault("".join(sorted(key.translate(_NORM))), fixed)
-				fk = matchKey(fixed)
-				if fk:
-					self._byKey.setdefault(fk, fixed)
-					self._byBag.setdefault("".join(sorted(fk)), fixed)
-				if "\xbf" in key:
-					kn = key.replace("\xbf", "'")
-					self._byKey.setdefault(kn, fixed)
-					self._byBag.setdefault("".join(sorted(kn)), fixed)
-				elif "'" in key:
-					kn = key.replace("'", "\xbf")
-					self._byKey.setdefault(kn, fixed)
-					self._byBag.setdefault("".join(sorted(kn)), fixed)
+				for k in {key.translate(_NORM), matchKey(fixed)}:
+					if k:
+						exact.setdefault(k, set()).add(fixed)
+						moved.setdefault(movementKey(k), set()).add(fixed)
+			self._ambiguousKeys = {k for k, v in exact.items() if len(v) > 1}
+			self._byKey = {k: next(iter(v)) for k, v in exact.items() if len(v) == 1}
+			self._byBag = {k: next(iter(v)) for k, v in moved.items() if len(v) == 1}
+
 		text = cleanGluedTokens(text)
 		rawToks = [t for t in re.split(r"\s+", text) if t]
 		toks = []
 		for t in rawToks:
 			k = matchKey(t)
-			if not k or k in self._byKey or self._byBag.get("".join(sorted(k))) is not None:
+			if not k or k in self._byKey or self._byBag.get(movementKey(k)) is not None:
 				toks.append(t)
 				continue
 			split = False
@@ -1750,15 +1803,15 @@ class DocIndex:
 				k = matchKey("".join(toks[i:i + span]))
 				if not k:
 					continue
-				f = self._byKey.get(k) or self._byBag.get("".join(sorted(k)))
-				if f is None and ("\xbf" in k or "'" in k):
+				f = None if k in self._ambiguousKeys else (self._byKey.get(k) or self._byBag.get(movementKey(k)))
+				if f is None and k not in self._ambiguousKeys and ("\xbf" in k or "'" in k):
 					k_alt = k.replace("\xbf", "'") if "\xbf" in k else k.replace("'", "\xbf")
-					f = self._byKey.get(k_alt) or self._byBag.get("".join(sorted(k_alt)))
-				if f is None:
+					f = self._byKey.get(k_alt) or self._byBag.get(movementKey(k_alt))
+				if f is None and k not in self._ambiguousKeys:
 					try:
 						from . import devanagariRepair
 						k_cl = matchKey(devanagariRepair.cleanShuffled("".join(toks[i:i + span])))
-						f = self._byKey.get(k_cl) or self._byBag.get("".join(sorted(k_cl)))
+						f = self._byKey.get(k_cl) or self._byBag.get(movementKey(k_cl))
 					except Exception:
 						pass
 				if f is not None:
@@ -1776,7 +1829,7 @@ class DocIndex:
 
 	def dump(self):
 		return {"v": INDEX_VERSION, "B": self.B, "starts": self.starts, "words": self.words,
-			"lineStart": self.lineStart, "fixed": self.fixedWords, "stats": self.stats, "layout": self.layout}
+			"lineStart": self.lineStart, "fixed": self.fixedWords, "stats": self.stats, "layout": self.layout, "trustedLegacy": sorted(self.trustedLegacy), "legacySource": self.legacySource, "legacyTables": self.legacyTables}
 
 	@classmethod
 	def restore(cls, d):
@@ -1790,6 +1843,9 @@ class DocIndex:
 		idx.fixedWords = d["fixed"]
 		idx.stats = d.get("stats", {})
 		idx.layout = d.get("layout")
+		idx.trustedLegacy = set(d.get("trustedLegacy", ()))
+		idx.legacySource = d.get("legacySource", {})
+		idx.legacyTables = d.get("legacyTables", {})
 		idx._buildF()
 		return idx
 
@@ -1818,23 +1874,26 @@ def _wordTexts(w):
 	shownText = "".join(shown)
 	if not keyOf(shownText):
 		return shownText, None, None, None
+	if segs and all(_isSymbolFont(f) for f, _items in segs):
+		return shownText, keyOf(shownText), None, None
 	if shownText.strip() == "o" and segs and all("courier" in s0[0].baseFont.lower() for s0 in segs):
 		return shownText, "\u25cb", None, None  # Word's "o" list bullet (Courier New) is a hollow circle
 	# a word in a legacy font (possibly with punctuation in a standard font like Times or Arial)
 	legacy_encs = {s[0].legacy for s in segs if s[0].legacy}
-	keysOf = lambda s0, t: t.translate(legacyFonts.HIMALAYA_CONTROLS) if s0.legacy == "himalaya" else t
+	keysOf = lambda s0, c, t: getattr(s0, "legacyKeys", {}).get(c, t).translate(legacyFonts.HIMALAYA_CONTROLS) if s0.legacy == "himalaya" else getattr(s0, "legacyKeys", {}).get(c, t)
 	if len(legacy_encs) > 1 and legacy_encs <= set(legacyFonts.PREETI_TYPED):
 		# a word typed partly in Preeti and partly in a font typed like it (Sumod-Acharya): its
 		# keys are rewritten as the Preeti keys and it is converted as one word, so a ि or reph
 		# typed in one font lands on the letters of the other (k|f;l + ª\s is प्रासङ्कि)
-		keysOf = lambda s0, t: legacyFonts.asPreetiKeys(t.translate(legacyFonts.HIMALAYA_CONTROLS) if s0.legacy == "himalaya" else t, s0.legacy) if s0.legacy else t
+		keysOf = lambda s0, c, t: legacyFonts.asPreetiKeys(getattr(s0, "legacyKeys", {}).get(c, t).translate(legacyFonts.HIMALAYA_CONTROLS) if s0.legacy == "himalaya" else getattr(s0, "legacyKeys", {}).get(c, t), s0.legacy) if s0.legacy else t
 		legacy_encs = {"preeti"}
-	if len(legacy_encs) == 1:
+	if len(legacy_encs) == 1 and len({tuple(sorted(getattr(f, "legacyTable", legacyFonts.keyTable(f.legacy)).items())) for f, _items in segs if f.legacy}) == 1:
 		non_legacy_text = "".join(t for s in segs if not s[0].legacy for c, t in s[1])
 		if not non_legacy_text or all(c in "()[]{}<>'\"“”‘’.,;:!?-_/\\•* " for c in non_legacy_text):
 			enc = next(iter(legacy_encs))
 			bf = next((getattr(s0[0], "bf", None) for s0 in segs if s0[0].legacy), None)
-			raw = keyOf("".join(keysOf(s0[0], t) for s0 in segs for c, t in s0[1]))
+			table = next((getattr(s0[0], "legacyTable", None) for s0 in segs if s0[0].legacy), None)
+			raw = keyOf("".join(keysOf(s0[0], c, t) for s0 in segs for c, t in s0[1]))
 			if non_legacy_text and keyOf(non_legacy_text) and enc != "krutidev":
 				# punctuation drawn in a standard font (the hyphen of प्रबन्ध-पत्र in Times) is
 				# exactly what it shows; only the runs in the legacy font are keys
@@ -1842,21 +1901,20 @@ def _wordTexts(w):
 				run = []
 				for s0 in segs:
 					if s0[0].legacy:
-						run.append("".join(keysOf(s0[0], t) for c, t in s0[1]))
+						run.append("".join(keysOf(s0[0], c, t) for c, t in s0[1]))
 						continue
 					if run:
 						rk = keyOf("".join(run))
-						parts.append((legacyFonts.convert(rk, enc, bf=bf) or rk) if rk else "")
+						parts.append((legacyFonts.convert(rk, enc, bf=bf, table=table, trusted=all(getattr(x[0], "legacyTrusted", False) for x in segs if x[0].legacy)) or rk) if rk else "")
 						run = []
 					parts.append(keyOf("".join(t for c, t in s0[1])))
 				if run:
 					rk = keyOf("".join(run))
-					parts.append((legacyFonts.convert(rk, enc, bf=bf) or rk) if rk else "")
+					parts.append((legacyFonts.convert(rk, enc, bf=bf, table=table, trusted=all(getattr(x[0], "legacyTrusted", False) for x in segs if x[0].legacy)) or rk) if rk else "")
 				fixed = "".join(parts)
 			else:
-				fixed = legacyFonts.convert(raw, enc, bf=bf) or raw
-			if enc not in ("krutidev", "fontasy", "himalaya") and raw in legacyFonts._LONE_DIGIT_KEYS:
-				fixed = legacyFonts._LONE_DIGIT_KEYS[raw]  # the Shift+digit keys of a Preeti font draw the digits
+				fixed = legacyFonts.convert(raw, enc, bf=bf, table=table, trusted=all(getattr(x[0], "legacyTrusted", False) for x in segs if x[0].legacy)) or raw
+
 			return shownText, fixed, None, enc
 	letters = any("\u0905" <= ch <= "\u0939" for ch in shownText)
 	toks = []      # (text, glyph number)
@@ -1868,10 +1926,10 @@ def _wordTexts(w):
 	gi = 0
 	for font, items in segs:
 		if font.legacy:
-			raw = "".join(t for c, t in items)
+			raw = "".join(keysOf(font, c, t) for c, t in items)
 			if font.legacy == "himalaya":
 				raw = raw.translate(legacyFonts.HIMALAYA_CONTROLS)
-			conv = legacyFonts.convert(keyOf(raw), font.legacy, bf=getattr(font, "bf", None)) or raw
+			conv = legacyFonts.convert(keyOf(raw), font.legacy, bf=getattr(font, "bf", None), table=getattr(font, "legacyTable", None), trusted=getattr(font, "legacyTrusted", False)) or raw
 			toks.append((conv, gi))
 			plainToks.append((conv, gi))
 			for c, t in items:
@@ -2162,7 +2220,7 @@ def _inferFonts(fonts, allWords, isWord, deadline, pause=None):
 	junk = _gluedJunk(allWords)
 	groups = {}
 	for f in fonts:
-		if not f.used or f.legacy:
+		if not f.used or f.legacy or _isSymbolFont(f):
 			continue
 		# only glyphs the PDF gives no text for (or U+FFFD), or an ASCII sign glued inside
 		# Devanagari words (a conjunct whose text table says "0" or "<"), are worked out; glyphs
@@ -2184,7 +2242,7 @@ def _inferFonts(fonts, allWords, isWord, deadline, pause=None):
 		# subsets of one CID font share their glyph numbers; Type3 fonts share glyphs by their
 		# drawing programs; any other simple font is on its own
 		if f.cid and f.baseFont:
-			gk = f.baseFont
+			gk = (f.baseFont, __import__("hashlib").sha256(f.program).digest()) if f.program else id(f)
 		elif getattr(f, "_t3", None):
 			gk = "\x00type3"
 		else:
@@ -2455,7 +2513,7 @@ def _gidForSimple(font, sf, code):
 		return t.get(code)
 	t = tabs.get((3, 1)) or tabs.get((0, 3))
 	if t:
-		ch = font.text(code)
+		ch = font.encodingMap.get(code, chr(code))
 		return t.get(ord(ch)) if len(ch) == 1 else None
 	return None
 
@@ -2497,6 +2555,25 @@ _KNOWN_LATIN_FONTS = (
 def _detectLegacyFonts(fonts, allWords, detector):
 	"""A font with no legacy name (Arial, Times, a subset tag...) whose words read like Preeti or
 	Kruti Dev is treated as that legacy font, judged over all of its text in the document."""
+	# First recover the actual legacy keys from embedded outlines. This works
+	# before text/script scoring and also for misleading Calibri/Cambria names.
+	for f in fonts:
+		if not f.program or not f.used:
+			continue
+		try:
+			sf = sfnt.Font(f.program)
+			def gid(code):
+				if f.cid:
+					return code if f.cidToGid is None else (f.cidToGid[code] if code < len(f.cidToGid) else 0)
+				return _gidForSimple(f, sf, code)
+			match = legacyGlyphs.identify(f, sf, gid)
+			if match:
+				f.legacy, f.legacyKeys, overrides = match
+				f.legacyTable = dict(legacyFonts.keyTable(f.legacy))
+				f.legacyTable.update(overrides)
+				f.legacyTrusted = True
+		except Exception:
+			continue
 	texts = {}
 	for w in allWords:
 		parts = {}

@@ -31,15 +31,29 @@ _REPH = ""  # reph (र्) typed after its syllable
 _MOD = ""   # Preeti 'm' modifier (प->फ, उ->ऊ, भ->झ, त्र->क्र, त्त->क्त)
 
 
+_JOINERS = ("\u200c", "\u200d")
+
+
 def _clusterStart(s, end):
 	"""Given index `end` of the last consonant of a cluster, return the index of its first consonant."""
 	i = end
 	if i > 0 and s[i] == NUKTA:
 		i -= 1
-	while i >= 2 and s[i - 1] == HALANT and (s[i - 2] in CONSONANTS or s[i - 2] == NUKTA):
-		i -= 2
-		if s[i] == NUKTA and i > 0:
-			i -= 1
+	while True:
+		offset = 1
+		if i >= 2 and s[i - 1] in _JOINERS and s[i - 2] == HALANT:
+			offset = 2
+		elif i >= 1 and s[i - 1] == HALANT:
+			offset = 1
+		else:
+			break
+		cons_idx = i - offset - 1
+		if cons_idx >= 0 and s[cons_idx] == NUKTA:
+			cons_idx -= 1
+		if cons_idx >= 0 and s[cons_idx] in CONSONANTS:
+			i = cons_idx
+		else:
+			break
 	return i
 
 
@@ -49,10 +63,16 @@ def _clusterEnd(s, start):
 	n = len(s)
 	if i < n and s[i] == NUKTA:
 		i += 1
-	while i + 1 < n and s[i] == HALANT and s[i + 1] in CONSONANTS:
-		i += 2
-		if i < n and s[i] == NUKTA:
-			i += 1
+	while i < n and s[i] == HALANT:
+		next_idx = i + 1
+		if next_idx < n and s[next_idx] in _JOINERS:
+			next_idx += 1
+		if next_idx < n and s[next_idx] in CONSONANTS:
+			i = next_idx + 1
+			if i < n and s[i] == NUKTA:
+				i += 1
+		else:
+			break
 	return i
 
 
@@ -161,6 +181,14 @@ _FONT_DIFFS["himalaya"] = {
 	"!": "ङ्ग", "\u0141": "ङ्ग", "\u0142": "त्", "\u0143": "ङ्ग",
 }
 HIMALAYA_CONTROLS = str.maketrans({"\x01": "\u0141", "\x02": "\u0142", "\x03": "\u0143"})
+
+# PCS NEPALI's actual number row is the reverse of Preeti (also confirmed
+# by the upstream PCS table). Do not inherit Preeti's digits for this font.
+_FONT_DIFFS["pcs"].update({
+	"1": "१", "2": "२", "3": "३", "4": "४", "5": "५", "6": "६", "7": "७", "8": "८", "9": "९", "0": "०",
+	"!": "ज्ञ", "@": "द्द", "#": "घ", "$": "द्ध", "%": "छ", "^": "ट", "&": "ठ", "*": "ड", "(": "ढ", ")": "ण्",
+	"~": "ङ", "`": "ञ्",
+})
 
 _PREETI_FAMILY_MAPS = {"preeti": PREETI_MAP}
 for _name, _diff in _FONT_DIFFS.items():
@@ -340,8 +368,18 @@ def _isKeyWord(w):
 	return bool(w) and not w.isspace() and any(c.isalpha() and c.isascii() for c in w)
 
 
-def preetiFamilyToUnicode(text, font="preeti", _table=None, bf=None):
+def preetiFamilyToUnicode(text, font="preeti", _table=None, bf=None, trusted=False):
 	table = _table or _PREETI_FAMILY_MAPS.get(font, PREETI_MAP)
+	if trusted:
+		# In an identified legacy font, 6 really draws ट, # draws ३ and
+		# -/_ draw parentheses. Do not infer numbers or literal brackets.
+		if bf is not None and "\xbf" in table:
+			table = dict(table)
+			table["\xbf"] = bf
+		text = text.translate(_C1)
+		return unicodedata.normalize("NFC", "".join(
+			part if part.isspace() else _preetiWord(part, table, font, exact=True)
+			for part in re.split(r"(\s+)", text)))
 	if _table is None and "\xbf" in text and font in ("preeti", "kantipur", "himali", "sagarmatha", "sumod"):
 		parts = re.split(r"(\s+)", text)
 		if len(parts) > 1:
@@ -464,7 +502,7 @@ def preetiFamilyToUnicode(text, font="preeti", _table=None, bf=None):
 	return unicodedata.normalize("NFC", "".join(result))
 
 
-def _preetiWord(word, table, font):
+def _preetiWord(word, table, font, exact=False):
 	"""One word of Preeti-family keys, mapped and put into Unicode order."""
 	s = "".join(table.get(ch, ch) for ch in word)
 	# half letter + reph + ा draws the full letter with its reph: J{f is र्व (इसापूर्व)
@@ -481,7 +519,8 @@ def _preetiWord(word, table, font):
 		s = s.replace(a, b)
 	s = re.sub(r'(\u094d\u0930)+', r'\1', s)
 	s = _DEDUP.sub(r"\1", s)
-	s = s.replace("टृ", "ट्ट")
+	if exact:
+		return s
 	if s.startswith("ः"):
 		s = ":" + s[1:]
 	if s == "महव":
@@ -652,12 +691,14 @@ def _visargaOrColon(m):
 	return w + ":"
 
 
-def convert(text, encoding="preeti", bf=None):
-	if "&" in text and ";" in text and any(ent in text for ent in ("&#", "&amp;", "&quot;", "&gt;", "&lt;", "&apos;")):
+def convert(text, encoding="preeti", bf=None, trusted=False, table=None):
+	if not trusted and "&" in text and ";" in text and any(ent in text for ent in ("&#", "&amp;", "&quot;", "&gt;", "&lt;", "&apos;")):
 		import html
 		text = html.unescape(text)
 	if encoding == "krutidev":
 		return krutiDevToUnicode(text)
+	if trusted:
+		return preetiFamilyToUnicode(text, encoding, _table=table, bf=bf, trusted=True)
 	# (a "." between digits draws a danda in Preeti and is kept as the danda the page shows)
 	out = preetiFamilyToUnicode(text, encoding, bf=bf)
 	if "ॅ" in out:
@@ -674,6 +715,10 @@ def convert(text, encoding="preeti", bf=None):
 	if "स्" in out:
 		# Preeti ":" key typed between digits is the colon of a time or ratio (10:00, 5:30)
 		out = _TIME_COLON.sub(":", out)
+	if "।" in out:
+		# Preeti "." between thousand-separated digits or after currency is a decimal point, not a danda
+		out = re.sub(r'([०-९0-9]+,[०-९0-9]+)।([०-९0-9]+)', r'\1.\2', out)
+		out = re.sub(r'((?:रु\.?|Rs\.?)\s*[०-९0-9]+)।([०-९0-9]+)', r'\1.\2', out)
 	return out
 
 

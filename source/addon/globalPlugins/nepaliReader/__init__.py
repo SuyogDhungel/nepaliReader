@@ -1118,16 +1118,27 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		wx.CallAfter(gui.mainFrame.popupSettingsDialog, NVDASettingsDialog, NepaliReaderSettingsPanel)
 
 	def _loadDictionary(self):
+		en_count = 0
+		ne_count = 0
 		try:
-			count = detector.loadDictionary()
-			count += neLexicon.load()
-			devanagariRepair.loadConfusions()
-			glyphRefs.load(cacheDir=_cacheDir())
-			self._ready = True
-			self._cache.clear()
-			log.debug("Nepali Reader: loaded %d English words" % count)
+			en_count = detector.loadDictionary()
 		except Exception:
 			log.error("Nepali Reader: could not load English dictionary", exc_info=True)
+		try:
+			ne_count = neLexicon.load()
+		except Exception:
+			log.error("Nepali Reader: could not load Nepali dictionary", exc_info=True)
+		try:
+			devanagariRepair.loadConfusions()
+		except Exception:
+			log.error("Nepali Reader: could not load confusions map", exc_info=True)
+		try:
+			glyphRefs.load(cacheDir=_cacheDir())
+		except Exception:
+			log.error("Nepali Reader: could not load glyph references", exc_info=True)
+		self._ready = True
+		self._cache.clear()
+		log.debug("Nepali Reader: loaded %d English and %d Nepali/Devanagari entries" % (en_count, ne_count))
 
 	# ------------------------------------------------------------------
 	# hooking document speech
@@ -3283,7 +3294,17 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		if not key:
 			return None
 		s_text = text.strip()
-		if not s_text or s_text.isdigit() or _PLAIN_NUMBER.match(s_text):
+		if not s_text:
+			return None
+		if s_text.isdigit() or _PLAIN_NUMBER.match(s_text):
+			# A numeric-looking Preeti key can draw a consonant. Only use the
+			# source position within a larger identified line, never a global
+			# search which can hit an English number or viewer toolbar instead.
+			ctx = self._lineContext(info) if info is not None else None
+			if ctx and pdfText.matchKey(ctx[0]) != pdfText.matchKey(s_text):
+				pieces = idx.spanAt(ctx[0], ctx[1], len(info.text or text))
+				if pieces and all(ok for _pc, ok in pieces):
+					return "".join(pc for pc, _ok in pieces)
 			return None
 		if all("\u0900" <= c <= "\u0903" or "\u093a" <= c <= "\u094f" or "\u0951" <= c <= "\u0957" or "\u0962" <= c <= "\u0963" for c in s_text):
 			return None
@@ -3320,7 +3341,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			pieces = None
 		if pieces and not any(ok for _p, ok in pieces):
 			got = pdfText.matchKey("".join(pc for pc, _ok in pieces))
-			if got != pdfText.matchKey(text) and sorted(got) == sorted(pdfText.matchKey(text)):
+			if got != pdfText.matchKey(text) and pdfText.sameSignReordering(got, pdfText.matchKey(text)):
 				# the document's own letters in its own order (PDFium puts a sign after the next
 				# letter: प्रमखु for प्रमुख): what line reading says for these words
 				pieces = [(pc, True) for pc, _ok in pieces]
@@ -3726,6 +3747,22 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		if not orig_char:
 			return fields
 
+		fontEnc = None
+		unicodeFont = False
+		for field in fields:
+			if isinstance(field, textInfos.FieldCommand) and field.command == "formatChange" and field.field:
+				name = field.field.get("font-name") or ""
+				fontEnc = legacyFonts.encodingForFontName(name) or fontEnc
+				unicodeFont = unicodeFont or any(f in name.lower() for f in UNICODE_DEVANAGARI_FONTS)
+		if unicodeFont and not fontEnc and not self._isPdfWindow(info.obj) and not self._isBrokenDoc():
+			return fields
+		if fontEnc and not orig_char.isalpha() and not devanagariRepair.hasDevanagari(orig_char):
+			converted = legacyFonts.convert(orig_char, fontEnc, trusted=True)
+			for i, item in enumerate(fields):
+				if isinstance(item, str):
+					fields[i] = converted
+			return fields
+
 		# Check DocIndex first if reading a PDF
 		if self._isPdfWindow(info.obj):
 			idx = self._pdfIndex(info.obj)
@@ -3735,9 +3772,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 					line, off = ctx
 					chAt = idx.charAt(line, off, len(orig_char))
 					if chAt and devanagariRepair.hasDevanagari(chAt):
-						if orig_char.isdigit() and not any(0x0966 <= ord(c) <= 0x096F for c in chAt):
-							return fields
-						chAt = devanagariRepair.cleanForCharNav(chAt)
+						# Already resolved at this source position by the PDF index.
+						# Running lexical cleanup again can change a correct glyph.
 						for i, item in enumerate(fields):
 							if isinstance(item, str):
 								fields[i] = chAt
@@ -4261,7 +4297,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		pdfUiIndices = set()
 		for i, item in enumerate(fields):
 			if isinstance(item, str):
-				if "&" in item and ";" in item and any(ent in item for ent in ("&#", "&amp;", "&quot;", "&gt;", "&lt;", "&apos;")):
+				if not curEnc and "&" in item and ";" in item and any(ent in item for ent in ("&#", "&amp;", "&quot;", "&gt;", "&lt;", "&apos;")):
 					import html
 					fields[i] = item = html.unescape(item)
 				if item and "\u00e0" in item:
@@ -4288,7 +4324,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				for attr in ("table-rowheadertext", "table-columnheadertext", "name", "description", "value"):
 					val = item.field.get(attr)
 					if isinstance(val, str) and val:
-						if "&" in val and ";" in val and any(ent in val for ent in ("&#", "&amp;", "&quot;", "&gt;", "&lt;", "&apos;")):
+						if not curEnc and "&" in val and ";" in val and any(ent in val for ent in ("&#", "&amp;", "&quot;", "&gt;", "&lt;", "&apos;")):
 							import html
 							val = html.unescape(val)
 							item.field[attr] = val
@@ -4335,8 +4371,6 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 					groups.append(cur)
 				for grp in groups:
 					whole = "".join(t for _i, t, _k, _e in grp)
-					if whole.strip().isdigit() or _PLAIN_NUMBER.match(whole.strip()):
-						continue
 					try:
 						new = self._indexText(info if len(groups) == 1 else None, idx, whole)
 					except Exception:
@@ -4403,6 +4437,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			return out if changed else fields
 		# 2. decide which runs are legacy text and with which encoding
 		convert = {}  # index -> (encoding, protectEnglish)
+		trustedRuns = set()
 		unknown = []
 		symRuns = []
 		anyKnownFont = False
@@ -4413,6 +4448,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				continue
 			if enc:
 				convert[i] = (enc, False)  # the font says so
+				trustedRuns.add(i)
 			elif mode == "always":
 				convert[i] = (self._inContext() or c["encoding"], False)
 			elif known == "unicode":
@@ -4426,7 +4462,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				# numbers/symbols: if in confirmed legacy context, convert!
 				# numbers/symbols alone: they are Preeti only when the text next to them is Preeti
 				# (decided below), never next to Unicode Nepali or English: "(राजनीतिक)" keeps "("
-				if detector.isPreetiSymbolNumber(text) or any(detector.isPreetiSymbolNumber(w) for w in text.split()):
+				if ctxEnc and not self._docState().isUnicodeDocument and not known and (detector.isPreetiSymbolNumber(text) or any(detector.isPreetiSymbolNumber(w) for w in text.split())):
 					convert[i] = (enc or ctxEnc or c["encoding"] or "preeti", False)
 					continue
 				isUniDoc = self._docState().isUnicodeDocument
@@ -4442,7 +4478,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			isUniDoc = self._docState().isUnicodeDocument
 			isWeb = self._isWebNonPdf(info.obj)
 			if not (c["webFontOnly"] and isWeb):
-				self._decideUnknown(info, unknown, convert, c, allowVisual=not anyKnownFont, isUnicodeDoc=isUniDoc)
+				self._decideUnknown(info, unknown, convert, c, allowVisual=inPdf or not anyKnownFont, isUnicodeDoc=isUniDoc)
 			else:
 				# Web non-PDF: convert only if strongly legacy
 				self._decideUnknown(info, unknown, convert, c, allowVisual=False, isUnicodeDoc=True)
@@ -4478,7 +4514,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				if len(convert[i]) > 2:
 					newText = detector.convertTokens(convert[i][2], lambda t: legacyFonts.convert(t, enc) or t)
 				else:
-					newText = self._convertRun(item, enc, protect)
+					newText = self._convertRun(item, enc, protect, trusted=i in trustedRuns)
 				if newText != item:
 					count += len(newText.split())
 					usedEnc = enc
@@ -4542,8 +4578,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			field["language"] = language
 		return textInfos.FieldCommand("formatChange", field)
 
-	def _convertRun(self, text, encoding, protectEnglish):
-		key = ("run", text, encoding, protectEnglish)
+	def _convertRun(self, text, encoding, protectEnglish, trusted=False):
+		key = ("run", text, encoding, protectEnglish, trusted)
 		cached = self._cache.get_(key)
 		if cached is not None:
 			return cached
@@ -4552,6 +4588,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		core = text.strip()
 		if not core:
 			return text
+		if trusted:
+			newText = lead + legacyFonts.convert(core, encoding, trusted=True) + trail
+			self._cache.put(key, newText)
+			return newText
 		decisions = detector.forceDecide(core, protectEnglish=protectEnglish)
 		newText = lead + detector.convertTokens(decisions, lambda s: legacyFonts.convert(s, encoding) or s) + trail
 		if devanagariRepair.hasDevanagari(newText):
