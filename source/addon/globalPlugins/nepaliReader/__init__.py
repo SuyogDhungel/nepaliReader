@@ -3118,7 +3118,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			# (संशोिन, मलुकी): wait once, briefly, for the first pages instead of speaking them.
 			st.waited = True
 			t0 = time.monotonic()
-			while st.status == "building" and time.monotonic() - t0 < 3.0:
+			while st.status == "building" and time.monotonic() - t0 < 4.5:
 				time.sleep(0.04)
 			diag.write("pdf: waited %.1f s for the first pages (%s)" % (time.monotonic() - t0, st.status))
 		return st.index if st.status == "ready" else None
@@ -3194,7 +3194,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				if len(data) > 400 * 1024:
 					# a long document: the first pages first, so reading can start at once
 					try:
-						first = pdfText.DocIndex.build(data, detector=detector, pause=pause, isWord=neLexicon.isWord, maxPages=6)
+						first = pdfText.DocIndex.build(data, detector=detector, pause=pause, isWord=neLexicon.isWord, maxPages=2)
 						st.index = first
 						st.status = "ready"
 						self._cache.clear()

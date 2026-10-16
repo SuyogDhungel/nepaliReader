@@ -96,7 +96,7 @@ def isBroken(text):
 	a whole document, see wordStats.)
 	A reph after its letter (गनर्) and व्र for क्र (पाठ्यव्रम) count only where the dictionary proves
 	them: अन्तर्, निर् and धुहेव्रे are words."""
-	return bool(_DOUBLED.search(text)) or _hasGluedI(text) or _hasGluedJunk(text) or bool(_HYBRID_BROKEN.search(_protectBrackets(text)[0])) or hasGluedDigitDamage(text) or _hasTrailingRephDamage(text) or _hasKraDamage(text)
+	return bool(_DOUBLED.search(text)) or _hasGluedI(text) or _hasGluedJunk(text) or bool(_HYBRID_BROKEN.search(_protectBrackets(text)[0])) or hasGluedDigitDamage(text) or _hasTrailingRephDamage(text) or _hasKraDamage(text) or ("सवनसाधारण" in text) or ("सवनसामान्य" in text)
 
 
 def repairGain(text):
@@ -893,6 +893,8 @@ def cleanShuffled(text, legacyArtifacts=False):
 	text = re.sub(_DEVA_BOUND_L + r'छ(?:रु|रू)[टत्]+[यया]+ई' + _DEVA_BOUND_R, 'छुट्याई', text)
 	text = re.sub(_DEVA_BOUND_L + r'छ(?:रु|रू)[टत्]+[यया]+इने' + _DEVA_BOUND_R, 'छुट्याइने', text)
 	text = re.sub(_DEVA_BOUND_L + r'प्रसले' + _DEVA_BOUND_R, 'प्रसङ्गले', text)
+	text = re.sub(_DEVA_BOUND_L + r'सवनसाधारण' + _DEVA_BOUND_R, 'सर्वसाधारण', text)
+	text = re.sub(_DEVA_BOUND_L + r'सवनसामान्य' + _DEVA_BOUND_R, 'सर्वसामान्य', text)
 
 	# Standard table OCR split and confusion:
 	text = re.sub(_DEVA_BOUND_L + r'संख्या/टिरण' + _DEVA_BOUND_R, 'संख्या/विवरण', text)
