@@ -105,6 +105,16 @@ class Regressions(unittest.TestCase):
  def test_empty_font_text_not_index_error(self):
   from types import SimpleNamespace
   self.assertFalse(pt._isTrailingSign(SimpleNamespace(text=lambda c:'',truth={},legacy=None),1))
+ def test_parenthesized_english_preserved_and_not_preeti_symbol_number(self):
+  for t in ['(Chinese)','(NDRRMA)','(Winterization)','(2 yrs)','(WHO)','(UNICEF)','टेन्ट (Chinese)']:
+   self.assertFalse(det.isPreetiSymbolNumber(t))
+   self.assertEqual(det.convertMixed(t, lf.preetiFamilyToUnicode, context=False), t)
+  for t in ['(@)&*)','!(*)','!@#$','!=']:
+   self.assertTrue(det.isPreetiSymbolNumber(t))
+ def test_continues_line_single_consonant_syllable(self):
+  idx = index_for([('बुढी','बुढी'),('गण्डकी','गण्डकी')])
+  idx.lineStart = [True, False]
+  self.assertTrue(idx.continuesLine('बु', 'ढी गण्डकी'))
 
 @unittest.skipUnless(FIXTURES,'Optional PDF fixture directory not supplied')
 class Documents(unittest.TestCase):

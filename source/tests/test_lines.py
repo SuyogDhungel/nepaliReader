@@ -190,6 +190,7 @@ page = [
 	["राज्यको", "संघीय", "संरचनामा"],
 	["विपद्"],
 	["बुलेटिन", "जारी"],
+	["बुढी", "गण्डकी"],
 ]
 idx = pdfText.DocIndex()
 pos = 0
@@ -243,8 +244,10 @@ check('after a lone sign: the rest of the word', NR._sameLine(idx, "गोरख
 check('after a lone sign: the next line of the page stays apart', NR._sameLine(idx, "विपद\n", "्\n", "बुलेटिन जारी\n"), False)
 check('ordinary lines stay apart', NR._sameLine(idx, "", "२०७८\n", "आधारभत\n"), False)
 check('continuesLine: inside a word', idx.continuesLine("नगर प्रमख", "को सन्दिे"), True)
+check('continuesLine: single-consonant syllable inside a word', idx.continuesLine("बु", "ढी गण्डकी"), True)
 check('continuesLine: the next line of the page', idx.continuesLine("विपद", "बुलेटिन"), False)
 check('joined text', NR._joinBrokenLines(idx, "पाठ\n्\nयक्रम\n"), "पाठ्यक्रम\n")
+check('joined text: single-consonant broken heading slice', NR._joinBrokenLines(idx, "बु\nढी गण्डकी\n"), "बुढी गण्डकी\n")
 
 # lines
 h = lineAt("गोरखा")

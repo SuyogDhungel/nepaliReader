@@ -1162,7 +1162,7 @@ class DocIndex:
 			return None
 		a = _MARKS.sub("", matchKey(prev))[-12:]
 		b = _MARKS.sub("", matchKey(nxt))[:12]
-		if len(a) < 2 or not b:
+		if len(a) < 1 or not b or len(a + b) < 3:
 			return None
 		pos = self.SBpos
 		hs = bisect.bisect_left(pos, self._hint) if self._hint else 0

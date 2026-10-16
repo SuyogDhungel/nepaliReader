@@ -482,6 +482,10 @@ def _sameLine(idx, before, prev, nxt):
 		return False
 	if _SIGN_START.match(n):
 		return True
+	if idx is not None:
+		got = idx.continuesLine(p, n)
+		if got is not None:
+			return got
 	if _SIGNS_ONLY.match(p):
 		got = idx.continuesLine(before, n) if idx is not None and before else None
 		if got is None:

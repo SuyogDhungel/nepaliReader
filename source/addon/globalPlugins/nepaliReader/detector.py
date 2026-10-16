@@ -367,7 +367,15 @@ def isPreetiSymbolNumber(t):
 		return True
 	if _NUM_TOKEN.match(core):
 		return False
-	if not any(c in "!@#$%^&*()" for c in core) and not core.startswith("?="):
+	inner = core
+	if (inner.startswith("(") and inner.endswith(")")) or (inner.startswith("[") and inner.endswith("]")):
+		inner = inner[1:-1].strip()
+	if not inner:
+		return False
+	# Any token with English/Latin letters and without Preeti shifted digit keys (!@#$%^&*) is text, not a number
+	if any(c.isascii() and c.isalpha() for c in inner) and not any(c in "!@#$%^&*" for c in inner):
+		return False
+	if not any(c in "!@#$%^&*()" for c in inner) and not inner.startswith("?="):
 		return False
 	if not _PREETI_SYMNUM.match(core):
 		return False
