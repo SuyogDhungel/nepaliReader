@@ -106,6 +106,18 @@ If any shortcut conflicts with another add-on or if you prefer different keys, y
 
 ---
 
+## 🔊 Nepali eSpeak: Nepali Reader built into the voice
+
+**Nepali eSpeak** (`nepaliEspeak-1.1.0.nvda-addon`) is one add-on: NVDA's eSpeak NG with Nepali Reader built in. There is nothing to switch on or off and no key to remember. After installing it, choose it once in NVDA's Speech settings (Synthesizer: **Nepali eSpeak**).
+
+* **Everywhere (web pages, apps, NVDA's menus)**: Nepali text is read in the Nepali voice and English text in the English voice, in the same sentence, even when a web page does not say its text is Nepali (`lang="ne"`). The text itself is not changed: Unicode on the web is already right and Preeti is not used there.
+* **PDF files** (Chrome, Edge, Brave, Acrobat and other PDF readers): Preeti and similar fonts, and damaged Unicode, are read as the real Nepali text, with tables, headings and formatting, as described above.
+* **Microsoft Word**: text in Preeti and similar fonts is read as Nepali; Unicode typed in Word is read as it is.
+
+If the separate Nepali Reader add-on is installed too, it keeps reading PDFs and Word (with its own settings and Nepali mode key) and Nepali eSpeak only switches the voice. To have nothing to switch, remove the separate add-on. Build it from this repository with `python build_espeak.py`.
+
+---
+
 ## 📜 Changelog
 
 See [CHANGELOG.md](CHANGELOG.md) for the full history of every version.

@@ -50,7 +50,7 @@ def build_source():
 	print(f"Building {out_name}...")
 
 	with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as z:
-		for fn in ("build.py", "CHANGELOG.md", "README.md", "LICENSE", ".gitignore"):
+		for fn in ("build.py", "build_espeak.py", "CHANGELOG.md", "README.md", "LICENSE", ".gitignore"):
 			fp = os.path.join(ROOT_DIR, fn)
 			if os.path.isfile(fp):
 				z.write(fp, fn)

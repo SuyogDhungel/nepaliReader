@@ -2,6 +2,14 @@
 
 All notable changes to the **Nepali Reader** NVDA add-on are documented here.
 
+## Nepali eSpeak 1.1.0 - 2026-10-19
+
+- One add-on: NVDA's eSpeak NG with Nepali Reader built in, always on, with nothing to switch on or off.
+- Everywhere (web pages, apps, menus): Nepali text in the Nepali voice and English in the English voice, without lang="ne". Text is never changed; a page that says its Devanagari is Hindi is read in Hindi; numbers are read in the language of the words beside them.
+- PDFs: Preeti and damaged Unicode read as the real Nepali text, with tables, headings and formatting, exactly as in Nepali Reader 2.0.2.
+- Word: Preeti read as Nepali; Unicode typed in Word is read as it is.
+- If the separate Nepali Reader add-on is installed, it reads PDFs and Word and Nepali eSpeak only switches the voice, so nothing is read twice.
+
 ## [2.0.2] - 2026-10-15
 
 - Reading issues fixed, and table and formatting is now preserved while reading and copying.
