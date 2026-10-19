@@ -119,59 +119,7 @@ _LEGACY_TRIGGER = frozenset(
 )
 
 
-# Inside the Nepali eSpeak add-on this same code is the package globalPlugins.nepaliEspeakReader:
-# always on, nothing to switch, and it works only where text can be wrong - a PDF (Preeti and
-# damaged Unicode) and Word (Preeti). Web pages and other apps are left as they are; there the
-# synthesizer only switches between its Nepali and English voices.
-EMBEDDED = __name__.rsplit(".", 1)[-1] != "nepaliReader"
-_EMBEDDED_CONF = {
-	"enabled": True, "pdfFile": True, "mode": "auto", "encoding": "preeti", "autoDetectKruti": True,
-	"useFontNames": True, "repairUnicode": True, "switchLanguage": False, "visualCheck": True,
-	"webFontOnly": True, "announceTableHeaders": True, "lastOnMode": "auto",
-}
-# (Word: Preeti only - Unicode typed in Word is not damaged)
-_EMBEDDED_WORD_CONF = dict(_EMBEDDED_CONF, repairUnicode=False)
-_PLUGIN = [None]          # the running plugin (its PDF window check)
-_DEFER = [False]          # the separate Nepali Reader add-on is running: it does the work
-_KIND = [None, 0.0, None]  # (window, time, "pdf" / "word" / None) of the window in front
-WORD_APPS = {"winword"}
-
-
-def _embeddedKind():
-	"""'pdf' or 'word' for the window in front, else None (the same answer for a second)."""
-	try:
-		fg = api.getForegroundObject()
-	except Exception:
-		fg = None
-	if fg is None:
-		return None
-	key = (getattr(fg, "windowHandle", None), getattr(fg, "name", None))
-	now = time.monotonic()
-	if _KIND[0] == key and now - _KIND[1] < 1.0:
-		return _KIND[2]
-	kind = None
-	try:
-		app = (fg.appModule.appName or "").lower()
-	except Exception:
-		app = ""
-	if app in WORD_APPS:
-		kind = "word"
-	elif app in PDF_APPS or "pdf" in app:
-		kind = "pdf"
-	elif app in WEB_APPS and _PLUGIN[0] is not None:
-		try:
-			# (decided per tab: the window stays the same when another tab comes to the front)
-			if _PLUGIN[0]._isPdfWindowUncached(fg):
-				kind = "pdf"
-		except Exception:
-			kind = None
-	_KIND[0], _KIND[1], _KIND[2] = key, now, kind
-	return kind
-
-
 def conf():
-	if EMBEDDED:
-		return _EMBEDDED_WORD_CONF if _embeddedKind() == "word" else _EMBEDDED_CONF
 	return config.conf[CONF_SECTION]
 
 
@@ -179,8 +127,6 @@ _ON = [None]  # Nepali mode on/off, the same in every NVDA configuration profile
 
 
 def isOn():
-	if EMBEDDED:
-		return not _DEFER[0] and _embeddedKind() is not None
 	if _ON[0] is None:
 		try:
 			base = config.conf.profiles[0].get(CONF_SECTION, {})
@@ -192,8 +138,6 @@ def isOn():
 
 
 def setOn(value):
-	if EMBEDDED:
-		return  # nothing to switch
 	_ON[0] = bool(value)
 	try:
 		conf()["enabled"] = bool(value)
@@ -965,21 +909,11 @@ class _NepaliNormalizedObject(NVDAObjects.NVDAObject):
 class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
 	def chooseNVDAObjectOverlayClasses(self, obj, clsList):
-		# (inside Nepali eSpeak: the object can be made before its window comes to the front; its
-		# name and value are put right only while a PDF or Word is in front)
-		if isOn() or (EMBEDDED and not _DEFER[0]):
+		if isOn():
 			clsList.insert(0, _NepaliNormalizedObject)
 
 	def __init__(self, *args, **kwargs):
 		super().__init__(*args, **kwargs)
-		_PLUGIN[0] = self
-		if EMBEDDED:
-			try:
-				_DEFER[0] = any(a.name == "nepaliReader" for a in addonHandler.getRunningAddons())
-			except Exception:
-				_DEFER[0] = False
-			if _DEFER[0]:
-				log.info("Nepali eSpeak: the Nepali Reader add-on is running, it reads PDFs and Word")
 		self._cache = _LRU()
 		self._contextWindow = None
 		self._contextEncoding = None
@@ -997,11 +931,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		diag.start(_cacheDir())
 		self._patchTextInfoSpeech()
 		self._registerSpeechFilter()
-		if not EMBEDDED:
-			try:
-				multilangIntegration.install()
-			except Exception:
-				log.debugWarning("Nepali Reader: MultiLang initialization failed", exc_info=True)
+		try:
+			multilangIntegration.install()
+		except Exception:
+			log.debugWarning("Nepali Reader: MultiLang initialization failed", exc_info=True)
 		try:
 			self._patchCopyAndSelection()
 		except Exception:
@@ -1015,15 +948,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		except Exception:
 			log.debugWarning("Nepali Reader: could not hook table navigation", exc_info=True)
 		devanagariRepair.docWords = self._docWordSet
-		self._menu = None
-		if EMBEDDED:
-			# inside Nepali eSpeak: no menu, no settings, no keys - nothing to switch on or off
-			try:
-				self.clearGestureBindings()
-			except Exception:
-				pass
-			return
 		NVDASettingsDialog.categoryClasses.append(NepaliReaderSettingsPanel)
+		self._menu = None
 		try:
 			wx.CallAfter(self._createMenu)
 		except Exception:
@@ -1122,8 +1048,6 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			NVDASettingsDialog.categoryClasses.remove(NepaliReaderSettingsPanel)
 		except ValueError:
 			pass
-		if _PLUGIN[0] is self:
-			_PLUGIN[0] = None
 		super().terminate()
 
 	# ------------------------------------------------------------------
