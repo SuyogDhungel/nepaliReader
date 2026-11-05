@@ -10,6 +10,20 @@
 # A table with neither (no tags, no lines) stays plain text.
 
 import re
+import threading
+
+# the pause of the PDF reading running in this thread (set by pdfText): long loops call it, so
+# NVDA never waits long for a key or for speech
+_tl = threading.local()
+_n = [0]
+
+
+def _tick():
+	_n[0] += 1
+	if not _n[0] & 31:
+		p = getattr(_tl, "pause", None)
+		if p is not None:
+			p()
 
 try:
 	from . import pdfReader
@@ -121,6 +135,7 @@ def structure(doc, refs, deadline=None):
 		if depth > 120:
 			return
 		steps[0] += 1
+		_tick()
 		if deadline and not steps[0] & 1023 and time.monotonic() > deadline:
 			raise TimeoutError
 		if isinstance(node, pdfReader.Ref):
@@ -517,6 +532,7 @@ def _paragraphs(boxes, order, n, blocks, tables, pageTables, pageImages=None):
 	cellRect = {}
 	byIdx = {}
 	for wi, box in enumerate(boxes):
+		_tick()
 		i = order[wi]
 		if i is not None and box is not None and len(box) > 8:
 			byIdx[i] = box
@@ -542,6 +558,7 @@ def _paragraphs(boxes, order, n, blocks, tables, pageTables, pageImages=None):
 	# units: the tags' paragraphs, else lines; cells by themselves
 	units = {}
 	for i in sorted(byIdx):
+		_tick()
 		b = byIdx[i]
 		if i in inTable:
 			key = ("cell", id(cellRect.get(i)), b[0]) if i in cellRect else None
@@ -556,6 +573,7 @@ def _paragraphs(boxes, order, n, blocks, tables, pageTables, pageImages=None):
 	pageLines = {}
 	pageRows = {}
 	for key, ids in units.items():
+		_tick()
 		if key[0] == "cell":
 			continue
 		for line in _unitLines(ids, byIdx):
@@ -594,12 +612,14 @@ def _paragraphs(boxes, order, n, blocks, tables, pageTables, pageImages=None):
 	# right aligned on the page, whatever its position)
 	rowsOf = {}
 	for i, b in byIdx.items():
+		_tick()
 		rowsOf.setdefault(b[0], []).append((b[7], b[1], b[3], i))
 	unitOf = {}
 	for key, ids in units.items():
 		for i in ids:
 			unitOf[i] = key
 	for key, ids in units.items():
+		_tick()
 		pn = byIdx[ids[0]][0]
 		own = set(ids)
 		alone = True
@@ -709,6 +729,7 @@ def analyse(struct, pageTables, boxes, order, pageLines=None, pageImages=None):
 		blocks = [0] * n
 		mc = struct["mc"]
 		for wi, box in enumerate(boxes):
+			_tick()
 			i = order[wi]
 			if i is None or box is None or box[5] is None:
 				continue
@@ -725,6 +746,7 @@ def analyse(struct, pageTables, boxes, order, pageLines=None, pageImages=None):
 	used = set()
 	byPage = {}
 	for wi, box in enumerate(boxes):
+		_tick()
 		if box is not None and order[wi] is not None:
 			byPage.setdefault(box[0], []).append((order[wi], box))
 	for pn, tlist in sorted(pageTables.items()):
@@ -734,6 +756,7 @@ def analyse(struct, pageTables, boxes, order, pageLines=None, pageImages=None):
 			cells = []
 			filled = 0
 			for (x0, y0, x1, y1, r0, c0, rs, cs) in t["cells"]:
+				_tick()
 				ws = []
 				for i, box in byPage.get(pn, ()):
 					if i in used:
@@ -761,6 +784,7 @@ def analyse(struct, pageTables, boxes, order, pageLines=None, pageImages=None):
 				continue
 			byTag.setdefault(cell[0], {}).setdefault((cell[1], cell[2]), []).append(i)
 		for ti, cellWords in sorted(byTag.items()):
+			_tick()
 			rows = struct["tables"][ti]
 			if len(rows) < 1 or len(cellWords) < 2:
 				continue
@@ -781,6 +805,7 @@ def analyse(struct, pageTables, boxes, order, pageLines=None, pageImages=None):
 	# underlined
 	styles = bytearray(n)
 	for wi, box in enumerate(boxes):
+		_tick()
 		i = order[wi]
 		if i is not None and box is not None and len(box) > 6:
 			styles[i] = box[6] & 3

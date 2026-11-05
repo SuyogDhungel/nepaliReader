@@ -19,6 +19,11 @@ nepaliReader-source/
 moljpa_test.pdf
 scratch/
 
+# Root copies / developer mirrors
+/doc/
+/globalPlugins/
+/manifest.ini
+
 # OS generated files
 Thumbs.db
 ehthumbs.db

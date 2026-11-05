@@ -22,12 +22,28 @@ def _isPdfUrl(u):
 	low = u.lower()
 	return (
 		".pdf" in low
-		or "mhjfbmdgcfjbbpaeojofohoefgiehjai" in low
+		or "mhjfbmdgcfjbbpaeojofohoefgiehjai" in low  # Chrome's own PDF viewer
+		or "oemmndcbldboiebfnladdacbdfmadadm" in low  # "PDF Viewer" (Mozilla PDF.js) for Chrome
 		or "application/pdf" in low
 		or "/pdf" in low
 		or "type=pdf" in low
 		or "=pdf" in low
 	)
+
+
+def documentUrl(obj):
+	"""The address of the browser document obj belongs to, any address (not only a PDF's), from
+	browse mode alone: no walk through the page's objects. None when browse mode does not say."""
+	for o in (obj, getattr(obj, "treeInterceptor", None), getattr(getattr(obj, "rootNVDAObject", None), "treeInterceptor", None)):
+		if o is None:
+			continue
+		try:
+			ident = getattr(o, "documentConstantIdentifier", None)
+		except Exception:
+			ident = None
+		if ident and isinstance(ident, str):
+			return ident
+	return None
 
 
 def _urlFromObject(obj):
@@ -75,10 +91,17 @@ def _pathFromUrl(url):
 	if not url:
 		return None
 	u = url.strip()
-	if u.startswith("chrome-extension:") or "src=" in u:
-		m = re.search(r"[?&]src=([^&]+)", u)
+	if re.match(r"(?i)[a-z-]*extension:", u) or "src=" in u or "file=" in u:
+		# a PDF viewer extension: Chrome's own (…?src=<address>), PDF.js "PDF Viewer"
+		# (chrome-extension://<id>/https://site/file.pdf, older ones viewer.html?file=<address>),
+		# others (…?url=<address>)
+		m = re.search(r"[?&#](?:src|file|url)=([^&#]+)", u, re.I)
 		if m:
 			u = urllib.parse.unquote(m.group(1))
+		else:
+			m = re.match(r"(?i)[a-z-]*extension://[^/]+/((?:https?|file|ftp):.+)$", u)
+			if m:
+				u = m.group(1)
 	if u.lower().startswith("file:"):
 		p = urllib.parse.unquote(urllib.parse.urlparse(u).path)
 		if re.match(r"^/[A-Za-z]:", p):
@@ -90,13 +113,16 @@ def _pathFromUrl(url):
 	if u.lower().startswith(("http://", "https://")):
 		# If the file was downloaded to Downloads, Desktop or Documents, use the local copy directly!
 		try:
-			fn = os.path.basename(urllib.parse.urlparse(u).path)
+			# (an address has its Nepali name %-encoded: बालबालिका… is %E0%A4%AC…)
+			rawFn = os.path.basename(urllib.parse.urlparse(u).path)
+			fn = urllib.parse.unquote(rawFn)
 			if fn.lower().endswith(".pdf"):
 				home = os.path.expanduser("~")
 				for folder in ("Downloads", "Desktop", "Documents"):
-					local_f = os.path.join(home, folder, fn)
-					if os.path.isfile(local_f) and os.path.getsize(local_f) > 1024:
-						return local_f
+					for name in dict.fromkeys((fn, rawFn)):
+						local_f = os.path.join(home, folder, name)
+						if os.path.isfile(local_f) and os.path.getsize(local_f) > 1024:
+							return local_f
 		except Exception:
 			pass
 		return u

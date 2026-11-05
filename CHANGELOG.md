@@ -2,6 +2,68 @@
 
 All notable changes to the **Nepali Reader** NVDA add-on are documented here.
 
+## [2.1.0] - 2026-11-05
+
+- Fixed an issue where the add-on did not stop properly when turned off, preventing conflicts with other add-ons.
+- Improved reading accuracy and text reconstruction for Nepali PDFs and Devanagari documents.
+
+## [2.0.9] - 2026-11-05
+
+Follows 2.0.4. Versions 2.0.5 to 2.0.8 were test builds; 2.0.9 keeps the parts of 2.0.7 (built at the same time, in the project folder) that pass every test, listed at the end. Checked against what NVDA really read in Chrome's PDF Viewer extension on the user's computer (209 lines of two acts, from the add-on's diag.log): every line now reads as printed.
+
+- Patterns of PDF viewer text, fixed wherever they occur (not for one document):
+  - a heading drawn three or four times over itself (fake bold), which the PDF Viewer extension gives that many times in a row, is read once: k|:tfjgk|:tfjgk|:tfjgk|:tfjgffff and a title four times read प्रस्तावना and the title once (two copies stay: ठाउँठाउँ, बेला बेला are real Nepali);
+  - a word the viewer cut after a halant is joined when the whole is a word (सम् बन् धी read सम्बन्धी), while a real word ending in a halant stays apart (अर्थात् यो);
+  - a visarga before a dash or bracket in a PDF is a colon too (यस ऐनमा ः–(क) reads यस ऐनमा :–(क));
+  - a web address or search address is never read as Preeti: Chrome's address bar, while a PDF tab was open, read u+sanrakshan+ain+pdf&oq=… as गंकबलच….
+- The diagnostic log (nepaliReader\diag.log) now gives the time the add-on took for each line, and always notes a line or speech that took longer than 50 or 30 ms, so a slow moment can be found.
+
+- PDFs opened in Chrome through the "PDF Viewer" extension (Mozilla's PDF.js, address chrome-extension://oemmndcbldboiebfnladdacbdfmadadm/https://…) are read from the PDF file itself, like PDFs in Chrome's own viewer. The add-on did not recognise that address, never found the file, and could only guess from the text the extension shows. For the Children's Act 2075 (बालबालिका सम्बन्धी ऐन, २०७५) from supremecourt.gov.np the text is now read as printed: गनन, प्रवर्द्नन, पररपूलिन, संवि्, ो ऐन, लमलि, सवो read गर्न, प्रवर्द्धन, परिपूर्ति, संवत्, यो ऐन, मिति, सर्वो. The web PDF is downloaded once, from the address the viewer shows; a copy already in Downloads, Desktop or Documents is used instead (its Nepali file name is now matched although the address %-encodes it).
+- In a Unicode PDF a colon, comma or bracket standing alone is read as itself. A ":" was read स्, its Preeti key. A closing quotation mark alone is no longer read as an opening one.
+- In a Preeti PDF, punctuation is converted once: a Preeti M already read as ":" was converted again into स्. A visarga standing alone in a PDF (Preeti's M key drawn as ः, used as a colon: संविधान मूल कानून ः) is read as a colon.
+- A glyph that PDF.js cannot name (shown as �) is not spoken.
+- NVDA no longer slows down when a PDF or document is opened:
+  - NVDA waited up to 4.5 seconds at the first line of every PDF, for a new or web PDF and for a PDF whose file could not be found. It now waits at most 0.3 s, enough for a PDF read before; until the file is read the lines are repaired from their text.
+  - The work in the background (reading a PDF, learning a damaged document's letter pattern) now rests whenever a key is pressed or NVDA speaks, and gives way to NVDA at least every few milliseconds. Before, it ran up to 2.3 s at a stretch, and learning a damaged act's letter pattern ran for about 20 s without a break. In a test that imitates NVDA answering keys while a 39-page act is being read, a key took 37 ms (median), 135 to 200 ms (one key in ten) before, and 20 ms and 22 to 27 ms now. The PDF's text is the same as before (nine PDFs compared).
+  - Ordinary web pages in Chrome are recognised as such from their address: the add-on no longer searched the Downloads, Desktop and Documents folders for a PDF named like each page's title (reading up to 5 MB of each recent PDF), nor looked through the page's objects again every second.
+  - The diagnostic log is written in the background about once a second instead of opening the file for every line read, and a line is no longer read from the document a second time for it.
+- Taken from 2.0.7:
+  - outside a browser, a window is taken for a PDF only when its title has a file name ending .pdf (a Word document whose title merely contains "pdf" got the PDF repair and the wait);
+  - the screen check runs only for lines in English letters, and not in a PDF whose own text is ready;
+  - moving by character in a PDF never waits for the file;
+  - a viewer address with ?url=, and a downloaded copy saved under its %-encoded name, are found.
+- Not taken from 2.0.7, because the tests failed:
+  - the clean-up of Preeti leftovers on all text: a correct word next to a bracket changed (नेपालका] read नेपालको), and क ख ग ज्ञ read क विज्ञ;
+  - finding a PDF word by its first three or four letters: another word that begins the same way was read (चुमनुब्री as चुन्चेतबाट, a heading as डा.धर्मराज);
+  - looking up four pieces together: a table's ० ० ० was read ०००, a row number joined its first word (१ विद्यालय read १विद्यालय) and two place names joined (झापा गौरादह read झापागौरादह).
+- Unchanged: Preeti and Kruti Dev reading, web pages, Word, settings and the complete off switch.
+
+## [2.0.4] - 2026-11-05
+
+- Nepali on web pages is no longer changed into other words. When a page had a single typing fault anywhere (a doubled vowel sign, for example), every word on that line went through the repair meant for damaged PDFs, which exchanged correct words for other dictionary words: on news sites गरेपछि was read गतेपछि, निक्कै सिक्के, नहुने नहाने, and केन्दि्रत became केन्दिरत. Text people typed (web pages, Word, e-mail) now only loses what can never be correct Unicode; a word is never exchanged, joined or split. PDFs keep their full repair.
+- The typing faults that old Preeti-to-Unicode converters left on Nepali websites are read correctly. They were counted on 72,000 articles from onlinekhabar.com, ratopati.com, ujyaaloonline.com, imagekhabar.com and dcnepal.com:
+  - ि before a half letter: केन्दि्रत, लोकपि्रय, टि्वटर, मडि्रड read केन्द्रित, लोकप्रिय, ट्विटर, मड्रिड;
+  - two vowel signs: अर्काे, भएकोे, काठमाडाैं, स्मार्टफोनकेा read अर्को, भएको, काठमाडौं, स्मार्टफोनको;
+  - a sign typed twice: गर्दैै, सुुरु, नंं, विद्युत्् read गर्दै, सुरु, नं, विद्युत्;
+  - ँ or ं typed before the sign: हँुदै, बंैक, सधँै read हुँदै, बैंक, सधैँ;
+  - Preeti's ँ read as ा: नयाा, पााच, बााकी read नयाँ, पाँच, बाँकी (where the word list knows the word with ँ);
+  - Preeti keys left in the text: पु¥याउने, ग¥यो, २०७३÷७४ read पुर्‍याउने, गर्‍यो, २०७३/७४;
+  - अ with a sign, half letter with ा, reph after its letter, ्र after the sign, ि after another sign: अाफ्नो, जिल्ल्ाा, निणर्ायक, वषर्ीय, दु्रत, गु्रप, थुपै्र, लािग read आफ्नो, जिल्ला, निर्णायक, वर्षीय, द्रुत, ग्रुप, थुप्रै, लागि;
+  - a visarga standing for a colon (समय ः ५ बजे) reads as a colon.
+- Preeti conversion checked against four other open-source converters (npttf2utf, nepali-bhasa ttf-to-unicode, nep-fontconv and the preeti npm package, about 7,700 test words) and, where they disagreed, against the glyphs of Preeti.TTF itself:
+  - a vowel sign typed after a half letter is read the way that makes a word: k|:'tt प्रस्तुत (the sign under the conjunct), and in PDFs प्ुजारी and स्ांस्कृतिक now read पुजारी and सांस्कृतिक;
+  - ट or ड typed with the ृ key reads ट्ट / ड्ड where that makes a word (k6[L पट्टी, c8[f अड्डा; छुटृै in a PDF now reads छुट्टै);
+  - ¿ keeps the Preeti font's own रू unless the document shows it is ु (¿kfGt/0f रूपान्तरण, not रुपान्तरण because the word list lacks one spelling);
+  - a zero-width joiner inside a Preeti word no longer stops the word from being converted.
+- Kruti Dev: a half letter followed by ा is the full letter, and Kruti's « key (half tra) is no longer read as तर्.
+- Unchanged: Preeti detection (measured again: 99.5% or more of short Nepali phrases typed in Preeti are found, against 0 to 1% of English words), the complete off switch of 2.0.3, settings and modes. The text of nine real PDFs is the same as in 2.0.3 except the three words named above, and prepares at the same speed.
+
+## [2.0.3] - 2026-11-05
+
+- NVDA+Ctrl+Shift+Space now switches Nepali Reader completely off. Before, the add-on stayed attached to NVDA while off and only passed text through. Now every hook is removed (document speech, say all, the speech filter, copying, selection, word and table navigation), MultiLang is put back as it was, and a PDF that is still being prepared stops at once and saves nothing. NVDA then works exactly as without the add-on. Switching on attaches everything again. The same happens from the Tools menu and from the settings check box.
+- When NVDA starts with Nepali mode off, the add-on does no work at all, and the word lists are loaded only when it is switched on (or when you ask it to convert a selection).
+- Settings, modes and how they are saved are unchanged from 2.0.2. Reading is unchanged.
+
 ## [2.0.2] - 2026-10-15
 
 - Reading issues fixed, and table and formatting is now preserved while reading and copying.

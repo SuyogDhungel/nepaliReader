@@ -16,6 +16,7 @@ import pickle
 import re
 import threading
 import time
+import unicodedata
 import zlib
 from collections import OrderedDict
 
@@ -90,6 +91,8 @@ CATEGORY = _("Nepali Reader")
 CONTEXT_SECONDS = 300.0  # a window stays "known legacy" this long after confirmed legacy text
 CHECK_INTERVAL = 0.2     # seconds between "is this a web page" lookups
 VISUAL_SLOW = 0.05       # a screen check slower than this is switched off for that window class for a minute
+PDF_FIRST_WAIT = 0.3     # the longest NVDA waits, once per PDF, for the file's text (a PDF read before)
+QUIET_AFTER_KEY = 0.2    # background work rests this long after each key and each thing NVDA says
 
 # Web browsers and chat apps: text there is Unicode, so only convert when the page names a legacy font.
 WEB_APPS = {
@@ -150,8 +153,10 @@ def setOn(value):
 		prof[CONF_SECTION]["enabled"] = bool(value)
 	except Exception:
 		pass
+	_switchSync[0]()
 
 
+_switchSync = [lambda: None]  # set by the plugin: attaches to or detaches from NVDA to match isOn()
 _menuSync = [lambda: None]  # set by the plugin so the settings panel can update the menu check mark
 
 
@@ -233,6 +238,19 @@ class _DocState:
 			# several unknown words into real words
 			self.broken = self.decided = True
 		elif self.words >= 300:
+			self.decided = True
+
+	def observeTyped(self, text):
+		"""Typed text (outside a PDF): a fault mark is a typing or converter slip, not a damaged text
+		layer. Only a document whose words are mostly not words at all counts as damaged."""
+		if self.decided:
+			return
+		k, w = devanagariRepair.wordStats(text)
+		self.known += k
+		self.seenWords += w
+		if self.seenWords >= 60 and self.known < 0.5 * self.seenWords:
+			self.broken = self.decided = True
+		elif self.seenWords >= 300:
 			self.decided = True
 
 	def afterRepair(self, fixed):
@@ -462,6 +480,8 @@ class _StoryMap:
 
 
 _PATHLIKE = re.compile(r"^\s*(?:[A-Za-z]:[\\/]|\\\\|file:)")
+# a web address or the query of one (Chrome's address bar while a PDF tab is open): never Preeti
+_ADDRESS = re.compile(r"://|\bwww\.|[?&][A-Za-z_][\w.\-]*=|\.(?:com|org|net|gov|edu|np|io|in)(?:/|\b)")
 
 # a viewer line that begins with a sign that follows its letter (not ि, which is drawn before its
 # letter and so can begin a line of the page in a PDF whose text is in drawing order)
@@ -833,18 +853,50 @@ class _PdfState:
 		self.full = False     # the index of the whole document (not only its first pages)
 
 
-class _Yield:
-	"""Background work gives NVDA the processor often: after about 10 ms of work it rests 15 ms,
-	so speech and keys stay quick while a PDF is being read."""
+class _Stopped(BaseException):
+	"""Nepali mode was switched off: background work ends at its next pause and keeps nothing.
+	(Not an Exception, so the work's own error handling cannot swallow it.)"""
 
-	def __init__(self, work=0.010, rest=0.015):
+
+# when NVDA last took a key or spoke (time.monotonic()): background work keeps out of its way
+_activity = [0.0]
+
+
+def _noteActivity():
+	_activity[0] = time.monotonic()
+
+
+class _Yield:
+	"""Background work gives NVDA the processor: it does not run at all while NVDA answers a key or
+	speaks (Python runs one thread at a time, so a PDF being read made every key slow), and
+	otherwise rests 15 ms after about 8 ms of work. When Nepali mode is switched off, the work
+	stops at its next pause."""
+
+	def __init__(self, work=0.008, rest=0.015, stopped=None, quiet=None):
 		self.work = work
 		self.rest = rest
+		self.stopped = stopped
+		self.quiet = QUIET_AFTER_KEY if quiet is None else quiet
 		self.last = time.perf_counter()
 
 	def __call__(self):
+		if self.stopped is not None and self.stopped():
+			raise _Stopped()
+		waited = 0.0
+		while True:
+			idle = time.monotonic() - _activity[0]
+			if idle >= self.quiet or waited >= 1.0:
+				# (a second of keys without a break: one slice of work, so the work still ends)
+				break
+			step = min(0.05, self.quiet - idle + 0.005)
+			time.sleep(step)
+			waited += step
+			if self.stopped is not None and self.stopped():
+				raise _Stopped()
 		now = time.perf_counter()
-		if now - self.last >= self.work:
+		if waited:
+			self.last = now
+		elif now - self.last >= self.work:
 			time.sleep(self.rest)
 			self.last = time.perf_counter()
 
@@ -927,10 +979,46 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		self._docs = _LRU(50)  # window -> _DocState (is this document's text layer damaged?)
 		self._pdfs = _LRU(30)  # window -> _PdfState (the PDF file and its rebuilt text)
 		self._ready = False
-		threading.Thread(target=self._loadDictionary, name="NepaliReaderDict", daemon=True).start()
+		self._dictLoading = False
+		self._attached = False
+		self._generation = 0  # changes at every switch on and off: work of an earlier period stops
+		_switchSync[0] = self._applySwitch
+		if isOn():
+			self._attach()
+		NVDASettingsDialog.categoryClasses.append(NepaliReaderSettingsPanel)
+		self._menu = None
+		try:
+			wx.CallAfter(self._createMenu)
+		except Exception:
+			log.debugWarning("Nepali Reader: could not add menu", exc_info=True)
+		try:
+			# after every add-on has loaded, give up any key another command already uses
+			wx.CallAfter(self._avoidGestureClashes)
+			wx.CallLater(3500, self._startupReminder)
+		except Exception:
+			log.debugWarning("Nepali Reader: gesture check failed", exc_info=True)
+
+	# ------------------------------------------------------------------
+	# switching on and off (NVDA+Ctrl+Shift+Space, the menu, the settings)
+	# ------------------------------------------------------------------
+
+	def _applySwitch(self):
+		if isOn():
+			self._attach()
+		else:
+			self._detach()
+
+	def _attach(self):
+		"""Nepali mode on: hook NVDA's speech, copying, selection, words and tables, and start work."""
+		if self._attached:
+			return
+		self._attached = True
+		self._generation += 1
+		self._loadDictionaryOnce()
 		diag.start(_cacheDir())
 		self._patchTextInfoSpeech()
 		self._registerSpeechFilter()
+		self._registerKeyWatch()
 		try:
 			multilangIntegration.install()
 		except Exception:
@@ -948,20 +1036,58 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		except Exception:
 			log.debugWarning("Nepali Reader: could not hook table navigation", exc_info=True)
 		devanagariRepair.docWords = self._docWordSet
-		NVDASettingsDialog.categoryClasses.append(NepaliReaderSettingsPanel)
-		self._menu = None
 		try:
-			wx.CallAfter(self._createMenu)
+			gen = self._generation
+			# MultiLang may load after this add-on; the hooks are checked once, for the log
+			wx.CallLater(2000, lambda: self._current(gen) and multilangIntegration.install())
+			wx.CallLater(3000, lambda: self._current(gen) and self._checkHooks())
 		except Exception:
-			log.debugWarning("Nepali Reader: could not add menu", exc_info=True)
+			pass
+
+	def _detach(self):
+		"""Nepali mode off: every hook is removed and NVDA works exactly as without the add-on.
+		Background work stops at its next pause and publishes nothing."""
+		if not self._attached:
+			return
+		self._attached = False
+		self._generation += 1
+		self._unpatch()
+		self._unregisterKeyWatch()
+		diag.stop()
 		try:
-			# after every add-on has loaded, give up any key another command already uses
-			wx.CallAfter(self._avoidGestureClashes)
-			wx.CallLater(2000, multilangIntegration.install)
-			wx.CallLater(3000, self._checkHooks)
-			wx.CallLater(3500, self._startupReminder)
+			multilangIntegration.uninstall()
 		except Exception:
-			log.debugWarning("Nepali Reader: gesture check failed", exc_info=True)
+			log.debugWarning("Nepali Reader: could not restore MultiLang", exc_info=True)
+		if devanagariRepair.docWords == self._docWordSet:
+			devanagariRepair.docWords = None
+		self._cache.clear()
+		self._visCache.clear()
+		self._docs.clear()
+		self._pdfs.clear()
+		self._clearContext()
+		devanagariRepair.setDocumentSwaps([], None)
+
+	def _current(self, gen):
+		"""True while Nepali mode is still on in the period that started this work."""
+		return self._attached and self._generation == gen
+
+	def _ensureDictionary(self):
+		"""The word lists, now (for a command run while Nepali mode is off and nothing was loaded)."""
+		if self._ready:
+			return
+		if self._dictLoading:
+			t0 = time.monotonic()
+			while not self._ready and time.monotonic() - t0 < 5.0:
+				time.sleep(0.05)
+			return
+		self._dictLoading = True
+		self._loadDictionary()
+
+	def _loadDictionaryOnce(self):
+		if self._ready or self._dictLoading:
+			return
+		self._dictLoading = True
+		threading.Thread(target=self._loadDictionary, name="NepaliReaderDict", daemon=True).start()
 
 	def _startupReminder(self):
 		if isOn():
@@ -1036,6 +1162,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				log.info("Nepali Reader: %s is already used by %s, so it was left free" % (ident, taken))
 
 	def terminate(self):
+		_switchSync[0] = lambda: None
+		self._detach()
 		self._unpatch()
 		if devanagariRepair.docWords == self._docWordSet:
 			devanagariRepair.docWords = None
@@ -1090,25 +1218,12 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 	def _toggleEnabled(self):
 		c = conf()
 		newVal = not isOn()
-		setOn(newVal)
 		if newVal and c["mode"] == "off":
 			c["mode"] = c["lastOnMode"]
+		# attaches to NVDA when switched on, removes every hook and stops all work when switched off
+		setOn(newVal)
 		self._cache.clear()
 		self._clearContext()
-		if newVal:
-			if not getattr(self, "_speechFilterRegistered", False):
-				self._registerSpeechFilter()
-		else:
-			self._docs.clear()
-			self._pdfs.clear()
-			devanagariRepair.setDocumentSwaps([], None)
-			if getattr(self, "_speechFilterRegistered", False):
-				try:
-					import speech
-					speech.filter_speechSequence.unregister(self._filterSpeechSequence)
-				except Exception:
-					pass
-				self._speechFilterRegistered = False
 		self._syncMenu()
 		return newVal
 
@@ -1141,6 +1256,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		except Exception:
 			log.error("Nepali Reader: could not load glyph references", exc_info=True)
 		self._ready = True
+		self._dictLoading = False
 		self._cache.clear()
 		log.debug("Nepali Reader: loaded %d English and %d Nepali/Devanagari entries" % (en_count, ne_count))
 
@@ -1158,6 +1274,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			c = conf()
 			if not isOn():
 				return orig(_unwrap(info), *args, **kwargs)
+			_noteActivity()
 			unit = kwargs.get("unit")
 			if unit is None:
 				for a in args:
@@ -1212,6 +1329,32 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				pass
 			self._speechFilterRegistered = False
 
+	@staticmethod
+	def _onGesture(gesture=None, **kwargs):
+		# a key is about to be handled: background work (a PDF being read) rests until NVDA is done
+		_noteActivity()
+		return True
+
+	def _registerKeyWatch(self):
+		self._keyWatch = False
+		try:
+			import inputCore
+			dec = getattr(inputCore, "decide_executeGesture", None)
+			if dec is not None and hasattr(dec, "register"):
+				dec.register(self._onGesture)
+				self._keyWatch = True
+		except Exception:
+			log.debugWarning("Nepali Reader: could not watch keys", exc_info=True)
+
+	def _unregisterKeyWatch(self):
+		if getattr(self, "_keyWatch", False):
+			try:
+				import inputCore
+				inputCore.decide_executeGesture.unregister(self._onGesture)
+			except Exception:
+				pass
+			self._keyWatch = False
+
 	def _registerSpeechFilter(self):
 		self._speechFilterRegistered = False
 		try:
@@ -1223,10 +1366,19 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			log.debugWarning("Nepali Reader: could not register speechSequence filter", exc_info=True)
 
 	def _filterSpeechSequence(self, speechSequence):
+		t0 = time.perf_counter()
+		out = self._filterSpeechSequenceInner(speechSequence)
+		took = time.perf_counter() - t0
+		if took > 0.03:
+			diag.write("slow speech filter %dms | %r" % (took * 1000, "".join(x for x in speechSequence if isinstance(x, str))[:70]))
+		return out
+
+	def _filterSpeechSequenceInner(self, speechSequence):
 		"""Ensures repeated table headers, cell navigation headers, object names,
 		and selection announcements are converted and spoken with proper language tagging."""
 		if not isOn():
 			return speechSequence
+		_noteActivity()
 		c = conf()
 		if c["mode"] == "off" and not c["repairUnicode"] and not c["switchLanguage"]:
 			return speechSequence
@@ -1253,7 +1405,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				out.append(item)
 				continue
 			# a web address or file path (a PDF's document name is its file URL) is never Preeti
-			urlish = "://" in item or bool(_PATHLIKE.match(item))
+			urlish = "://" in item or bool(_PATHLIKE.match(item)) or bool(_ADDRESS.search(item))
 			if urlish and "%" in item:
 				item = devanagariRepair.decodeUrlName(item)  # file:///C:/.../%E0%A4%A7... as its name
 			if "\u00e0" in item:
@@ -1265,26 +1417,41 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				isPdf = self._isPdfWindow(fg)
 			except Exception:
 				isPdf = False
-			inCtx = bool(ctxEnc or isPdf)
+			# a PDF whose text is Unicode Nepali: its ":" "," "-" are what they say (":" was read as
+			# स्, the Preeti key, in a Unicode act read in Chrome)
+			uniPdf = isPdf and not ctxEnc and self._pdfIsUnicode()
+			inCtx = bool(ctxEnc or (isPdf and not uniPdf))
 			if mode != "off" and not urlish:
 				# a short piece (a table header, a cell) only in a Preeti document or a PDF, and never a
-				# plain number or page count ("/14", "100%", "1.5" are what they say)
-				if (len(text.strip()) <= 4 and inCtx and not _PLAIN_NUMBER.match(text.strip())
+				# plain number or page count ("/14", "100%", "1.5" are what they say); a symbol alone
+				# only where Preeti has been seen
+				core = text.strip()
+				symbolsOnly = bool(core) and not any(ch.isalnum() for ch in core)
+				# (punctuation that converted text has as well is never converted again: a Preeti M
+				# read as ":" became स् here)
+				plainPunct = symbolsOnly and all(ch in ":()/.,-\u2013\u2014?!" or ch.isspace() for ch in core)
+				if (len(core) <= 4 and inCtx and not _PLAIN_NUMBER.match(core) and not (symbolsOnly and not ctxEnc) and not plainPunct
 						and not detector.isEnglishWord(detector._core(text).lower())):
 					conv_short = legacyFonts.convert(text.strip(), defaultEnc)
 					if conv_short and (devanagariRepair.hasDevanagari(conv_short) or conv_short in (":", "५", "१", "२", "३", "४", "६", "७", "८", "९", "०")):
 						if (neLexicon.isLoaded() and neLexicon.isWord(conv_short.strip(".,:;!?()[]{}"))) or any(ch in "!@#$%^&*()+=~`_{}[]\\|/<>?;'-" for ch in text) or conv_short in (":", "५", "१", "२", "३", "४", "६", "७", "८", "९", "०"):
 							text = conv_short
-				if text == item and detector.looksLegacy(text, defaultEnc, context=inCtx):
+				if text == item and not plainPunct and detector.looksLegacy(text, defaultEnc, context=inCtx):
 					conv = detector.convertMixed(text, lambda t: legacyFonts.convert(t, defaultEnc) or t, encoding=defaultEnc, context=inCtx)
 					if conv != text:
 						text = conv
 						if len(text.split()) >= 2 and mode == "auto":
 							self._setContext(defaultEnc)
+			if isPdf:
+				# (before the repair, which drops a sign standing alone)
+				text = devanagariRepair.visargaAsColon(text)
 			if devanagariRepair.hasDevanagari(text) or any(ch in "%M" for ch in text):
 				text = devanagariRepair.cleanShuffled(text)
-				if repair and (isPdf or self._isBrokenDoc() or devanagariRepair.isBroken(text)):
-					text = devanagariRepair.repair(text, broken=True)
+				if repair:
+					text = devanagariRepair.repairIn(text, pdf=isPdf, brokenDoc=self._isBrokenDoc())
+			if isPdf and "\ufffd" in text:
+				# a glyph the viewer could not name (PDF.js shows it as �): nothing to say
+				text = text.replace("\ufffd", "")
 
 			if switchLang and LangChangeCommand and devanagariRepair.hasDevanagari(text):
 				if any(type(x).__name__ == "CharacterModeCommand" for x in speechSequence):
@@ -1326,8 +1493,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 						return origCopy(_unwrap(info), notify)
 					if devanagariRepair.hasDevanagari(target):
 						cleaned = devanagariRepair.cleanShuffled(target)
-						if plugin._isPdfWindow(info.obj) or devanagariRepair.isBroken(target) or plugin._isBrokenDoc():
-							cleaned = devanagariRepair.repair(cleaned, broken=True)
+						cleaned = devanagariRepair.repairIn(cleaned, pdf=plugin._isPdfWindow(info.obj), brokenDoc=plugin._isBrokenDoc())
 						if cleaned and cleaned != raw:
 							return _ownCopy(textInfos.convertToCrlf(cleaned), notify)
 					elif text and text != raw:
@@ -1364,8 +1530,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 								return origCursorCopy(mgr, gesture)
 							if devanagariRepair.hasDevanagari(target):
 								cleaned = devanagariRepair.cleanShuffled(target)
-								if plugin._isPdfWindow(mgr) or devanagariRepair.isBroken(target) or plugin._isBrokenDoc():
-									cleaned = devanagariRepair.repair(cleaned, broken=True)
+								cleaned = devanagariRepair.repairIn(cleaned, pdf=plugin._isPdfWindow(mgr), brokenDoc=plugin._isBrokenDoc())
 								if cleaned and cleaned != raw:
 									_ownCopy(textInfos.convertToCrlf(cleaned), notify=True)
 									return
@@ -1379,7 +1544,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 									if conv and conv != raw:
 										text = conv
 								if c["repairUnicode"] and text and devanagariRepair.hasDevanagari(text):
-									text = devanagariRepair.repair(text, broken=True if (plugin._isPdfWindow(mgr) or plugin._isBrokenDoc()) else None)
+									text = devanagariRepair.repairIn(text, pdf=plugin._isPdfWindow(mgr), brokenDoc=plugin._isBrokenDoc())
 							if text and text != raw:
 								_ownCopy(textInfos.convertToCrlf(text), notify=True)
 								return
@@ -1403,8 +1568,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 							text = viaIndex.replace("\r\n", "\n").replace("\n", "\r\n") if "\n" in viaIndex else viaIndex
 						elif devanagariRepair.hasDevanagari(text):
 							cleaned = devanagariRepair.cleanShuffled(text)
-							if devanagariRepair.isBroken(text) or plugin._isBrokenDoc():
-								cleaned = devanagariRepair.repair(cleaned, broken=True)
+							cleaned = devanagariRepair.repairIn(cleaned, pdf=False, brokenDoc=plugin._isBrokenDoc())
 							if cleaned:
 								text = cleaned
 						elif conf()["mode"] != "off" and plugin._inContext() and detector.looksLegacy(text, plugin._inContext(), context=True):
@@ -1441,8 +1605,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
 			speechModule.speakSelectionChange = speakSelectionChange
 			self._patched2.append((speechModule, "speakSelectionChange", origSel, speakSelectionChange))
+			# (switching off puts back exactly what each module had)
+			origSelTop = getattr(speech, "speakSelectionChange", origSel)
 			speech.speakSelectionChange = speakSelectionChange
-			self._patched2.append((speech, "speakSelectionChange", origSel, speakSelectionChange))
+			self._patched2.append((speech, "speakSelectionChange", origSelTop, speakSelectionChange))
 		except Exception:
 			log.debugWarning("Nepali Reader: could not hook selection speech", exc_info=True)
 
@@ -2990,15 +3156,13 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			return central
 		if devanagariRepair.hasDevanagari(raw):
 			conv = devanagariRepair.cleanShuffled(raw)
-			if self._isPdfWindow(info.obj) or devanagariRepair.isBroken(raw):
-				conv = devanagariRepair.repair(conv, broken=True)
-			return conv
+			return devanagariRepair.repairIn(conv, pdf=self._isPdfWindow(info.obj), brokenDoc=self._isBrokenDoc())
 		conv = self._plainText(info)
 		if not conv or conv == raw:
 			c = conf()
 			ctxEnc = self._inContext()
 			defaultEnc = ctxEnc or c["encoding"]
-			if c["mode"] != "off" and not self._docState().isUnicodeDocument:
+			if c["mode"] != "off" and not self._docState().isUnicodeDocument and not _ADDRESS.search(raw):
 				inCtx = bool(ctxEnc or self._isPdfWindow(info.obj))
 				if inCtx:
 					c_mixed = detector.convertMixed(raw, lambda t: legacyFonts.convert(t, defaultEnc) or t, encoding=defaultEnc, context=inCtx)
@@ -3116,15 +3280,16 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				st.status = "none"
 				return None
 			st.status = "building"
-			threading.Thread(target=self._buildPdf, args=(st, url, title, pid), name="NepaliReaderPdf", daemon=True).start()
+			threading.Thread(target=self._buildPdf, args=(st, url, title, pid, self._generation), name="NepaliReaderPdf", daemon=True).start()
 		if st.status == "building" and not getattr(st, "waited", False):
-			# The first words of a PDF are spoken before the real text is known and would be guesses
-			# (संशोिन, मलुकी): wait once, briefly, for the first pages instead of speaking them.
+			# A PDF read before (its text kept in the cache) is ready in a moment: wait that long, once.
+			# Never longer: NVDA can do nothing while it waits (it waited up to 4.5 s for a new or web
+			# PDF, at every PDF opened). Until the file is read the lines are repaired as text.
 			st.waited = True
 			t0 = time.monotonic()
-			while st.status == "building" and time.monotonic() - t0 < 4.5:
-				time.sleep(0.04)
-			diag.write("pdf: waited %.1f s for the first pages (%s)" % (time.monotonic() - t0, st.status))
+			while st.status == "building" and time.monotonic() - t0 < PDF_FIRST_WAIT:
+				time.sleep(0.02)
+			diag.write("pdf: waited %.2f s for the first pages (%s)" % (time.monotonic() - t0, st.status))
 		return st.index if st.status == "ready" else None
 
 	def _docWordSet(self):
@@ -3156,8 +3321,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		except Exception:
 			return None
 
-	def _buildPdf(self, st, url, title, pid):
+	def _buildPdf(self, st, url, title, pid, gen=None):
 		from . import pdfLocate
+		stopped = (lambda: not self._current(gen)) if gen is not None else None
 		try:
 			try:
 				import comtypes
@@ -3194,11 +3360,13 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 					idx = None
 			if idx is None:
 				t0 = time.monotonic()
-				pause = _Yield()
+				pause = _Yield(stopped=stopped)
 				if len(data) > 400 * 1024:
 					# a long document: the first pages first, so reading can start at once
 					try:
 						first = pdfText.DocIndex.build(data, detector=detector, pause=pause, isWord=neLexicon.isWord, maxPages=2)
+						if stopped is not None and stopped():
+							raise _Stopped()
 						st.index = first
 						st.status = "ready"
 						self._cache.clear()
@@ -3206,6 +3374,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 					except Exception:
 						diag.exception("first pages")
 				idx = pdfText.DocIndex.build(data, detector=detector, pause=pause, isWord=neLexicon.isWord)
+				if stopped is not None and stopped():
+					raise _Stopped()
 				log.info("Nepali Reader: rebuilt %s in %.1f s: %r" % (loc, time.monotonic() - t0, idx.stats))
 				diag.write("pdf: rebuilt in %.1f s: %r" % (time.monotonic() - t0, idx.stats))
 				try:
@@ -3224,10 +3394,15 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 						f.write(zlib.compress(pickle.dumps(idx.dump(), protocol=4), 6))
 				except Exception:
 					log.debugWarning("Nepali Reader: could not save the PDF index", exc_info=True)
+			if stopped is not None and stopped():
+				raise _Stopped()
 			st.index = idx
 			st.full = True
 			st.status = "ready"
 			self._cache.clear()
+		except _Stopped:
+			# Nepali mode was switched off while this PDF was being read
+			st.status = "none"
 		except Exception:
 			log.debugWarning("Nepali Reader: could not rebuild the PDF text", exc_info=True)
 			diag.exception("could not rebuild the PDF text")
@@ -3299,6 +3474,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			return None
 		s_text = text.strip()
 		if not s_text:
+			return None
+		if all(unicodedata.category(ch) in ("Pi", "Pf") for ch in s_text):
+			# a quotation mark alone (PDF.js gives “ and ” as pieces of their own): the closing one
+			# was found as the opening one
 			return None
 		if s_text.isdigit() or _PLAIN_NUMBER.match(s_text):
 			# A numeric-looking Preeti key can draw a consonant. Only use the
@@ -3537,7 +3716,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			rawTitle = (fg.name if fg else "") or ""
 			title = rawTitle.lower()
 			if app not in WEB_APPS:
-				return ".pdf" in title or "pdf" in title
+				# (a file name ending .pdf: a Word document named "convert to pdf" is no PDF, and its
+				# typed text must not get the repair meant for PDFs)
+				return bool(re.search(r"\.pdf\b", rawTitle, re.I))
 			# a browser: decided once per tab and title
 			key = (fg.windowHandle if fg else None, title)
 			if not hasattr(self, "_pdfTabs"):
@@ -3547,9 +3728,11 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			if cached is not None and (cached[0] or now < cached[1]):
 				return cached[0]
 			from . import pdfLocate
-			url = (pdfLocate._urlFromObject(obj) or "").lower()
+			# the document's own address first (browse mode knows it): a web page is known to be
+			# one at once, without walking through the page's objects or searching for files
+			docUrl = (pdfLocate.documentUrl(obj) or "").lower()
 			res = False
-			if url and (pdfLocate._isPdfUrl(url) or ".pdf" in url):
+			if docUrl and pdfLocate._isPdfUrl(docUrl):
 				res = True
 			elif ".pdf" in title:
 				res = True
@@ -3564,9 +3747,16 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 						res = True
 				except Exception:
 					pass
-			if not res and not (cached is not None and cached[2]):
+			if not res:
+				# (Chrome's own viewer: the page's address may be the PDF's without .pdf in it)
+				url = (pdfLocate._urlFromObject(obj) or "").lower()
+				res = bool(url and (pdfLocate._isPdfUrl(url) or ".pdf" in url))
+			if not res and not docUrl and not (cached is not None and cached[2]):
+				# (only when the address is unknown: a PDF shown under its own title)
 				self._lookUpTitleLater(key, rawTitle, getattr(fg, "processID", None))
-			cacheExpiry = now + (10.0 if res else 1.0)
+			# a page that is not a PDF stays so while its title stays the same (asked again every
+			# second, the walk above made reading web pages slow)
+			cacheExpiry = now + (10.0 if res else (20.0 if docUrl else 2.0))
 			self._pdfTabs.put(key, (res, cacheExpiry, True))
 			return res
 		except Exception:
@@ -3574,13 +3764,14 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
 	def _lookUpTitleLater(self, key, title, pid):
 		from . import pdfLocate
+		gen = self._generation
 
 		def work():
 			try:
 				found = pdfLocate.findFromTitle(title, pid)
 			except Exception:
 				found = None
-			if found:
+			if found and self._current(gen):
 				self._pdfTabs.put(key, (True, 0.0, True))
 				self._pdfMemo = None
 				diag.write("pdf window from its title: %r -> %r" % (title, found))
@@ -3730,18 +3921,26 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		if not isOn():
 			return info.getTextWithFields(formatConfig)
 		if diag.wanted():
+			# (the text NVDA gave is kept from the conversion: asking the document again cost a
+			# second read of every line)
+			self._lastRaw = None
+			t0 = time.perf_counter()
 			fields = self._convertFieldsInner(info, formatConfig, c, unit=unit)
-			try:
-				before = info.text
-			except Exception:
-				before = "?"
+			took = (time.perf_counter() - t0) * 1000
+			before = self._lastRaw if self._lastRaw is not None else "?"
 			after = "".join(f for f in fields if isinstance(f, str))
 			st = self._pdfs.get_(self._foregroundKey())
-			diag.write("read app=%s pdf=%s pdfState=%s mode=%s ready=%s | %r -> %r" % (
-				_appName(info.obj), self._isPdfWindow(info.obj), st.status if st else None,
+			# (how long the add-on took for this line, so a slow moment can be found in the log)
+			diag.write("read %dms app=%s pdf=%s pdfState=%s mode=%s ready=%s | %r -> %r" % (
+				took, _appName(info.obj), self._isPdfWindow(info.obj), st.status if st else None,
 				c["mode"], self._ready, (before or "")[:70], after[:70]))
 			return fields
-		return self._convertFieldsInner(info, formatConfig, c, unit=unit)
+		t0 = time.perf_counter()
+		fields = self._convertFieldsInner(info, formatConfig, c, unit=unit)
+		took = time.perf_counter() - t0
+		if took > 0.05:
+			diag.write("slow read %dms app=%s | %r" % (took * 1000, _appName(info.obj), (self._lastRaw or "")[:70]))
+		return fields
 
 	def _resolveCharacter(self, info, formatConfig, c):
 		"""Resolves a single character during Left/Right Arrow navigation, repairing hybrid residue,
@@ -3767,9 +3966,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 					fields[i] = converted
 			return fields
 
-		# Check DocIndex first if reading a PDF
+		# Check DocIndex first if reading a PDF (only when it is ready: a character never waits)
 		if self._isPdfWindow(info.obj):
-			idx = self._pdfIndex(info.obj)
+			idx = self._readyIndex(info.obj)
 			if idx is not None:
 				ctx = self._lineContext(info)
 				if ctx:
@@ -4041,6 +4240,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				self._docState().recordWords(rawText)
 		except Exception:
 			rawText = ""
+		self._lastRaw = rawText
 
 		if unit == textInfos.UNIT_CHARACTER:
 			return self._resolveCharacter(info, formatConfig, c)
@@ -4253,8 +4453,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
 	def _learnDocument(self, obj, st):
 		"""Read the damaged document's whole text once and learn its letter swaps in the background."""
-		if not self._isPdfWindow(obj):
+		if not self._attached or not self._isPdfWindow(obj):
 			return
+		gen = self._generation
 		try:
 			ti = getattr(obj, "treeInterceptor", None)
 			src = ti if ti is not None else obj
@@ -4266,7 +4467,17 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
 		def work():
 			try:
-				st.swaps = devanagariRepair.learnDocumentSwaps(text)
+				# (20 s of processor time on a 40-page act: it gives way to NVDA at every word)
+				swaps = devanagariRepair.learnDocumentSwaps(text, pause=_Yield(stopped=lambda: not self._current(gen)))
+				if not self._current(gen):
+					return
+			except _Stopped:
+				return
+			except Exception:
+				log.error("Nepali Reader: learning failed", exc_info=True)
+				return
+			try:
+				st.swaps = swaps
 				log.debug("Nepali Reader: learned %d swaps for this document" % len(st.swaps))
 				if st.swaps:
 					# Translators: said once when the add-on has worked out a damaged document's pattern
@@ -4284,6 +4495,18 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			self._docs.put(key, st)
 		return st
 
+	def _pdfIsUnicode(self):
+		"""The PDF in the foreground window is not a Preeti/Kruti Dev one: its text so far is Unicode
+		Nepali, or its file has no legacy font."""
+		key = self._foregroundKey()
+		st = self._docs.get_(key)
+		if st is not None and st.isUnicodeDocument:
+			return True
+		pst = self._pdfs.get_(key)
+		idx = pst.index if pst is not None and pst.status == "ready" else None
+		fonts = ((getattr(idx, "stats", None) or {}).get("fonts") or []) if idx is not None else []
+		return bool(fonts) and not any(f[1] for f in fonts)
+
 	def _isBrokenDoc(self):
 		st = self._docs.get_(self._foregroundKey())
 		return bool(st and st.broken)
@@ -4299,8 +4522,14 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		unicodeFont = False
 		inPdfUi = False
 		pdfUiIndices = set()
+		pdfWin = self._isPdfWindow(info.obj)
 		for i, item in enumerate(fields):
 			if isinstance(item, str):
+				if pdfWin and len(item) >= 9:
+					# a heading drawn three or four times over itself (fake bold), given that often
+					once = devanagariRepair.collapseOverprint(item)
+					if once != item:
+						fields[i] = item = once
 				if not curEnc and "&" in item and ";" in item and any(ent in item for ent in ("&#", "&amp;", "&quot;", "&gt;", "&lt;", "&apos;")):
 					import html
 					fields[i] = item = html.unescape(item)
@@ -4414,9 +4643,32 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 						out[i] = cl
 						runs[k] = (i, cl, known, enc)
 						changed = True
-		if repair and ((self._isPdfWindow(info.obj) and not self._isWebNonPdf(info.obj)) or any(devanagariRepair.isBroken(t) for _, t, _, _ in runs)):
-			# only PDF text layers are damaged; Unicode Nepali on web pages and in documents is
-			# correct and must never be "repaired" (it turned भनसुन into निसान on news sites)
+		webPage = repair and self._isWebNonPdf(info.obj)
+		pdfLayer = repair and not webPage and self._isPdfWindow(info.obj)
+		if repair and not pdfLayer:
+			# Typed Unicode (web pages, Word, e-mail) is what people wrote: only sequences that cannot
+			# be correct are fixed (केन्दि्रत, अर्काे, ग¥यो from old Preeti converters); a word is never
+			# exchanged for another, joined or split (that turned भनसुन into निसान, गरेपछि into
+			# गतेपछि on news sites). A document outside the browser whose words are mostly not words
+			# at all (text pasted from a damaged PDF) still gets the full repair.
+			st = self._docState()
+			for k, (i, text, known, enc) in enumerate(runs):
+				if not devanagariRepair.hasDevanagari(text):
+					continue
+				if not webPage:
+					st.observeTyped(text)
+				if st.broken and not webPage:
+					fixed = devanagariRepair.repair(text, broken=True)
+				elif devanagariRepair.hasTypedFault(text):
+					fixed = devanagariRepair.repairTyped(text)
+				else:
+					continue
+				if fixed != text:
+					out[i] = fixed
+					runs[k] = (i, fixed, known, None)
+					changed = True
+		elif repair:
+			# a PDF's text layer: its faults come from glyphs, and the full repair applies
 			st = self._docState()
 			devanagariRepair.setDocumentSwaps(st.swaps, (id(st), len(st.swaps)))
 			for k, (i, text, known, enc) in enumerate(runs):
@@ -4450,6 +4702,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		for i, text, known, enc in runs:
 			if i in pdfUiIndices or not any(ch in _LEGACY_TRIGGER for ch in text):
 				continue
+			if not enc and _ADDRESS.search(text) and (not pdfWin or " " not in text.strip()):
+				continue  # an address (u+sanrakshan+ain+pdf&oq=… was read as Preeti)
 			if enc:
 				convert[i] = (enc, False)  # the font says so
 				trustedRuns.add(i)
@@ -4626,7 +4880,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			if not hasStrong:
 				return
 		inPdf = self._isPdfWindow(info.obj)
-		if allowVisual and c["visualCheck"] and not allEnglish and (legacyWords or (ctxEnc and words <= 3) or inPdf):
+		# the screen check is for English letters only (a line with Unicode Nepali shows Nepali on
+		# screen whatever its English words are), and not needed once the PDF's own text is known
+		hasDeva = devanagariRepair.hasDevanagari(joined)
+		if allowVisual and c["visualCheck"] and not allEnglish and not hasDeva and (legacyWords or (ctxEnc and words <= 3) or (inPdf and self._readyIndex(info.obj) is None)):
 			if legacyWords < 2 and not (legacyWords * 2 >= words and legacyWords >= 1):
 				verdict = self._visualVerdict(info, joined)
 		if verdict == visualScript.LATIN:
@@ -4753,8 +5010,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			target = new if (new and new != raw) else raw
 			if devanagariRepair.hasDevanagari(target):
 				cleaned = devanagariRepair.cleanShuffled(target)
-				if self._isPdfWindow(src) or devanagariRepair.isBroken(target) or self._isBrokenDoc():
-					cleaned = devanagariRepair.repair(cleaned, broken=True)
+				cleaned = devanagariRepair.repairIn(cleaned, pdf=self._isPdfWindow(src), brokenDoc=self._isBrokenDoc())
 				if cleaned and cleaned != raw:
 					_ownCopy(textInfos.convertToCrlf(cleaned), notify=True)
 					return
@@ -4768,7 +5024,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 					if conv and conv != raw:
 						new = conv
 				if c["repairUnicode"] and new and devanagariRepair.hasDevanagari(new):
-					new = devanagariRepair.repair(new, broken=True if (self._isPdfWindow(src) or self._isBrokenDoc()) else None)
+					new = devanagariRepair.repairIn(new, pdf=self._isPdfWindow(src), brokenDoc=self._isBrokenDoc())
 			if new and new != raw:
 				_ownCopy(textInfos.convertToCrlf(new), notify=True)
 				return
@@ -4793,8 +5049,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				return
 			if devanagariRepair.hasDevanagari(clip):
 				cleaned = devanagariRepair.cleanShuffled(clip)
-				if self._isPdfWindow(src) or devanagariRepair.isBroken(clip) or self._isBrokenDoc():
-					cleaned = devanagariRepair.repair(cleaned, broken=True)
+				cleaned = devanagariRepair.repairIn(cleaned, pdf=self._isPdfWindow(src), brokenDoc=self._isBrokenDoc())
 				if cleaned and cleaned != clip:
 					_ownCopy(textInfos.convertToCrlf(cleaned))
 					return
@@ -4871,8 +5126,14 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			ui.message(_("No selection or clipboard text to convert"))
 			return
 		c = conf()
+		# an explicit request also works while Nepali mode is off; it needs the word lists
+		self._ensureDictionary()
 		encoding = self._inContext() or c["encoding"]
-		result = devanagariRepair.repair(text, broken=True if self._isBrokenDoc() else None)
+		try:
+			fromPdf = self._isPdfWindow(api.getFocusObject())
+		except Exception:
+			fromPdf = False
+		result = devanagariRepair.repairIn(text, pdf=fromPdf, brokenDoc=self._isBrokenDoc())
 		decisions = detector.decide(result, encoding, context=True)
 		if any(f for _, f in decisions):
 			result = detector.convertTokens(decisions, lambda s: legacyFonts.convert(s, encoding) or s)

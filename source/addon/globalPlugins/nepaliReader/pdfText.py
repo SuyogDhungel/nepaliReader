@@ -14,6 +14,7 @@ import array
 import bisect
 import math
 import re
+import threading
 import time
 import unicodedata
 import zlib
@@ -43,12 +44,23 @@ NUKTA = "़"
 REPH = "र्"
 DEP_SIGNS = set("ऺऻािीुूृॄॅॆेैॉॊोौॎॏॕॖॗॢॣऀँंः़")
 INDEPENDENT = set(chr(c) for c in range(0x0904, 0x0915)) | set("ॠॡॲॳॴॵॶॷ")
-INDEX_VERSION = 32
+INDEX_VERSION = 33
 STYLE_BOLD = 1
 STYLE_ITALIC = 2
 STYLE_UNDERLINE = 4
 LAYOUT = True  # read tables and headings (pdfLayout)
 _LINE_OPS = re.compile(rb"[\d.]\s+(?:re|l)\s")
+
+# the pause of the build running in this thread: long loops call it often, so NVDA (which runs
+# Python only while this work rests) never waits long for a key or for speech
+_tl = threading.local()
+
+
+def _tick(n, every=31):
+	if not n & every:
+		p = getattr(_tl, "pause", None)
+		if p is not None:
+			p()
 _PATH_OPS = frozenset(("re", "m", "l", "h", "c", "v", "y", "S", "s", "f", "F", "f*", "B", "B*", "b", "b*", "n"))
 _DIGITS_SET = frozenset("0123456789\u0966\u0967\u0968\u0969\u096a\u096b\u096c\u096d\u096e\u096f")
 INFER = True
@@ -462,7 +474,10 @@ class PdfFont:
 			gids[code] = g
 		self.gidOf = gids
 		family = glyphRefs.norm(self.baseFont)
-		hashes = {code: font.glyphHash(g) for code, g in gids.items()}
+		hashes = {}
+		for n, (code, g) in enumerate(gids.items()):
+			_tick(n, 7)
+			hashes[code] = font.glyphHash(g)
 		self.hashOf = hashes
 
 		def familyHits():
@@ -586,7 +601,7 @@ class _PageReader:
 		pstart = None
 		for op, args in pdfReader.contentOps(data, graphics=lines is not None):
 			count += 1
-			if count & 255 == 0:
+			if count & 31 == 0:
 				if time.monotonic() > self.deadline:
 					raise TimeoutError
 				if self.pause:
@@ -824,19 +839,28 @@ def _isSymbolFont(font):
 def _words(glyphs, page):
 	"""Group drawn glyphs into lines and words (by position), in drawing order."""
 	# Deduplicate fake-bold overprinting (same font & code drawn within <= 0.8 pt)
+	# (positions kept in 0.8 pt cells: a glyph is compared with those of the cells around it only,
+	# not with every earlier one - that took seconds on a long page)
 	seen = {}
 	dedup = []
-	for g in glyphs:
+	for n, g in enumerate(glyphs):
+		_tick(n, 127)
 		font, code, u, v, size, adv, span = g[:7]
-		k = (id(font), code)
+		cu, cv = math.floor(u / 0.8), math.floor(v / 0.8)
+		fk = id(font)
 		is_dup = False
-		if k in seen:
-			for pu, pv in seen[k]:
-				if abs(u - pu) <= 0.8 and abs(v - pv) <= 0.8:
-					is_dup = True
+		for du in (-1, 0, 1):
+			for dv in (-1, 0, 1):
+				for pu, pv in seen.get((fk, code, cu + du, cv + dv), ()):
+					if abs(u - pu) <= 0.8 and abs(v - pv) <= 0.8:
+						is_dup = True
+						break
+				if is_dup:
 					break
+			if is_dup:
+				break
 		if not is_dup:
-			seen.setdefault(k, []).append((u, v))
+			seen.setdefault((fk, code, cu, cv), []).append((u, v))
 			t = font.text(code)
 			if ("wingdings" in font.baseFont.lower() or "symbol" in font.baseFont.lower()) and t in ("\x01", "\x02", "\x03", "§", "Å", "´", "•"):
 				g = (font, code, u, v, size, adv, ("bullet", "•")) + tuple(g[7:])
@@ -848,7 +872,8 @@ def _words(glyphs, page):
 	endU = 0.0
 	pend = []    # space glyphs of this line not yet passed: (u, advance)
 	lastV = None
-	for g in dedup:
+	for n, g in enumerate(dedup):
+		_tick(n, 15)
 		font, code, u, v, size, adv, span = g[:7]
 		size = size or 1.0
 		blank = _isSpace(font, code, span)
@@ -990,6 +1015,15 @@ class DocIndex:
 	@classmethod
 	def build(cls, data, timeLimit=120.0, progress=None, detector=None, pause=None, isWord=None, maxPages=None):
 		"""maxPages: only the first pages (a quick first index while the whole document is read)."""
+		before = getattr(_tl, "pause", None)
+		_tl.pause = pdfLayout._tl.pause = pause
+		try:
+			return cls._build(data, timeLimit, progress, detector, pause, isWord, maxPages)
+		finally:
+			_tl.pause = pdfLayout._tl.pause = before
+
+	@classmethod
+	def _build(cls, data, timeLimit, progress, detector, pause, isWord, maxPages):
 		doc = pdfReader.Document(data)
 		pages = doc.pages()
 		if maxPages:
@@ -1069,7 +1103,10 @@ class DocIndex:
 		idx._fill(allWords, pause)
 		if withLayout:
 			try:
-				boxes = [pdfLayout.wordBox(w) for w in allWords]
+				boxes = []
+				for n, w in enumerate(allWords):
+					_tick(n, 63)
+					boxes.append(pdfLayout.wordBox(w))
 				layout = pdfLayout.analyse(struct, pageTables, boxes, idx._order, pageLines, pageImages)
 				wpage = [0] * len(idx.words)
 				for wi, i in enumerate(idx._order):
@@ -1089,7 +1126,7 @@ class DocIndex:
 		pos = 0
 		self._order = order = []   # grouped word -> its place in self.words (None: not kept)
 		for n, w in enumerate(allWords):
-			if pause and not n & 255:
+			if pause and not n & 15:
 				pause()
 			shown, fixed, amap, enc = _wordTexts(w)
 			glyphCertain = all(g[1] in g[0].truth and g[1] not in g[0].weak for g in w.glyphs)
@@ -1750,6 +1787,7 @@ class DocIndex:
 		if self._byKey is None:
 			exact = {}
 			moved = {}
+			stems = {}
 			for fixed, amap, enc, key in self.words:
 				if fixed is None:
 					continue
@@ -1757,9 +1795,27 @@ class DocIndex:
 					if k:
 						exact.setdefault(k, set()).add(fixed)
 						moved.setdefault(movementKey(k), set()).add(fixed)
+						k_clean = k.strip(".,:;!?()\"'")
+						if k_clean and k_clean != k:
+							f_clean = fixed.strip(".,:;!?()\"'")
+							exact.setdefault(k_clean, set()).add(f_clean)
+							moved.setdefault(movementKey(k_clean), set()).add(f_clean)
+						k_nohal = k.rstrip('\u094d')
+						if k_nohal and k_nohal != k:
+							exact.setdefault(k_nohal, set()).add(fixed)
+						k_dedup = re.sub(r'([क-ह])\1+', r'\1', k)
+						if k_dedup and k_dedup != k:
+							exact.setdefault(k_dedup, set()).add(fixed)
+				if len(fixed) >= 3:
+					stems.setdefault(fixed[:4], set()).add(fixed)
+					stems.setdefault(fixed[:3], set()).add(fixed)
+				if key and len(key) >= 3:
+					stems.setdefault(key[:4], set()).add(fixed)
+					stems.setdefault(key[:3], set()).add(fixed)
 			self._ambiguousKeys = {k for k, v in exact.items() if len(v) > 1}
 			self._byKey = {k: next(iter(v)) for k, v in exact.items() if len(v) == 1}
 			self._byBag = {k: next(iter(v)) for k, v in moved.items() if len(v) == 1}
+			self._byStem = {k: next(iter(v)) for k, v in stems.items() if len(v) == 1}
 
 		text = cleanGluedTokens(text)
 		rawToks = [t for t in re.split(r"\s+", text) if t]
@@ -1787,7 +1843,7 @@ class DocIndex:
 				toks.append(t)
 		try:
 			from . import devanagariRepair
-			cl_text = devanagariRepair.cleanShuffled(text)
+			cl_text = devanagariRepair.cleanShuffled(text, legacyArtifacts=True)
 			if cl_text != text:
 				text = cl_text
 		except Exception:
@@ -1797,10 +1853,14 @@ class DocIndex:
 		i = 0
 		while i < len(toks):
 			done = False
-			for span in (3, 2, 1):
+			for span in (4, 3, 2, 1):
 				if i + span > len(toks):
 					continue
-				k = matchKey("".join(toks[i:i + span]))
+				span_toks = toks[i:i + span]
+				has_digits = any(any(c.isdigit() or "\u0966" <= c <= "\u096f" for c in t) for t in span_toks)
+				if span > 1 and has_digits:
+					continue
+				k = matchKey("".join(span_toks))
 				if not k:
 					continue
 				f = None if k in self._ambiguousKeys else (self._byKey.get(k) or self._byBag.get(movementKey(k)))
@@ -1810,10 +1870,20 @@ class DocIndex:
 				if f is None and k not in self._ambiguousKeys:
 					try:
 						from . import devanagariRepair
-						k_cl = matchKey(devanagariRepair.cleanShuffled("".join(toks[i:i + span])))
+						k_cl = matchKey(devanagariRepair.cleanShuffled("".join(span_toks), legacyArtifacts=True))
 						f = self._byKey.get(k_cl) or self._byBag.get(movementKey(k_cl))
 					except Exception:
 						pass
+				if f is None and k not in self._ambiguousKeys and len(k) >= 3:
+					cand_fixed = self._byStem.get(k[:4]) or self._byStem.get(k[:3])
+					if cand_fixed is not None:
+						if span == 1 and abs(len(k) - len(cand_fixed)) <= 2:
+							f = cand_fixed
+						elif span > 1 and not has_digits:
+							k_cons = re.findall(r"[\u0915-\u0939]", k)
+							c_cons = re.findall(r"[\u0915-\u0939]", cand_fixed)
+							if len(k_cons) >= 3 and c_cons[:len(k_cons)] == k_cons:
+								f = cand_fixed
 				if f is not None:
 					out.append((f, True))
 					found += 1
@@ -2133,7 +2203,8 @@ def _bfPreferences(fonts, allWords, isWord):
 	PDFs (and fonts) give ु or रु for it. The words of the document decide: the reading that
 	makes the most dictionary words, when it clearly wins."""
 	byFont = {}
-	for w in allWords:
+	for n, w in enumerate(allWords):
+		_tick(n, 63)
 		gl = w.glyphs
 		f = gl[0][0] if gl else None
 		if f is None or not f.legacy or f.legacy == "krutidev" or any(g[0] is not f for g in gl):
@@ -2148,7 +2219,8 @@ def _bfPreferences(fonts, allWords, isWord):
 		for sub in legacyFonts._BF_CHOICES:
 			n = 0
 			tab = legacyFonts._bfTable(f.legacy, sub)
-			for raw in words:
+			for n, raw in enumerate(words):
+				_tick(n, 31)
 				out = legacyFonts.preetiFamilyToUnicode(raw, f.legacy, tab).strip(_PUNCT)
 				if out and isWord(out):
 					n += 1
@@ -2575,7 +2647,8 @@ def _detectLegacyFonts(fonts, allWords, detector):
 		except Exception:
 			continue
 	texts = {}
-	for w in allWords:
+	for n, w in enumerate(allWords):
+		_tick(n, 63)
 		parts = {}
 		for g in w.glyphs:
 			f = g[0]

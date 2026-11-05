@@ -1045,6 +1045,169 @@ def repair(text, broken=None):
 	return text
 
 
+
+# ---------------------------------------------------------------------------------------------
+# Typed Unicode: web pages, Word, e-mail. The text is what people wrote, very often through an old
+# Preeti-to-Unicode converter, and its faults are of a few kinds (counted on 72,000 news articles
+# from five Nepali news sites):
+#   ि before a half letter          केन्दि्रत, लोकपि्रय, टि्वटर      केन्द्रित, लोकप्रिय, ट्विटर
+#   two vowel signs                  अर्काे, भएकोे, काठमाडाैं        अर्को, भएको, काठमाडौं
+#   a sign typed twice               गर्दैै, सुुरु, नंं               गर्दै, सुरु, नं
+#   ँ / ं typed before the sign      हँुदै, बंैक, सधँै                हुँदै, बैंक, सधैँ
+#   Preeti's ँ read as ा             नयाा, पााच, बााकी               नयाँ, पाँच, बाँकी
+#   Preeti keys left in the text     पु¥याउने, २०७३÷७४               पुर्‍याउने, २०७३/७४
+#   अ + sign                         अाफ्नो, सीइअो                    आफ्नो, सीइओ
+#   a virama typed twice             विद्युत््, खुट््टा                विद्युत्, खुट्टा
+#   half letter + ा (Preeti f)        जिल्ल्ाा, स्व्ाास्थ्य             जिल्ला, स्वास्थ्य
+#   a sign typed after a half letter  प्रस्ुतत                         प्रस्तुत
+#   reph after its letter            निणर्ायक, वषर्ीय                 निर्णायक, वर्षीय
+#   ्र typed after the vowel sign     दु्रत, गु्रप, थुपै्र              द्रुत, ग्रुप, थुप्रै
+#   ि typed after another sign       लािग                             लागि
+#   a visarga standing for a colon   समय ः ५ बजे                       समय : ५ बजे
+# Only sequences that cannot occur in correct Unicode are changed. A word is never exchanged for
+# another word, and words are never joined or split: that is for PDF text layers, whose faults
+# come from glyphs, not from typing (on web pages it turned गरेपछि into गतेपछि).
+# ---------------------------------------------------------------------------------------------
+_EYELASH_KEY = re.compile("(?<=[\u0900-\u097f])\u00a5(?=[\u0900-\u097f])")
+_SLASH_KEY = re.compile("(?<=[\u0900-\u097f])\u00f7(?=[\u0900-\u097f])")
+_I_BEFORE_HALF = re.compile("([" + _CONS + "]\u093c?)\u093f\u094d((?:[" + _CONS + "]\u093c?\u094d)*[" + _CONS + "]\u093c?)")
+_NASAL_BEFORE_SIGN = re.compile("([\u0901\u0902])([" + _SIGNS + "]+)")
+_AA_TWICE = re.compile("\u093e\u093e+")
+_HALF_AA = re.compile("\u094d\u093e")
+_REPH_BEFORE_SIGN = re.compile("([" + _CONS + "]\u093c?)\u0930\u094d([" + _SIGNS + "])")
+_RAKAR_AFTER_SIGN = re.compile("([\u093e\u0940-\u094c]+)\u094d\u0930")
+_SIGN_AFTER_VIRAMA = re.compile("\u094d([" + _SIGNS + "]+)((?:[" + _CONS + "]\u093c?\u094d)*[" + _CONS + "]\u093c?)?")
+_LONE_VISARGA = re.compile("(?<!\\S)\u0903(?=\\s|$)")
+_FULL_VOWEL_SIGN = (("\u0906\u0948", "\u0914"), ("\u0906\u0947", "\u0913"),
+	("\u093e\u094b", "\u094b"), ("\u094b\u093e", "\u094b"), ("\u093e\u094c", "\u094c"), ("\u094c\u093e", "\u094c"))
+# ट or ड with ृ: Preeti's 6[ / 8[ typed for ट्ट / ड्ड (छुटृाछुट्टै); no Nepali word has टृ or डृ
+_DOUBLED_BY_RI = re.compile("([\u091f\u0921])\u0943")
+_TYPED_FAULT = re.compile(
+	"\u093f\u094d|\u094d[" + _SIGNS + "]|[" + _SIGNS + _MODS + "]\u094d|[" + _SIGNS + "][" + _SIGNS + "]|[\u0901\u0902][" + _SIGNS + "]|"
+	"([\u0900-\u0903])\\1|\u094d\u094d|[\u0900-\u097f][\u00a5\u00f7][\u0900-\u097f]|[\u0905\u0906\u090f][" + _SIGNS + "]|"
+	"(?<!\\S)\u0903(?=\\s|$)|[\u091f\u0921]\u0943"
+)
+
+
+def visargaAsColon(text):
+	"""A PDF's visarga standing alone is a colon typed with Preeti's M key (संविधान मूल कानून ः, or ः
+	alone where the viewer gives it as a piece of its own): read as a colon."""
+	if "\u0903" not in text:
+		return text
+	if text.strip() == "\u0903":
+		return text.replace("\u0903", ":")
+	return _LONE_VISARGA_PDF.sub(_colon, text)
+
+
+# in a PDF also before a dash or bracket (नलागेमा यस ऐनमा ः–(क))
+_LONE_VISARGA_PDF = re.compile("(?<!\\S)\u0903(?=[\\s\u2013\u2014\\-(),;]|$)")
+
+# Fake bold: some PDFs draw a heading three or four times over itself, and some viewers (older
+# PDF.js in Chrome's "PDF Viewer" extension) give the text that many times in a row:
+# k|:tfjgk|:tfjgk|:tfjgk|:tfjgffff, a whole title four times. A piece of three or more characters,
+# with letters in it, repeated at least three times in a row is kept once (two copies can be real
+# Nepali: ठाउँठाउँ, बेला बेला).
+_OVERPRINT = re.compile("(.{3,}?)\\1{2,}", re.S)
+_OVERPRINT_SIGN = re.compile("([A-Za-z\\]\\}\\[\"'+\u093e-\u094c\u0901-\u0903])\\1{2,}")
+
+
+def collapseOverprint(text):
+	"""The text of a heading drawn three or four times over itself, once."""
+	if len(text) < 9 or len(text) > 2000:
+		return text
+
+	def one(m):
+		c = m.group(1)
+		if sum(1 for ch in c if ch.isalpha() or "\u0900" <= ch <= "\u097f" and not "\u0966" <= ch <= "\u096f") < 2:
+			return m.group(0)
+		return c
+
+	out = _OVERPRINT.sub(one, text)
+	if out != text:
+		# the sign drawn after the repeated piece is repeated as often (…jgffff: ा four times)
+		out = _OVERPRINT_SIGN.sub(r"\1", out)
+	return out
+
+
+def _colon(m):
+	"""A visarga standing alone after a word is a colon typed with Preeti's M key (समय ः ५ बजे);
+	in a list of the signs themselves (ँ ं ः) it stays."""
+	s = m.string
+	i = m.start()
+	while i > 0 and s[i - 1].isspace():
+		i -= 1
+	j = i
+	while j > 0 and not s[j - 1].isspace():
+		j -= 1
+	return ":" if any(c in _DEVA_BASE or "\u0966" <= c <= "\u096f" or c.isalnum() for c in s[j:i]) else m.group(0)
+
+
+def hasTypedFault(text):
+	"""A sequence that never occurs in correct Unicode Devanagari (see repairTyped)."""
+	return bool(_TYPED_FAULT.search(text))
+
+
+def _aaTwice(m):
+	"""ाा: Preeti's ँ key read as ा by a converter (नयाा, पााच); ा when ाँ makes no word."""
+	s = m.string
+	i, j = m.start(), m.end()
+	a = i
+	while a > 0 and not s[a - 1].isspace():
+		a -= 1
+	b = j
+	while b < len(s) and not s[b].isspace():
+		b += 1
+	word = s[a:i] + "\u093e\u0901" + s[j:b]
+	return "\u093e\u0901" if neLexicon.isWord(_core(word)) else "\u093e"
+
+
+def repairTyped(text):
+	"""Fix typed Unicode (web pages, documents) where it cannot be correct; correct text is unchanged."""
+	if not _DEVANAGARI.search(text):
+		return text
+	if isExact(text):
+		return text
+	mixed = _aroundExact(text, repairTyped)
+	if mixed is not None:
+		return mixed
+	text = unicodedata.normalize("NFC", text)
+	if not _TYPED_FAULT.search(text):
+		return text
+	text = _EYELASH_KEY.sub("\u0930\u094d\u200d", text)
+	text = _DOUBLED_BY_RI.sub("\\1\u094d\\1", text)
+	text = _SLASH_KEY.sub("/", text)
+	text = _I_BEFORE_HALF.sub("\\1\u094d\\2\u093f", text)
+	text = _NASAL_BEFORE_SIGN.sub(lambda m: m.group(2) + m.group(1), text)
+	# a reph typed after its letter (निणर्ायक): र् is never followed by a vowel sign
+	text = _REPH_BEFORE_SIGN.sub("\u0930\u094d\\1\\2", text)
+	# ्र typed after the vowel sign (दु्रत) belongs to the letter: द्रुत
+	text = _RAKAR_AFTER_SIGN.sub("\u094d\u0930\\1", text)
+	# Preeti's half letter + ा is the full letter (जिल्ल्ाा: the stroke completes ल)
+	text = _HALF_AA.sub("", text)
+	# a sign after a half letter belongs to the letter that completes the conjunct
+	text = _SIGN_AFTER_VIRAMA.sub(lambda m: "\u094d" + m.group(2) + m.group(1) if m.group(2) else m.group(1), text)
+	text = _AA_TWICE.sub(_aaTwice, text)
+	text = composeMatras(text)
+	for a, b in _FULL_VOWEL_SIGN:
+		text = text.replace(a, b)
+	text = _SAME_SIGN.sub(r"\1", text)
+	# ि typed after another sign, before its letter (लािग): after the letter
+	text = _placeI(text)
+	text = _SIGN_RUN_AFTER.sub(r"\1", text)
+	text = _MOD_RUN.sub(r"\1", text)
+	text = _SIGN_HALANT.sub(r"\1", text)
+	text = _HALANT_RUN.sub("\u094d", text)
+	text = _LONE_VISARGA.sub(_colon, text)
+	return unicodedata.normalize("NFC", text)
+
+
+def repairIn(text, pdf=False, brokenDoc=False):
+	"""The repair for where the text comes from: a PDF's text layer (or a document already shown
+	to be damaged) gets the full repair; typed Unicode only loses what cannot be correct."""
+	if pdf or brokenDoc:
+		return repair(text, broken=True)
+	return repairTyped(text)
+
 _DEVA_BASE = frozenset(chr(c) for c in list(range(0x0904, 0x093A)) + list(range(0x0958, 0x0962)) + list(range(0x0972, 0x0980)))
 
 
@@ -1270,6 +1433,12 @@ def _bestForm(pieces):
 		return (-1.0, pieces[0])  # a vowel sign on its own: belongs to a neighbour
 	penalty = JOIN_COST * (len(pieces) - 1)
 	forced = len(pieces) > 1 and _CANNOT_START.match(_edges(pieces[1])[1] or " ")
+	if len(pieces) > 1 and not forced and (all(_edges(p)[1].endswith("\u094d") for p in pieces[:-1]) or (len(pieces) == 2 and _edges(pieces[0])[1] in ("प्र", "वि", "उप", "अनु", "प्रति", "सं", "सम्", "सु", "कु", "गैर"))):
+		# a space after a halant or common prefix, inside a word the PDF viewer cut (सम् बन् धी,
+		# पररच् छेद, प्र चलित): joined when the whole is a word, even if each piece is one by itself
+		r = _readings(core, allowSwaps=True)
+		if r and _known(r):
+			forced = True
 	if len(pieces) > 1 and not forced and all(_isRealPiece(p) for p in pieces):
 		return None  # every piece is already a word (or a spelling of one): the space is real
 	if forced:
@@ -1580,14 +1749,16 @@ def _decodeWord(w):
 	return next(iter(readings)) if readings else None
 
 
-def learnDocumentSwaps(text, maxWords=300, minWords=5, rounds=12, timeLimit=60.0):
+def learnDocumentSwaps(text, maxWords=300, minWords=5, rounds=12, timeLimit=20.0, pause=None):
 	"""Learn this document's letter swaps from its own text, in rounds: each round finds the
 	swap (a stored piece of 1-3 characters -> a letter or sign) that turns the most DIFFERENT
-	unknown words into dictionary words, given the swaps already learned."""
+	unknown words into dictionary words, given the swaps already learned. timeLimit is processor
+	time of this thread; pause() is called often (background work that gives way to NVDA)."""
 	import time
 	if not neLexicon.isLoaded():
 		return []
-	start = time.monotonic()
+	clock = getattr(time, "thread_time", time.process_time)
+	start = clock()
 	text = _basicClean(text)
 	unknown = []
 	seen = set()
@@ -1611,14 +1782,18 @@ def learnDocumentSwaps(text, maxWords=300, minWords=5, rounds=12, timeLimit=60.0
 		return any(fixed(c) for c in _decodings(w, learned, limit=24))
 
 	for _round in range(rounds):
-		if time.monotonic() - start > timeLimit:
+		if clock() - start > timeLimit:
 			break
 		pending = []
 		for w in unknown:
+			if pause is not None:
+				pause()
 			if not explained(w):
 				pending.append(_applyAll(w, learned))
 		counts = {}
 		for v in pending:
+			if pause is not None:
+				pause()
 			done = set()
 			n = len(v)
 			for i in range(n):
@@ -1637,7 +1812,7 @@ def learnDocumentSwaps(text, maxWords=300, minWords=5, rounds=12, timeLimit=60.0
 							if key not in done:
 								done.add(key)
 								counts[key] = counts.get(key, 0) + 1
-			if time.monotonic() - start > timeLimit:
+			if clock() - start > timeLimit:
 				break
 		have = {(x[0], x[1]) for x in learned}
 		meanings = {}
