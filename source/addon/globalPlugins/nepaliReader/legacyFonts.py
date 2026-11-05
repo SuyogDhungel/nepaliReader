@@ -241,6 +241,7 @@ _COMPOSE = [
 ]
 
 _DEDUP = re.compile("([ँंेैुूाी])\\1+")
+_DOUBLED_BY_RI = re.compile("([टड])ृ")
 
 
 def _applyModifier(s):
@@ -311,6 +312,23 @@ def _placeReph(s):
 	return s
 
 
+_SIGN_AFTER_HALF = re.compile("\u094d([\u093e-\u094c\u0901-\u0903]+)((?:[\u0915-\u0939\u0958-\u095f]\u093c?\u094d)*[\u0915-\u0939\u0958-\u095f]\u093c?)")
+
+
+def _signAfterHalf(s):
+	"""A vowel sign typed after a half letter: it either sits under the whole conjunct (k|:'tt
+	draws प्रस्तुत, the u-sign under स्त) or belongs to that letter itself (K'hf/L draws पुजारी).
+	The reading that makes a dictionary word is taken; otherwise the word stays as typed."""
+	moved = _SIGN_AFTER_HALF.sub("्\\2\\1", s)
+	own = re.sub("्(?=[\u093e-\u094c\u0901-\u0903])", "", s)
+	for cand in (moved, own):
+		for a, b in _COMPOSE:
+			cand = cand.replace(a, b)
+		if _isWord(cand.strip(".,;:!?()[]{}\"'“”‘’।–—-")):
+			return cand
+	return s
+
+
 def _fixSignOrder(s):
 	# matra typed before a following half-letter: move it after the cluster
 	s = re.sub("([ाी-ौँ-ः]+)(्(?:.्)*[^्])", r"\2\1", s)
@@ -332,8 +350,11 @@ for _c in range(0x80, 0xA0):
 
 
 # "¿" is रू in Preeti (x¿ हरू, b'¿kof]u दुरूपयोग) but some fonts of the family draw the
-# u-sign there (lgs¿~h निकुञ्ज): the reading that gives a dictionary word wins.
-_BF_CHOICES = ("रू", "ु", "रु")
+# u-sign there (lgs¿~h निकुञ्ज): the reading that gives a dictionary word wins. Preeti's own
+# glyph (रू) comes first and stays when neither makes a word; रु differs from it only in the
+# vowel's length, so it is used only when the document's other words show it (bf), never because
+# the word list lacks one spelling (¿kfGt/0f is रूपान्तरण, as the page shows it).
+_BF_CHOICES = ("रू", "ु")
 _bfTables = {}
 
 
@@ -418,7 +439,7 @@ def preetiFamilyToUnicode(text, font="preeti", _table=None, bf=None, trusted=Fal
 			result.append(_LONE_DIGIT_KEYS[word])
 			continue
 		# Standalone bullet / symbol / emoji: preserve without conversion
-		if word in BULLETS or (len(word) == 1 and word in "•●○■▪◦✓★→←–—…*+-#~※♦►") or any(ord(c) > 255 and not (0x0900 <= ord(c) <= 0x097F) and c not in table for c in word):
+		if word in BULLETS or (len(word) == 1 and word in "•●○■▪◦✓★→←–—…*+-#~※♦►") or any(ord(c) > 255 and not (0x0900 <= ord(c) <= 0x097F) and c not in table and c not in _JOINERS for c in word):
 			result.append(word)
 			continue
 		if font in _PREETI_TYPED:
@@ -519,6 +540,14 @@ def _preetiWord(word, table, font, exact=False):
 		s = s.replace(a, b)
 	s = re.sub(r'(\u094d\u0930)+', r'\1', s)
 	s = _DEDUP.sub(r"\1", s)
+	if _SIGN_AFTER_HALF.search(s):
+		s = _signAfterHalf(s)
+	if "ृ" in s and _DOUBLED_BY_RI.search(s):
+		# ट or ड typed with the ृ key draws a doubled letter (6[ looks like ट्ट): no Nepali word
+		# has टृ or डृ, so the doubled letter is read when it makes a dictionary word
+		doubled = _DOUBLED_BY_RI.sub(lambda m: m.group(1) + HALANT + m.group(1), s)
+		if _isWord(doubled.strip(".,;:!?()[]{}\"'“”‘’।–—-")):
+			s = doubled
 	if exact:
 		return s
 	if s.startswith("ः"):
@@ -631,7 +660,12 @@ def krutiDevToUnicode(text):
 		text = text[:start] + "र्" + text[start:r] + text[r + 1:]
 	for m in _KRUTI_UNATTACHED:
 		text = text.replace(" " + m, m).replace("," + m, m + ",")
-	text = text.replace("््र", "्र").replace("्र्", "र्").replace("््", "्")
+	# a half letter + ा is the full letter («k is त्र, as in ltrc's kru2uni)
+	text = text.replace(HALANT + "ा", "")
+	# (त्र् is Kruti's « key itself, a half tra: it stays)
+	text = text.replace("््र", "्र")
+	text = re.sub("(?<!त)्र्", "र्", text)
+	text = text.replace("््", "्")
 	return unicodedata.normalize("NFC", text)
 
 

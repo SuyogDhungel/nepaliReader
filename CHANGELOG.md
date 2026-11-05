@@ -2,6 +2,32 @@
 
 All notable changes to the **Nepali Reader** NVDA add-on are documented here.
 
+## [2.0.4] - 2026-11-05
+
+- Nepali on web pages is no longer changed into other words. When a page had a single typing fault anywhere (a doubled vowel sign, for example), every word on that line went through the repair meant for damaged PDFs, which exchanged correct words for other dictionary words: on news sites गरेपछि was read गतेपछि, निक्कै सिक्के, नहुने नहाने, and केन्दि्रत became केन्दिरत. Text people typed (web pages, Word, e-mail) now only loses what can never be correct Unicode; a word is never exchanged, joined or split. PDFs keep their full repair.
+- The typing faults that old Preeti-to-Unicode converters left on Nepali websites are read correctly. They were counted on 72,000 articles from onlinekhabar.com, ratopati.com, ujyaaloonline.com, imagekhabar.com and dcnepal.com:
+  - ि before a half letter: केन्दि्रत, लोकपि्रय, टि्वटर, मडि्रड read केन्द्रित, लोकप्रिय, ट्विटर, मड्रिड;
+  - two vowel signs: अर्काे, भएकोे, काठमाडाैं, स्मार्टफोनकेा read अर्को, भएको, काठमाडौं, स्मार्टफोनको;
+  - a sign typed twice: गर्दैै, सुुरु, नंं, विद्युत्् read गर्दै, सुरु, नं, विद्युत्;
+  - ँ or ं typed before the sign: हँुदै, बंैक, सधँै read हुँदै, बैंक, सधैँ;
+  - Preeti's ँ read as ा: नयाा, पााच, बााकी read नयाँ, पाँच, बाँकी (where the word list knows the word with ँ);
+  - Preeti keys left in the text: पु¥याउने, ग¥यो, २०७३÷७४ read पुर्‍याउने, गर्‍यो, २०७३/७४;
+  - अ with a sign, half letter with ा, reph after its letter, ्र after the sign, ि after another sign: अाफ्नो, जिल्ल्ाा, निणर्ायक, वषर्ीय, दु्रत, गु्रप, थुपै्र, लािग read आफ्नो, जिल्ला, निर्णायक, वर्षीय, द्रुत, ग्रुप, थुप्रै, लागि;
+  - a visarga standing for a colon (समय ः ५ बजे) reads as a colon.
+- Preeti conversion checked against four other open-source converters (npttf2utf, nepali-bhasa ttf-to-unicode, nep-fontconv and the preeti npm package, about 7,700 test words) and, where they disagreed, against the glyphs of Preeti.TTF itself:
+  - a vowel sign typed after a half letter is read the way that makes a word: k|:'tt प्रस्तुत (the sign under the conjunct), and in PDFs प्ुजारी and स्ांस्कृतिक now read पुजारी and सांस्कृतिक;
+  - ट or ड typed with the ृ key reads ट्ट / ड्ड where that makes a word (k6[L पट्टी, c8[f अड्डा; छुटृै in a PDF now reads छुट्टै);
+  - ¿ keeps the Preeti font's own रू unless the document shows it is ु (¿kfGt/0f रूपान्तरण, not रुपान्तरण because the word list lacks one spelling);
+  - a zero-width joiner inside a Preeti word no longer stops the word from being converted.
+- Kruti Dev: a half letter followed by ा is the full letter, and Kruti's « key (half tra) is no longer read as तर्.
+- Unchanged: Preeti detection (measured again: 99.5% or more of short Nepali phrases typed in Preeti are found, against 0 to 1% of English words), the complete off switch of 2.0.3, settings and modes. The text of nine real PDFs is the same as in 2.0.3 except the three words named above, and prepares at the same speed.
+
+## [2.0.3] - 2026-11-05
+
+- NVDA+Ctrl+Shift+Space now switches Nepali Reader completely off. Before, the add-on stayed attached to NVDA while off and only passed text through. Now every hook is removed (document speech, say all, the speech filter, copying, selection, word and table navigation), MultiLang is put back as it was, and a PDF that is still being prepared stops at once and saves nothing. NVDA then works exactly as without the add-on. Switching on attaches everything again. The same happens from the Tools menu and from the settings check box.
+- When NVDA starts with Nepali mode off, the add-on does no work at all, and the word lists are loaded only when it is switched on (or when you ask it to convert a selection).
+- Settings, modes and how they are saved are unchanged from 2.0.2. Reading is unchanged.
+
 ## [2.0.2] - 2026-10-15
 
 - Reading issues fixed, and table and formatting is now preserved while reading and copying.
