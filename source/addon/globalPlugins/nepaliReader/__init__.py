@@ -237,6 +237,19 @@ class _DocState:
 		elif self.words >= 300:
 			self.decided = True
 
+	def observeTyped(self, text):
+		"""Typed text (outside a PDF): a fault mark is a typing or converter slip, not a damaged text
+		layer. Only a document whose words are mostly not words at all counts as damaged."""
+		if self.decided:
+			return
+		k, w = devanagariRepair.wordStats(text)
+		self.known += k
+		self.seenWords += w
+		if self.seenWords >= 60 and self.known < 0.5 * self.seenWords:
+			self.broken = self.decided = True
+		elif self.seenWords >= 300:
+			self.decided = True
+
 	def afterRepair(self, fixed):
 		"""Tracks repair statistics for the document."""
 		k, n = devanagariRepair.wordStats(fixed)
@@ -1355,8 +1368,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 							self._setContext(defaultEnc)
 			if devanagariRepair.hasDevanagari(text) or any(ch in "%M" for ch in text):
 				text = devanagariRepair.cleanShuffled(text)
-				if repair and (isPdf or self._isBrokenDoc() or devanagariRepair.isBroken(text)):
-					text = devanagariRepair.repair(text, broken=True)
+				if repair:
+					text = devanagariRepair.repairIn(text, pdf=isPdf, brokenDoc=self._isBrokenDoc())
 
 			if switchLang and LangChangeCommand and devanagariRepair.hasDevanagari(text):
 				if any(type(x).__name__ == "CharacterModeCommand" for x in speechSequence):
@@ -1398,8 +1411,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 						return origCopy(_unwrap(info), notify)
 					if devanagariRepair.hasDevanagari(target):
 						cleaned = devanagariRepair.cleanShuffled(target)
-						if plugin._isPdfWindow(info.obj) or devanagariRepair.isBroken(target) or plugin._isBrokenDoc():
-							cleaned = devanagariRepair.repair(cleaned, broken=True)
+						cleaned = devanagariRepair.repairIn(cleaned, pdf=plugin._isPdfWindow(info.obj), brokenDoc=plugin._isBrokenDoc())
 						if cleaned and cleaned != raw:
 							return _ownCopy(textInfos.convertToCrlf(cleaned), notify)
 					elif text and text != raw:
@@ -1436,8 +1448,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 								return origCursorCopy(mgr, gesture)
 							if devanagariRepair.hasDevanagari(target):
 								cleaned = devanagariRepair.cleanShuffled(target)
-								if plugin._isPdfWindow(mgr) or devanagariRepair.isBroken(target) or plugin._isBrokenDoc():
-									cleaned = devanagariRepair.repair(cleaned, broken=True)
+								cleaned = devanagariRepair.repairIn(cleaned, pdf=plugin._isPdfWindow(mgr), brokenDoc=plugin._isBrokenDoc())
 								if cleaned and cleaned != raw:
 									_ownCopy(textInfos.convertToCrlf(cleaned), notify=True)
 									return
@@ -1451,7 +1462,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 									if conv and conv != raw:
 										text = conv
 								if c["repairUnicode"] and text and devanagariRepair.hasDevanagari(text):
-									text = devanagariRepair.repair(text, broken=True if (plugin._isPdfWindow(mgr) or plugin._isBrokenDoc()) else None)
+									text = devanagariRepair.repairIn(text, pdf=plugin._isPdfWindow(mgr), brokenDoc=plugin._isBrokenDoc())
 							if text and text != raw:
 								_ownCopy(textInfos.convertToCrlf(text), notify=True)
 								return
@@ -1475,8 +1486,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 							text = viaIndex.replace("\r\n", "\n").replace("\n", "\r\n") if "\n" in viaIndex else viaIndex
 						elif devanagariRepair.hasDevanagari(text):
 							cleaned = devanagariRepair.cleanShuffled(text)
-							if devanagariRepair.isBroken(text) or plugin._isBrokenDoc():
-								cleaned = devanagariRepair.repair(cleaned, broken=True)
+							cleaned = devanagariRepair.repairIn(cleaned, pdf=False, brokenDoc=plugin._isBrokenDoc())
 							if cleaned:
 								text = cleaned
 						elif conf()["mode"] != "off" and plugin._inContext() and detector.looksLegacy(text, plugin._inContext(), context=True):
@@ -3064,9 +3074,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			return central
 		if devanagariRepair.hasDevanagari(raw):
 			conv = devanagariRepair.cleanShuffled(raw)
-			if self._isPdfWindow(info.obj) or devanagariRepair.isBroken(raw):
-				conv = devanagariRepair.repair(conv, broken=True)
-			return conv
+			return devanagariRepair.repairIn(conv, pdf=self._isPdfWindow(info.obj), brokenDoc=self._isBrokenDoc())
 		conv = self._plainText(info)
 		if not conv or conv == raw:
 			c = conf()
@@ -4503,9 +4511,32 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 						out[i] = cl
 						runs[k] = (i, cl, known, enc)
 						changed = True
-		if repair and ((self._isPdfWindow(info.obj) and not self._isWebNonPdf(info.obj)) or any(devanagariRepair.isBroken(t) for _, t, _, _ in runs)):
-			# only PDF text layers are damaged; Unicode Nepali on web pages and in documents is
-			# correct and must never be "repaired" (it turned भनसुन into निसान on news sites)
+		webPage = repair and self._isWebNonPdf(info.obj)
+		pdfLayer = repair and not webPage and self._isPdfWindow(info.obj)
+		if repair and not pdfLayer:
+			# Typed Unicode (web pages, Word, e-mail) is what people wrote: only sequences that cannot
+			# be correct are fixed (केन्दि्रत, अर्काे, ग¥यो from old Preeti converters); a word is never
+			# exchanged for another, joined or split (that turned भनसुन into निसान, गरेपछि into
+			# गतेपछि on news sites). A document outside the browser whose words are mostly not words
+			# at all (text pasted from a damaged PDF) still gets the full repair.
+			st = self._docState()
+			for k, (i, text, known, enc) in enumerate(runs):
+				if not devanagariRepair.hasDevanagari(text):
+					continue
+				if not webPage:
+					st.observeTyped(text)
+				if st.broken and not webPage:
+					fixed = devanagariRepair.repair(text, broken=True)
+				elif devanagariRepair.hasTypedFault(text):
+					fixed = devanagariRepair.repairTyped(text)
+				else:
+					continue
+				if fixed != text:
+					out[i] = fixed
+					runs[k] = (i, fixed, known, None)
+					changed = True
+		elif repair:
+			# a PDF's text layer: its faults come from glyphs, and the full repair applies
 			st = self._docState()
 			devanagariRepair.setDocumentSwaps(st.swaps, (id(st), len(st.swaps)))
 			for k, (i, text, known, enc) in enumerate(runs):
@@ -4842,8 +4873,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			target = new if (new and new != raw) else raw
 			if devanagariRepair.hasDevanagari(target):
 				cleaned = devanagariRepair.cleanShuffled(target)
-				if self._isPdfWindow(src) or devanagariRepair.isBroken(target) or self._isBrokenDoc():
-					cleaned = devanagariRepair.repair(cleaned, broken=True)
+				cleaned = devanagariRepair.repairIn(cleaned, pdf=self._isPdfWindow(src), brokenDoc=self._isBrokenDoc())
 				if cleaned and cleaned != raw:
 					_ownCopy(textInfos.convertToCrlf(cleaned), notify=True)
 					return
@@ -4857,7 +4887,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 					if conv and conv != raw:
 						new = conv
 				if c["repairUnicode"] and new and devanagariRepair.hasDevanagari(new):
-					new = devanagariRepair.repair(new, broken=True if (self._isPdfWindow(src) or self._isBrokenDoc()) else None)
+					new = devanagariRepair.repairIn(new, pdf=self._isPdfWindow(src), brokenDoc=self._isBrokenDoc())
 			if new and new != raw:
 				_ownCopy(textInfos.convertToCrlf(new), notify=True)
 				return
@@ -4882,8 +4912,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				return
 			if devanagariRepair.hasDevanagari(clip):
 				cleaned = devanagariRepair.cleanShuffled(clip)
-				if self._isPdfWindow(src) or devanagariRepair.isBroken(clip) or self._isBrokenDoc():
-					cleaned = devanagariRepair.repair(cleaned, broken=True)
+				cleaned = devanagariRepair.repairIn(cleaned, pdf=self._isPdfWindow(src), brokenDoc=self._isBrokenDoc())
 				if cleaned and cleaned != clip:
 					_ownCopy(textInfos.convertToCrlf(cleaned))
 					return
@@ -4963,7 +4992,11 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		# an explicit request also works while Nepali mode is off; it needs the word lists
 		self._ensureDictionary()
 		encoding = self._inContext() or c["encoding"]
-		result = devanagariRepair.repair(text, broken=True if self._isBrokenDoc() else None)
+		try:
+			fromPdf = self._isPdfWindow(api.getFocusObject())
+		except Exception:
+			fromPdf = False
+		result = devanagariRepair.repairIn(text, pdf=fromPdf, brokenDoc=self._isBrokenDoc())
 		decisions = detector.decide(result, encoding, context=True)
 		if any(f for _, f in decisions):
 			result = detector.convertTokens(decisions, lambda s: legacyFonts.convert(s, encoding) or s)
