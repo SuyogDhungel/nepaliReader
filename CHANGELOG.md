@@ -2,6 +2,12 @@
 
 All notable changes to the **Nepali Reader** NVDA add-on are documented here.
 
+## [2.0.3] - 2026-11-05
+
+- NVDA+Ctrl+Shift+Space now switches Nepali Reader completely off. Before, the add-on stayed attached to NVDA while off and only passed text through. Now every hook is removed (document speech, say all, the speech filter, copying, selection, word and table navigation), MultiLang is put back as it was, and a PDF that is still being prepared stops at once and saves nothing. NVDA then works exactly as without the add-on. Switching on attaches everything again. The same happens from the Tools menu and from the settings check box.
+- When NVDA starts with Nepali mode off, the add-on does no work at all, and the word lists are loaded only when it is switched on (or when you ask it to convert a selection).
+- Settings, modes and how they are saved are unchanged from 2.0.2. Reading is unchanged.
+
 ## [2.0.2] - 2026-10-15
 
 - Reading issues fixed, and table and formatting is now preserved while reading and copying.
