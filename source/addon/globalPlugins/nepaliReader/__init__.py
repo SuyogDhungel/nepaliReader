@@ -61,6 +61,8 @@ CONF_SPEC = {
 	"webFontOnly": "boolean(default=True)",
 	"announceTableHeaders": "boolean(default=True)",
 	"lastOnMode": "option('auto', 'always', default='auto')",
+	"autoCheckUpdate": "boolean(default=True)",
+	"lastUpdateCheck": "float(default=0.0)",
 }
 config.conf.spec[CONF_SECTION] = CONF_SPEC
 
@@ -995,6 +997,12 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			# after every add-on has loaded, give up any key another command already uses
 			wx.CallAfter(self._avoidGestureClashes)
 			wx.CallLater(3500, self._startupReminder)
+			if isOn() and conf().get("autoCheckUpdate", True):
+				try:
+					from . import updater
+					updater.startAutoUpdateCheck(conf())
+				except Exception:
+					pass
 		except Exception:
 			log.debugWarning("Nepali Reader: gesture check failed", exc_info=True)
 
@@ -1193,12 +1201,19 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		# Translators: menu item
 		item = menu.Append(wx.ID_ANY, _("Convert selected text or clipboard"))
 		gui.mainFrame.sysTrayIcon.Bind(wx.EVT_MENU, lambda e: wx.CallLater(300, self.script_convertSelection, None), item)
+		# Translators: menu item to check for updates
+		itemUpdate = menu.Append(wx.ID_ANY, _("&Check for updates..."))
+		gui.mainFrame.sysTrayIcon.Bind(wx.EVT_MENU, lambda e: self._onCheckUpdates(), itemUpdate)
 		# Translators: menu item
 		item = menu.Append(wx.ID_ANY, _("&Settings... (NVDA+Ctrl+L)"))
 		gui.mainFrame.sysTrayIcon.Bind(wx.EVT_MENU, self._onMenuSettings, item)
 		# Translators: name of the add-on's submenu in NVDA's Tools menu
 		self._menu = toolsMenu.AppendSubMenu(menu, _("&Nepali Reader"))
 		_menuSync[0] = self._syncMenu
+
+	def _onCheckUpdates(self):
+		from . import updater
+		updater.checkUpdate(manual=True, configRef=conf())
 
 	def _removeMenu(self):
 		try:
@@ -5201,6 +5216,9 @@ class NepaliReaderSettingsPanel(SettingsPanel):
 		# Translators: settings label
 		self.announceHeadersCheck = helper.addItem(wx.CheckBox(self, label=_("Announce table column and row headers when navigating PDF tables")))
 		self.announceHeadersCheck.SetValue(c.get("announceTableHeaders", True))
+		# Translators: settings label
+		self.updateCheck = helper.addItem(wx.CheckBox(self, label=_("Automatically check for updates from GitHub")))
+		self.updateCheck.SetValue(c.get("autoCheckUpdate", True))
 
 	def onSave(self):
 		c = conf()
@@ -5217,4 +5235,5 @@ class NepaliReaderSettingsPanel(SettingsPanel):
 		c["visualCheck"] = self.visualCheck.GetValue()
 		c["webFontOnly"] = self.webCheck.GetValue()
 		c["announceTableHeaders"] = self.announceHeadersCheck.GetValue()
+		c["autoCheckUpdate"] = self.updateCheck.GetValue()
 		_menuSync[0]()
