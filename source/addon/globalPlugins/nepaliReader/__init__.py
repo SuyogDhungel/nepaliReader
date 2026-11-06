@@ -4595,28 +4595,29 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		out = list(fields)
 		changed = False
 		rebuilt = {}  # index -> True when the text came from the PDF file itself
+		# text pieces that belong together: a line cut by format changes is joined, but
+		# never across headings, links, list items or other controls (joining those put
+		# one heading's text into another and left the other empty)
+		groups = []
+		cur = []
+		runAt = {r[0]: r for r in runs}
+		for i, item in enumerate(fields):
+			if i in runAt:
+				cur.append(runAt[i])
+			elif isinstance(item, textInfos.FieldCommand) and item.command == "formatChange":
+				continue
+			elif isinstance(item, str):
+				continue
+			else:
+				if cur:
+					groups.append(cur)
+				cur = []
+		if cur:
+			groups.append(cur)
+
 		if self._isPdfWindow(info.obj):
 			idx = self._pdfIndex(info.obj)
 			if idx is not None:
-				# text pieces that belong together: a line cut by format changes is joined, but
-				# never across headings, links, list items or other controls (joining those put
-				# one heading's text into another and left the other empty)
-				groups = []
-				cur = []
-				runAt = {r[0]: r for r in runs}
-				for i, item in enumerate(fields):
-					if i in runAt:
-						cur.append(runAt[i])
-					elif isinstance(item, textInfos.FieldCommand) and item.command == "formatChange":
-						continue
-					elif isinstance(item, str):
-						continue
-					else:
-						if cur:
-							groups.append(cur)
-						cur = []
-				if cur:
-					groups.append(cur)
 				for grp in groups:
 					whole = "".join(t for _i, t, _k, _e in grp)
 					try:
@@ -4646,62 +4647,70 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 							out[i] = ""
 						changed = True
 					for i, _t, _k, _e in grp[1:]:
-						rebuilt[i] = False
+							rebuilt[i] = False
 				runs = [r for r in runs if r[0] not in rebuilt]
 				if rebuilt and not runs:
 					return self._withLanguage(out, rebuilt, c, unit=unit)
-		if repair:
-			for k, (i, text, known, enc) in enumerate(runs):
-				if devanagariRepair.hasDevanagari(text):
-					cl = devanagariRepair.cleanShuffled(text)
-					if cl != text:
-						out[i] = cl
-						runs[k] = (i, cl, known, enc)
-						changed = True
+
 		webPage = repair and self._isWebNonPdf(info.obj)
 		pdfLayer = repair and not webPage and self._isPdfWindow(info.obj)
-		if repair and not pdfLayer:
-			# Typed Unicode (web pages, Word, e-mail) is what people wrote: only sequences that cannot
-			# be correct are fixed (केन्दि्रत, अर्काे, ग¥यो from old Preeti converters); a word is never
-			# exchanged for another, joined or split (that turned भनसुन into निसान, गरेपछि into
-			# गतेपछि on news sites). A document outside the browser whose words are mostly not words
-			# at all (text pasted from a damaged PDF) still gets the full repair.
+		if repair:
 			st = self._docState()
-			for k, (i, text, known, enc) in enumerate(runs):
-				if not devanagariRepair.hasDevanagari(text):
+			if pdfLayer:
+				devanagariRepair.setDocumentSwaps(st.swaps, (id(st), len(st.swaps)))
+			for grp in groups:
+				active = [r for r in grp if r[0] not in rebuilt]
+				if not active:
 					continue
-				if not webPage:
-					st.observeTyped(text)
-				if st.broken and not webPage:
-					fixed = devanagariRepair.repair(text, broken=True)
-				elif devanagariRepair.hasTypedFault(text):
-					fixed = devanagariRepair.repairTyped(text)
-				else:
+				whole = "".join(t for _i, t, _k, _e in grp)
+				if not devanagariRepair.hasDevanagari(whole):
 					continue
-				if fixed != text:
-					out[i] = fixed
-					runs[k] = (i, fixed, known, None)
-					changed = True
-		elif repair:
-			# a PDF's text layer: its faults come from glyphs, and the full repair applies
-			st = self._docState()
-			devanagariRepair.setDocumentSwaps(st.swaps, (id(st), len(st.swaps)))
-			for k, (i, text, known, enc) in enumerate(runs):
-				if devanagariRepair.hasDevanagari(text):
-					st.unicodeWords += sum(1 for w in text.split() if devanagariRepair.hasDevanagari(w))
-					st.observe(text)
-					fixed = devanagariRepair.repair(text, broken=True if st.broken else None)
-					if st.broken:
-						st.afterRepair(fixed)
-						pst = self._pdfs.get_(self._foregroundKey())
-						if not st.learning and (pst is None or pst.status == "none"):
-							st.learning = True
-							wx.CallAfter(self._learnDocument, info.obj, st)
-					if fixed != text:
-						out[i] = fixed
-						runs[k] = (i, fixed, known, None)
+				hasPureAsciiLetters = any(not devanagariRepair.hasDevanagari(t) and any(ch.isascii() and ch.isalpha() for ch in t) for _i, t, _k, _e in grp)
+				if len(grp) > 1 and not hasPureAsciiLetters:
+					conv = devanagariRepair.cleanShuffled(whole)
+					fixed = devanagariRepair.repairIn(conv, pdf=pdfLayer, brokenDoc=self._isBrokenDoc())
+					if pdfLayer:
+						st.unicodeWords += sum(1 for w in whole.split() if devanagariRepair.hasDevanagari(w))
+						st.observe(whole)
+						if st.broken:
+							st.afterRepair(fixed)
+							pst = self._pdfs.get_(self._foregroundKey())
+							if not st.learning and (pst is None or pst.status == "none"):
+								st.learning = True
+								wx.CallAfter(self._learnDocument, info.obj, st)
+					elif not webPage:
+						st.observeTyped(whole)
+					if fixed != whole:
+						first = grp[0][0]
+						out[first] = fixed
+						for i, _t, _k, _e in grp[1:]:
+							out[i] = ""
 						changed = True
-
+						rebuilt[first] = True
+						for i, _t, _k, _e in grp[1:]:
+							rebuilt[i] = False
+				else:
+					for i, text, known, enc in active:
+						if not devanagariRepair.hasDevanagari(text):
+							continue
+						conv = devanagariRepair.cleanShuffled(text)
+						fixed = devanagariRepair.repairIn(conv, pdf=pdfLayer, brokenDoc=self._isBrokenDoc())
+						if pdfLayer:
+							st.unicodeWords += sum(1 for w in text.split() if devanagariRepair.hasDevanagari(w))
+							st.observe(text)
+							if st.broken:
+								st.afterRepair(fixed)
+								pst = self._pdfs.get_(self._foregroundKey())
+								if not st.learning and (pst is None or pst.status == "none"):
+									st.learning = True
+									wx.CallAfter(self._learnDocument, info.obj, st)
+						elif not webPage:
+							st.observeTyped(text)
+						if fixed != text:
+							out[i] = fixed
+							changed = True
+							rebuilt[i] = True
+			runs = [r for r in runs if r[0] not in rebuilt]
 		if mode == "off":
 			if rebuilt or (c["switchLanguage"] and any(devanagariRepair.hasDevanagari(x) for x in out if isinstance(x, str))):
 				return self._withLanguage(out, rebuilt, c, unit=unit)
