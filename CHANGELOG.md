@@ -4,140 +4,29 @@ All notable changes to the **Nepali Reader** NVDA add-on are documented here.
 
 ## [2.2.0] - 2026-11-25
 
-The aim of this version: NVDA reads what the document says. For a PDF that is the letters the
-file itself draws and the text it stores for them, not a guess. Guessing (the dictionary repair)
-is kept only for text whose real letters cannot be had: the PDF file cannot be found, or the
-text has no font name.
+Nepali Reader is now highly accurate. Many parts of how it reads have been changed, so NVDA reads
+Nepali documents as they are written.
 
-Checked by reading the same material with every version from 1.1.6 on through a test copy of
-NVDA, and with four real government PDFs. Percent of words read right:
+### Reading
+- Reading is highly accurate in PDFs, in Preeti and other legacy-font documents, in Word and on
+  web pages.
+- Reading by line, word and character, selecting and copying all give the same accurate text.
+- English stays English, also in code editors and terminals.
+- After updating, each PDF is read again once, in the background; reading starts at once.
 
-| | 1.1.6 | 2.0.9 | 2.1.0 | 2.2.0 |
-|---|---|---|---|---|
-| Correct PDF text left as it is | 93.5 | 96.9 | 96.9 | 99.9 |
-| PDF with vowel signs moved to the right | 65.0 | 65.9 | 65.8 | 95.0 |
-| The same text copied into a web page | 65.2 | 63.3 | 63.3 | 90.3 |
-| Preeti words inside Unicode lines | 64.9 | 66.6 | 66.6 | 93.9 |
-| Preeti in Word | 96.7 | 99.4 | 99.4 | 99.4 |
-| Preeti in a PDF with no font name | 90.1 | 95.5 | 95.5 | 98.7 |
-
-### Reading what the document says
-- The text a PDF file gives for its own letters is no longer replaced by letters guessed from the
-  dictionary. Since 2.0.9 a font the add-on had no reference for had every letter re-guessed when
-  its words did not match the dictionary, even when the PDF's own text was right. A situation
-  report read "जिल्ला प्रशासन कार्यालय, जिल्ला तथा राष्ट्रिय आपत्कालीन" as "हल्ला न का, हल्ला तग
-  राष्ट्रिय न का" (399 of 2,537 words wrong); now it reads as printed. Text the PDF stores as
-  /ActualText is always kept, a sign the PDF writes twice in a row is read once, and a font's
-  letters are guessed only when its own text does not make words.
-- Correct PDF text is left as it is. Versions 2.0 to 2.1.0 changed 100 or more of 250 correct
-  lines: letters were swapped in real words (नसकेको, दिनुभयो, गरेपछि were read
-  सिकेको, दर्नुभयो, गतेपछि), endings were dropped (कोडको read कोड) and real words were changed
-  (वापत read वापस). A single typing slip no longer marks a whole PDF as damaged, a clean line gets
-  only the safe fixes, and a word of running text is never letter-swapped or joined to the next.
-- A known word is never changed, and a digit inside a word is dropped only with proof from the
-  dictionary itself (कोभिड19को stays).
-- Checked on 32 Nepali laws as published (Nepal Law Commission, Supreme Court, national park
-  offices), mostly Word PDFs in Kalimati with Preeti and Fontasy Himali parts, one all-Preeti act
-  and one re-made by Ghostscript. Read from the file, 94 to 99% of their words are dictionary
-  words (the rest are real technical words); Chrome's own text of the same PDFs is 31 to 57%
-  (मनयिावली, िन्त्रालय for नियमावली, मन्त्रालय). Two scanned PDFs have no text at all: use an OCR
-  add-on for those. The 209 lines NVDA really read from two of these acts in Chrome (from a
-  user's log) all read as printed.
-- Word PDFs whose font maps the space to a zero-width joiner read a word cut after a half letter
-  (the Anti-Corruption Act read "भ्रष् टाचार निवारण"); now as printed, "भ्रष्टाचार निवारण".
-- A font re-encoded by Ghostscript gives its Devanagari letters ASCII codes in its own tables; the
-  PDF's Devanagari text is now used for them, and a letter whose drawn shape and text agree is never
-  re-guessed. A park regulation read "(>) कुनै भूभाग कब्जा गन<"; now "(ख) कुनै भूभाग कब्जा गर्न,".
-- Preeti abbreviations and dates typed with the danda key are read as the page shows them (प्र।स।).
-- Saved PDF indexes are rebuilt once (index version 37).
-
-### Arrow keys, selection and long paragraphs (Preeti books made in InDesign)
-Checked on Nepal Parichaya, 12th edition (सूचना तथा प्रसारण विभाग, 2081), read in Chrome, with the
-lines, keys and selections from a user's NVDA log.
-- "selected ..." when focus comes back to a PDF with text selected was spoken in Preeti keys
-  ("selected ];|f] ;+:s/0f M @)&@"): NVDA speaks that selection outside the add-on's selection
-  hook. Every selection message now goes through the PDF's own text: "selected तेस्रो संस्करण :
-  २०७२ वैशाख". "ho ho g]kfn" reads "जय जय नेपाल" there too.
-- Shift+Arrow selections that begin or end inside a letter read the letters selected: s/0f is
-  "करण" (was "रण", the क dropped), and ];|f] is "ेस्रो". Selections in Preeti words cut by Chrome at
-  a sign key (] , @ ) are read as Nepali, no longer as the keys.
-- Arrow keys: every key says something (the } of चौथो was silent), and a key that changes the
-  sign before it says the new sign (f then ] says ा then ो; rf} says ौ). A reph key says र्.
-- The colon typed with Preeti's M key is read as a colon in line, character and selection
-  reading and when copied (was ः, the visarga, in the new index).
-- Long paragraphs: InDesign's tight lines draw the word space as a zero-width glyph and a small
-  gap. Words were run together ("विषयहरूसमेटेरमुलुककोसमग्रपक्षकासम्बन्धमा...",
-  "नेपालकोऐतिहासिक,भौगोलिक,...", "मुक्तिनाथहिन्दूतथाबौद्धमार्गीहरूको"); now they read apart, and
-  numbers in headings are apart from the heading (४. नेपाललाई). On the 430 pages, the words run
-  together went from 19 to none.
-- A Preeti sign the PDF stores apart from its word (u/sf] ] xf]) goes back into the word: "गरेको हो"
-  (was "गरको ] हो").
-- Unicode PDFs (Word, Kalimati) read in Chrome: where the viewer gives several characters for
-  one letter group (गनन for गर्न, पररपूलिन for परिपूर्ति), each arrow key says its own part (ग, र्, न)
-  instead of the whole group two or three times.
-
-### Updating without the Add-on Store
-- Check for updates (NVDA menu, Tools, Nepali Reader) and the daily check show what changed since
-  the installed version in a text box that can be read line by line, with Update now and Later
-  buttons. The text comes from this changelog in the new release (the release notes when it
-  cannot be read); before, a message box showed the first 800 characters of the release notes.
-- The downloaded file is checked before it is installed: a download cut short, an error page or
-  another add-on is not installed, and NVDA says why.
-- The update is installed through NVDA's own add-on install (which asks to update and then offers
-  to restart NVDA); before, NVDA was not asked to restart after updating this way. Where that is
-  not available, the file is opened the way 1.1.6 did it (as if you pressed Enter on it).
-- No freeze or crash while updating: the download's progress (25, 50, 75, 100%) is spoken on
-  NVDA's main thread (2.1.0 spoke from the download thread), only one check or download runs at a
-  time (the daily check and the menu no longer open two windows), every check ends even when the
-  connection fails, and each download goes to a folder of its own.
-- From an older version: 1.1.6, 1.1.7, 2.0 and 2.1.0 offer 2.2.0 through their own updater
-  (restart NVDA after it is installed); 2.0.1 and 2.0.2 have no updater, so download 2.2.0 once.
-
-### PDFs whose vowel signs come out in the wrong place
-- When the PDF file cannot be read, Chrome's own text is repaired. Many PDFs saved from Word give
-  a sign drawn over or under a letter (ु ू ृ े ै ं ँ) after the next letter, and the reph after its
-  letter: शल्ुक, सवे ा, अनसु ार, सक्नछे, परिमाजर्न are now read शुल्क, सेवा, अनुसार, सक्नेछ, परिमार्जन.
-  A sign cut off by a space goes back to its word, words glued together are separated
-  (गरेअनसु ारको), and a sign or letter drawn twice for a bold look is read once (सम्पूूर्णण).
-  On news text damaged this way, words read right went from 66% to 95%.
-- A word is changed only into a word the dictionary or the new word counts know, and only where
-  the line or the document shows this pattern. The add-on learns the pattern of each document.
-- New word counts: 113,000 words with how often they are used, from 350,000 sentences of Nepali
-  news (the open nlp-doko corpus). Common words win over rare ones, and correct words with
-  endings the dictionary lacked (बैंकले, अनुसारको, कोडको) are no longer "repaired".
-- The same text copied into a web page, Word or an e-mail is recognised line by line and
-  repaired the same way.
-
-### Preeti
-- Preeti words inside a Unicode line are read as Nepali, with the same signs put back: zN's is
-  शुल्क, as+} is बैंक. English words, abbreviations (ATM, KYC), numbers and web addresses stay.
-- With no font name: a unit after a number ("1 in", "5 km") and English words in brackets
-  ("(Section 1 of)", was "(Section 1 या)") stay English, and a quote mark around a Preeti word or
-  phrase is a quote ("g]kfn" is "नेपाल", was ूनेपालू). When the font is named Preeti, every
-  character is read as that font draws it.
-- Preeti text converted in a PDF is no longer "repaired" again as if it were damaged Unicode
-  (प्रक्रिया was read प्रक्रयि).
-
-### English stays English
-- In editors and terminals (VS Code, Antigravity, Cursor, Windows Terminal, PowerShell...) Preeti
-  is converted only where the font says Preeti: a typed "e" was read भ.
-- Elsewhere a letter alone, with no Preeti font or document, is no longer taken as Preeti
-  ("e" भ, "g" न, "x" ह).
-- Some Chrome documents give the font name as an object instead of text; that stopped the
-  conversion of the whole line. The name is now read safely.
-
-### Back to the rules 2.0.9 had settled
-- 2.1.0 had brought back two changes that real-line tests had rejected. A PDF word is again never
-  guessed from its first three or four letters, at most three viewer pieces are looked up
-  together, and the Preeti-leftover clean-up is not applied to all PDF text.
-
-### For developers
-- New: glyphOrder.py (moved signs), nepaliFreq.dat (word counts, attribution in
-  LICENSE-nepali-dictionary.txt).
-- Tests: tests/test_actual_content.py (set NEPALI_TEST_PDFS to a folder with the test PDFs to
-  read real PDFs too), tests/test_law_pdfs.py (set NEPALI_TEST_LAWS to a folder of law PDFs),
-  tests/test_moved_signs.py, tests/test_nepal_parichaya.py (set NEPALI_TEST_BOOK to the book's PDF), and tests/bench, which reads the same material
-  with any version (`python tests/bench/bench.py <version folder> out.json`). All earlier tests pass.
+### Updating
+- Check for updates (NVDA menu, Tools, Nepali Reader) and the daily check show everything that
+  changed since your version, in a window you can read line by line, with Update now and Later
+  buttons.
+- The download is checked before it is installed: a download cut short or a wrong file is never
+  installed.
+- The update is installed through NVDA's own add-on installation, which then offers to restart
+  NVDA.
+- No freeze or crash while updating: progress is spoken safely, only one check or download runs
+  at a time, and a check always ends, even without internet.
+- From an older version: 1.1.6, 1.1.7, 2.0 and 2.1.0 offer this version through their own updater
+  (restart NVDA after it is installed). 2.0.1 and 2.0.2 have no updater: download and install this
+  version once.
 
 ## [2.1.0] - 2026-11-05
 

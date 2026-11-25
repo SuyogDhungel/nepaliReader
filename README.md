@@ -15,7 +15,7 @@
 Blind and visually impaired computer users in Nepal meet three problems in everyday documents:
 
 1. **Old Nepali fonts.** Acts, gazettes, notices, newspapers and school books are often typed in **Preeti**, **Kantipur**, **Sagarmatha**, **Fontasy Himali**, **PCS Nepali** or (for Hindi) **Kruti Dev**. The computer stores these as English letters, so NVDA reads `g]kfn` instead of `नेपाल`.
-2. **Damaged PDF text.** PDFs saved from Microsoft Word, InDesign or web tools store their Nepali text wrongly: vowel signs out of place, letters missing, conjuncts broken (`शल्ुक` for `शुल्क`). On 32 Nepali laws, the text Chrome gives NVDA has only 31 to 57% of words right.
+2. **Damaged PDF text.** PDFs saved from Microsoft Word, InDesign or web tools store their Nepali text wrongly: vowel signs out of place, letters missing, conjuncts broken (`शल्ुक` for `शुल्क`).
 3. **Silent numbers.** Some voices skip Devanagari digits (`०–९`), so dates and section numbers go unheard.
 
 Nepali Reader fixes all three. For a PDF it reads the PDF file itself, the letters the page actually draws, so NVDA says what is printed.
@@ -24,14 +24,12 @@ Nepali Reader fixes all three. For a PDF it reads the PDF file itself, the lette
 
 ## What's new in 2.2.0
 
-* **Reads what the document says.** For a PDF, the add-on reads the letters the file itself draws and the text it stores for them, not dictionary guesses. On the 32 Nepali laws, 94 to 99% of words read right.
-* **Correct text is left alone.** Real words are no longer "repaired" into other words.
-* **Preeti books and PDFs in Chrome:** arrow keys, Shift+Arrow selections, the "selected …" NVDA says when you come back to a PDF, and long paragraphs all read as printed. Checked on *Nepal Parichaya* (12th edition).
-* **Unicode PDFs:** moving by character says each letter once, in order.
-* **English typed in code editors and terminals** is never read as Preeti.
+* **Highly accurate reading.** Many parts of how the add-on reads have been changed, so NVDA reads Nepali documents as they are written: PDFs, Preeti and other legacy fonts, Word and web pages.
+* **Reading by line, word and character, selecting and copying** all give the same accurate text.
+* **English stays English**, also in code editors and terminals.
 * **Updating without the Add-on Store:** *Check for updates* shows everything that changed since your version, then downloads, checks and installs the new version, and offers to restart NVDA.
 
-Full details and measurements: [CHANGELOG.md](CHANGELOG.md).
+Details: [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
