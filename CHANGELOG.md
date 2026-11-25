@@ -84,7 +84,14 @@ lines, keys and selections from a user's NVDA log.
 - The downloaded file is checked before it is installed: a download cut short, an error page or
   another add-on is not installed, and NVDA says why.
 - The update is installed through NVDA's own add-on install (which asks to update and then offers
-  to restart NVDA); before, NVDA was not asked to restart after updating this way.
+  to restart NVDA); before, NVDA was not asked to restart after updating this way. Where that is
+  not available, the file is opened the way 1.1.6 did it (as if you pressed Enter on it).
+- No freeze or crash while updating: the download's progress (25, 50, 75, 100%) is spoken on
+  NVDA's main thread (2.1.0 spoke from the download thread), only one check or download runs at a
+  time (the daily check and the menu no longer open two windows), every check ends even when the
+  connection fails, and each download goes to a folder of its own.
+- From an older version: 1.1.6, 1.1.7, 2.0 and 2.1.0 offer 2.2.0 through their own updater
+  (restart NVDA after it is installed); 2.0.1 and 2.0.2 have no updater, so download 2.2.0 once.
 
 ### PDFs whose vowel signs come out in the wrong place
 - When the PDF file cannot be read, Chrome's own text is repaired. Many PDFs saved from Word give
