@@ -2,6 +2,23 @@
 
 All notable changes to the **Nepali Reader** NVDA add-on are documented here.
 
+## [2.2.1] - 2026-11-25
+
+### Faster
+- Reading PDFs is much faster: arrow keys, selecting and the other reading keys respond quicker,
+  also on long PDFs. The speed-up changes nothing in what is read.
+- Long PDFs no longer make NVDA pause for a few seconds: the add-on now prepares them in the
+  background.
+- Spaces and line breaks are said at once when moving by character.
+- Windows of other programs are no longer mistaken for a PDF.
+
+### Reading
+- PDFs that store their text in an unusual order (a line stored from its end to its beginning)
+  now read as printed, in any font. Vowel signs are no longer heard one letter late, and words no
+  longer run together.
+- Form labels with a fill-in line drawn through them are read whole.
+- Saved PDF readings are made again once, in the background.
+
 ## [2.2.0] - 2026-11-25
 
 Nepali Reader is now highly accurate. Many parts of how it reads have been changed, so NVDA reads

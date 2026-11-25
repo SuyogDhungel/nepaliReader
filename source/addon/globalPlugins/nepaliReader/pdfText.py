@@ -46,7 +46,7 @@ NUKTA = "़"
 REPH = "र्"
 DEP_SIGNS = set("ऺऻािीुूृॄॅॆेैॉॊोौॎॏॕॖॗॢॣऀँंः़")
 INDEPENDENT = set(chr(c) for c in range(0x0904, 0x0915)) | set("ॠॡॲॳॴॵॶॷ")
-INDEX_VERSION = 37
+INDEX_VERSION = 38
 # a gap this wide (in em) after a zero-width space glyph separates two words (InDesign's condensed
 # lines: "मुक्तिनाथ हिन्दू तथा" has 0.04-0.05); a space glyph with no gap after it is drawn inside a word
 _ZSP_GAP = 0.03
@@ -867,8 +867,94 @@ def _isSymbolFont(font):
 	return family.startswith(("webdings", "wingdings")) or family == "symbol"
 
 
+# a fill-in line of a form (dots, underscores, Preeti's = for the dot)
+_FILLER = re.compile(r"^[=._\-\u2013\u2014\u2026\u00b7]{3,}$")
+
+# letters of scripts written right to left: their runs are drawn right to left on purpose
+_RTL_SCRIPT = re.compile("[\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufeff]")
+_REVERSED = [0]  # runs turned round by _leftToRight (for the index's stats)
+
+
+def _leftToRight(glyphs):
+	"""The glyphs with each run drawn right to left put left to right.
+
+	Some PDF makers draw a line from its last letter to its first ("Microsoft Print to PDF"
+	reprinting a PDF: every letter is at its place on the page, only the order in the file is
+	backwards). Read in drawing order the line comes out backwards; read by position (as Chrome
+	does) the letters are in order but each sign drawn without width (े ु ू, the reph) lands
+	after the letter it shares its place with. A run is backwards when letters, one after the
+	other, each end where the one drawn before it starts; signs drawn without moving the pen at
+	that place belong to the run. Such a run, turned round, is exactly the line as written, for
+	any font (Preeti, Unicode, any other). Two such steps prove a run backwards; on a line that
+	has one, a shorter run (a two-letter word) is backwards too. Runs in Arabic or Hebrew letters
+	are drawn right to left on purpose and stay as they are."""
+	n = len(glyphs)
+	runs = []
+	i = 0
+	while i < n:
+		font0, code0, u0, v0, size0, adv0 = glyphs[i][:6]
+		size0 = size0 or 1.0
+		tol = 0.12 * size0
+		gapMax = 0.35 * size0  # (letters spaced out: a title drawn with gaps between its letters)
+		cursor = u0
+		steps = 0
+		k = i + 1
+		while k < n:
+			font, code, u, v, size, adv = glyphs[k][:6]
+			size = size or size0
+			if abs(v - v0) > 0.3 * size0:
+				break
+			if adv <= 0.02 * size:
+				# drawn without moving the pen: a sign of the letter the run reaches next (drawn
+				# backwards, a sign comes before its letter), somewhere over it (Word places ु, ै
+				# inside the letter's width)
+				if cursor - 1.0 * size0 <= u <= cursor + tol:
+					k += 1
+					continue
+				break
+			if u < cursor - 0.05 * size0 and cursor - gapMax <= u + adv <= cursor + tol:
+				cursor = u
+				steps += 1
+				k += 1
+				continue
+			break
+		if steps >= 1 and adv0 > 0.02 * size0:
+			# signs drawn just before the run's first letter are signs of that letter (drawn
+			# backwards, a sign comes before its letter): they belong to the run
+			a = i
+			while a > 0 and a > (runs[-1][1] if runs else 0):
+				fp, cp, up, vp, sp, ap = glyphs[a - 1][:6]
+				if ap <= 0.02 * (sp or size0) and abs(vp - v0) <= 0.3 * size0 and u0 - tol <= up <= u0 + adv0 + tol:
+					a -= 1
+				else:
+					break
+			runs.append((a, k, steps, round(v0 / (0.3 * size0))))
+			i = k
+		else:
+			i += 1
+	if not runs:
+		return glyphs
+	strongLines = {line for _i, _k, steps, line in runs if steps >= 2}
+	if not strongLines:
+		return glyphs
+	out = []
+	last = 0
+	for i, k, steps, line in runs:
+		if line not in strongLines:
+			continue
+		if any(_RTL_SCRIPT.search(g[0].text(g[1]) or "") for g in glyphs[i:k]):
+			continue
+		out.extend(glyphs[last:i])
+		out.extend(reversed(glyphs[i:k]))
+		last = k
+		_REVERSED[0] += 1
+	out.extend(glyphs[last:])
+	return out
+
+
 def _words(glyphs, page):
-	"""Group drawn glyphs into lines and words (by position), in drawing order."""
+	"""Group drawn glyphs into lines and words (by position), in drawing order (a run drawn right
+	to left is first turned round: _leftToRight)."""
 	# Deduplicate fake-bold overprinting (same font & code drawn within <= 0.8 pt)
 	# (positions kept in 0.8 pt cells: a glyph is compared with those of the cells around it only,
 	# not with every earlier one - that took seconds on a long page)
@@ -896,6 +982,7 @@ def _words(glyphs, page):
 			if ("wingdings" in font.baseFont.lower() or "symbol" in font.baseFont.lower()) and t in ("\x01", "\x02", "\x03", "§", "Å", "´", "•"):
 				g = (font, code, u, v, size, adv, ("bullet", "•")) + tuple(g[7:])
 			dedup.append(g)
+	dedup = _leftToRight(dedup)
 
 	words = []
 	cur = None
@@ -1041,6 +1128,10 @@ class DocIndex:
 		self._hint = 0
 		self._byKey = None
 		self._byBag = None
+		self.preparing = False  # (True while prepare() runs in the background)
+		self._notReady = False
+		self.reversedRuns = 0  # runs the PDF draws right to left (turned round when read)
+		self.zeroKeys = ""     # keys of signs drawn without width, in a document that has such runs
 		self.fixedWords = 0
 		self.stats = {}
 		self.layout = None     # tables, headings, paragraphs (pdfLayout), or None
@@ -1120,6 +1211,7 @@ class DocIndex:
 		if detector is not None:
 			_detectLegacyFonts(realFonts, [], detector)
 		allWords = []
+		_REVERSED[0] = 0
 		for pn, gl in pageGlyphs:
 			allWords.extend(_words(gl, pn))
 			if pause:
@@ -1139,6 +1231,18 @@ class DocIndex:
 			except Exception:
 				pass
 		idx = cls()
+		idx.reversedRuns = _REVERSED[0]
+		if idx.reversedRuns:
+			# keys of signs drawn without width: in a run drawn backwards the viewer puts each one
+			# after the letter it shares its place with, so lookups let them move (_findMoved)
+			zk = set()
+			for w in allWords:
+				for g in w.glyphs:
+					if g[5] <= 0.02 * (g[4] or 1.0):
+						t = g[0].text(g[1]) or ""
+						if t and not t.isspace():
+							zk.update(t)
+			idx.zeroKeys = "".join(sorted(zk))
 		idx._fill(allWords, pause)
 		if withLayout:
 			try:
@@ -1284,6 +1388,22 @@ class DocIndex:
 		for m in _NOTMARK.finditer(B):
 			pos.append(m.start())
 		self.SBpos = pos
+		# skeleton of B without the signs drawn without width too (only for a document with runs
+		# drawn backwards, where the viewer moves those signs: see _leftToRight)
+		self.ZB = ""
+		self.ZBpos = None
+		zk = getattr(self, "zeroKeys", "")
+		if zk:
+			drop = re.compile("[%s]|%s" % (re.escape(zk), _MARKS.pattern))
+			keep = []
+			zpos = array.array("i")
+			for i, ch in enumerate(B):
+				if not drop.match(ch):
+					keep.append(ch)
+					zpos.append(i)
+			self.ZB = "".join(keep)
+			self.ZBpos = zpos
+			self._zeroDrop = drop
 
 	def continuesLine(self, prev, nxt):
 		"""True when the viewer's text `nxt` follows `prev` on the same line of the page, False when
@@ -1453,6 +1573,36 @@ class DocIndex:
 				q = SB.find(sk, q + 1)
 		return -1
 
+	def _findMoved(self, key):
+		"""Start in B of `key` as the viewer shows a run the PDF draws backwards: the same letters
+		in the same order, with the signs drawn without width each a letter or so away
+		(मरो/े for मेरो/). The letters around the signs must match exactly, and the signs be the
+		same ones."""
+		ZB = getattr(self, "ZB", "")
+		if not ZB:
+			return -1
+		drop = self._zeroDrop
+		sk = "".join(ch for ch in key if not drop.match(ch))
+		n = len(key)
+		if len(sk) < 3 or len(sk) == n:
+			return -1
+		lead = 0
+		while lead < n and drop.match(key[lead]):
+			lead += 1
+		want = sorted(key)
+		pos = self.ZBpos
+		hs = bisect.bisect_left(pos, self._hint) if self._hint else 0
+		for start in ((hs, 0) if hs else (0,)):
+			q = ZB.find(sk, start)
+			tries = 0
+			while q >= 0 and tries < 60:
+				tries += 1
+				for a in (pos[q] - lead, pos[q]):
+					if 0 <= a and sorted(self.B[a:a + n]) == want:
+						return a
+				q = ZB.find(sk, q + 1)
+		return -1
+
 	def _find(self, key):
 		"""Start of `key` in the document text. Viewers sometimes put a vowel sign one letter
 		later than the PDF does (PDFium orders by position), so when the exact text is not found,
@@ -1467,6 +1617,8 @@ class DocIndex:
 				p = -1
 		if p < 0:
 			p = self._findSkel(key)
+		if p < 0:
+			p = self._findMoved(key)
 		if p < 0 and len(key) >= 10:
 			n = len(key)
 			want = movementKey(key)
@@ -1534,6 +1686,7 @@ class DocIndex:
 		if hit is not None:
 			self._hint = hit[1]
 			return hit[0]
+		self._notReady = False
 		if self.B.find(key) < 0:
 			dd = self._dropRepeats(text)
 			if dd != text:
@@ -1564,6 +1717,20 @@ class DocIndex:
 						if ckey:
 							res = self._lookup(clean_shuf, ckey)
 
+		if self.zeroKeys and (res is None or not all(ok for _pc, ok in res)):
+			# a form's fill-in line drawn through a label in a run drawn backwards: the viewer puts
+			# the dots between the label's letters ("ख ...... ातावालाको नाम"). The label without
+			# the dots, when found whole, is read whole, then the dots
+			parts = text.split()
+			fill = [t for t in parts if _FILLER.match(t)]
+			rest = " ".join(t for t in parts if not _FILLER.match(t))
+			if fill and matchKey(rest):
+				r2 = self._lookup(rest, matchKey(rest))
+				known = lambda r: sum(len(pc) for pc, ok in r if ok) if r else 0  # noqa: E731
+				if r2 and known(r2) > known(res):
+					res = r2 + [(f, False) for f in fill]
+		if self._notReady:
+			return res
 		if len(cache) > 3000:
 			cache.clear()
 		cache[text] = (res, self._hint)
@@ -1933,10 +2100,11 @@ class DocIndex:
 		p = self._find(key)
 		if p < 0:
 			return None
-		q = p + len(keyOf(lineText[:offset]))
-		r = q + len(keyOf(lineText[offset:offset + length]))
-		if r <= q:
+		a = len(keyOf(lineText[:offset]))
+		b = a + len(keyOf(lineText[offset:offset + length]))
+		if b <= a:
 			return None
+		q, r = self._placeIn(key, p, a, b)
 		return self._span(q, r)
 
 	def charAt(self, lineText, offset, length=1):
@@ -1950,53 +2118,165 @@ class DocIndex:
 		p = self._find(key)
 		if p < 0:
 			return None
-		q = p + len(pre)
-		res = self._span(q, q + len(here))
+		q, r = self._placeIn(key, p, len(pre), len(pre) + len(here))
+		res = self._span(q, r)
 		if res and all(r[1] for r in res):
 			return "".join(r[0] for r in res)
 		return None
 
+	def _placeIn(self, key, p, a, b):
+		"""Where characters a..b of the viewer's line `key` (found at p) are in B. Usually the
+		same places; for a line of a run drawn backwards, whose signs the viewer moved (मरो/े for
+		मेरो/), each letter is placed at its own letter and each sign at its own sign."""
+		n = len(key)
+		seg = self.B[p:p + n]
+		if seg == key or not self.zeroKeys:
+			return p + a, p + b
+		al = self._alignMoved(key, seg)
+		if al is None:
+			return p + a, p + b
+		picked = [al[i] for i in range(a, min(b, n))]
+		return p + min(picked), p + max(picked) + 1
+
+	def _alignMoved(self, key, seg):
+		"""For each character of the viewer's `key`, its place in `seg` (the document's text of
+		the same letters, signs drawn without width in other places), or None. The letters keep
+		their order; a sign goes to the same sign nearest its letter."""
+		cache = self.__dict__.setdefault("_alignCache", {})
+		got = cache.get((key, seg))
+		if got is not None or (key, seg) in cache:
+			return got
+		zk = self.zeroKeys
+		res = None
+		if len(key) == len(seg) and sorted(key) == sorted(seg):
+			kb = [i for i, ch in enumerate(key) if ch not in zk]
+			sb = [i for i, ch in enumerate(seg) if ch not in zk]
+			if len(kb) == len(sb) and all(key[i] == seg[j] for i, j in zip(kb, sb)):
+				res = [None] * len(key)
+				for i, j in zip(kb, sb):
+					res[i] = j
+				used = set()
+				# the letter each sign follows in the viewer's text (it was moved past it)
+				nb = 0
+				for i, ch in enumerate(key):
+					if ch not in zk:
+						nb += 1
+						continue
+					# in seg: the same sign, from just before the letter it follows here
+					best = None
+					for j, sc in enumerate(seg):
+						if sc != ch or j in used:
+							continue
+						before = sum(1 for x in sb if x < j)
+						d = abs(before - (nb - 1))
+						if best is None or d < best[0]:
+							best = (d, j)
+					if best is None:
+						res = None
+						break
+					used.add(best[1])
+					res[i] = best[1]
+		if len(cache) > 500:
+			cache.clear()
+		cache[(key, seg)] = res
+		return res
+
+	def prepare(self, pause=None):
+		"""Builds, ahead of time, the tables a lookup builds the first time it needs them (on a
+		430-page book the word tables took 2.5 seconds: done at the first key, NVDA froze). Run
+		in the background once the index is ready; `pause` is called now and then so NVDA keeps
+		the processor while the user is reading."""
+		self.preparing = True
+		try:
+			self._ambiguousSourceKeys()
+			if pause:
+				pause()
+			if getattr(self, "_keySet", None) is None:
+				self._keySet = {w[3].translate(_NORM) for w in self.words}
+			if pause:
+				pause()
+			if self._byKey is None:
+				self._buildTokenMaps(pause)
+		finally:
+			self.preparing = False
+
 	def _tokens(self, text):
 		"""The viewer's text is not found as a whole: match it word by word."""
 		if self._byKey is None:
-			exact = {}
-			moved = {}
-			stems = {}
-			for fixed, amap, enc, key in self.words:
-				if fixed is None:
-					continue
-				for k in {key.translate(_NORM), matchKey(fixed)}:
-					if k:
-						exact.setdefault(k, set()).add(fixed)
-						moved.setdefault(movementKey(k), set()).add(fixed)
-						k_clean = k.strip(".,:;!?()\"'")
-						if k_clean and k_clean != k:
-							f_clean = fixed.strip(".,:;!?()\"'")
-							exact.setdefault(k_clean, set()).add(f_clean)
-							moved.setdefault(movementKey(k_clean), set()).add(f_clean)
-						k_nohal = k.rstrip('\u094d')
-						if k_nohal and k_nohal != k:
-							exact.setdefault(k_nohal, set()).add(fixed)
-						k_dedup = re.sub(r'([क-ह])\1+', r'\1', k)
-						if k_dedup and k_dedup != k:
-							exact.setdefault(k_dedup, set()).add(fixed)
-				if len(fixed) >= 3:
-					stems.setdefault(fixed[:4], set()).add(fixed)
-					stems.setdefault(fixed[:3], set()).add(fixed)
-				if key and len(key) >= 3:
-					stems.setdefault(key[:4], set()).add(fixed)
-					stems.setdefault(key[:3], set()).add(fixed)
-			self._ambiguousKeys = {k for k, v in exact.items() if len(v) > 1}
-			self._byKey = {k: next(iter(v)) for k, v in exact.items() if len(v) == 1}
-			self._byBag = {k: next(iter(v)) for k, v in moved.items() if len(v) == 1}
-			self._byStem = {k: next(iter(v)) for k, v in stems.items() if len(v) == 1}
+			if self.preparing:
+				# the tables are being built in the background: not on NVDA's thread (and this
+				# answer is not kept: the next time the tables are there)
+				self._notReady = True
+				return None
+			self._buildTokenMaps()
+		return self._matchTokens(text)
 
+	def _buildTokenMaps(self, pause=None):
+		exact = {}
+		moved = {}
+		stems = {}
+		for n, (fixed, amap, enc, key) in enumerate(self.words):
+			if pause and n % 2000 == 0:
+				pause()
+			if fixed is None:
+				continue
+			for k in {key.translate(_NORM), matchKey(fixed)}:
+				if k:
+					exact.setdefault(k, set()).add(fixed)
+					moved.setdefault(movementKey(k), set()).add(fixed)
+					k_clean = k.strip(".,:;!?()\"'")
+					if k_clean and k_clean != k:
+						f_clean = fixed.strip(".,:;!?()\"'")
+						exact.setdefault(k_clean, set()).add(f_clean)
+						moved.setdefault(movementKey(k_clean), set()).add(f_clean)
+					k_nohal = k.rstrip('\u094d')
+					if k_nohal and k_nohal != k:
+						exact.setdefault(k_nohal, set()).add(fixed)
+					k_dedup = re.sub(r'([क-ह])\1+', r'\1', k)
+					if k_dedup and k_dedup != k:
+						exact.setdefault(k_dedup, set()).add(fixed)
+			if len(fixed) >= 3:
+				stems.setdefault(fixed[:4], set()).add(fixed)
+				stems.setdefault(fixed[:3], set()).add(fixed)
+			if key and len(key) >= 3:
+				stems.setdefault(key[:4], set()).add(fixed)
+				stems.setdefault(key[:3], set()).add(fixed)
+		ambiguous = {k for k, v in exact.items() if len(v) > 1}
+		byZero = None
+		if self.zeroKeys:
+			# (a document with runs drawn backwards: a word as the viewer shows it, its signs
+			# without width moved, still finds its real text)
+			zm = {}
+			for k in exact:
+				zm.setdefault(self._zeroKey(k), set()).update(exact[k])
+			byZero = {k: next(iter(v)) for k, v in zm.items() if len(v) == 1}
+			self._byZero = byZero
+		byBag = {k: next(iter(v)) for k, v in moved.items() if len(v) == 1}
+		byStem = {k: next(iter(v)) for k, v in stems.items() if len(v) == 1}
+		byKey = {k: next(iter(v)) for k, v in exact.items() if len(v) == 1}
+		# (_byKey last: a lookup takes the tables as ready once it is set)
+		self._ambiguousKeys = ambiguous
+		self._byBag = byBag
+		self._byStem = byStem
+		self._byKey = byKey
+
+	def _zeroKey(self, k):
+		"""k with its signs drawn without width taken out and kept apart (their order and place
+		do not count)."""
+		zk = self.zeroKeys
+		return ("".join(ch for ch in k if ch not in zk), "".join(sorted(ch for ch in k if ch in zk)))
+
+	def _byZeroGet(self, k):
+		bz = getattr(self, "_byZero", None)
+		return bz.get(self._zeroKey(k)) if bz else None
+
+	def _matchTokens(self, text):
 		text = cleanGluedTokens(text)
 		rawToks = [t for t in re.split(r"\s+", text) if t]
 		toks = []
 		for t in rawToks:
 			k = matchKey(t)
-			if not k or k in self._byKey or self._byBag.get(movementKey(k)) is not None:
+			if not k or k in self._byKey or self._byBag.get(movementKey(k)) is not None or self._byZeroGet(k) is not None:
 				toks.append(t)
 				continue
 			split = False
@@ -2039,7 +2319,7 @@ class DocIndex:
 				k = matchKey("".join(span_toks))
 				if not k:
 					continue
-				f = None if k in self._ambiguousKeys else (self._byKey.get(k) or self._byBag.get(movementKey(k)))
+				f = None if k in self._ambiguousKeys else (self._byKey.get(k) or self._byBag.get(movementKey(k)) or self._byZeroGet(k))
 				if f is None and k not in self._ambiguousKeys and ("\xbf" in k or "'" in k):
 					k_alt = k.replace("\xbf", "'") if "\xbf" in k else k.replace("'", "\xbf")
 					f = self._byKey.get(k_alt) or self._byBag.get(movementKey(k_alt))
@@ -2066,6 +2346,27 @@ class DocIndex:
 					i += span
 					done = True
 					break
+			if not done and self.zeroKeys:
+				# (a document with runs drawn backwards: the viewer also joins words and cuts others,
+				# "v ftfjfnsf]gfd" for "vftfjfnsf] gfd"; pieces that together are whole words of the
+				# document, in place, are read as those words)
+				for span in (3, 2):
+					if i + span > len(toks) or any(_FILLER.match(t) for t in toks[i:i + span]):
+						continue
+					k = matchKey("".join(toks[i:i + span]))
+					p = self.B.find(k) if len(k) >= 4 else -1
+					if p < 0:
+						continue
+					j = bisect.bisect_left(self.starts, p)
+					e = bisect.bisect_left(self.starts, p + len(k))
+					if j < len(self.starts) and self.starts[j] == p and (e >= len(self.starts) or self.starts[e] == p + len(k)):
+						got = self._span(p, p + len(k))
+						if got and all(ok for _pc, ok in got):
+							out.extend(got)
+							found += 1
+							i += span
+							done = True
+							break
 			if not done:
 				out.append((toks[i], False))
 				i += 1
@@ -2075,7 +2376,8 @@ class DocIndex:
 
 	def dump(self):
 		return {"v": INDEX_VERSION, "B": self.B, "starts": self.starts, "words": self.words,
-			"lineStart": self.lineStart, "fixed": self.fixedWords, "stats": self.stats, "layout": self.layout, "trustedLegacy": sorted(self.trustedLegacy), "legacySource": self.legacySource, "legacyTables": self.legacyTables}
+			"lineStart": self.lineStart, "fixed": self.fixedWords, "stats": self.stats, "layout": self.layout, "trustedLegacy": sorted(self.trustedLegacy), "legacySource": self.legacySource, "legacyTables": self.legacyTables,
+			"reversedRuns": self.reversedRuns, "zeroKeys": self.zeroKeys}
 
 	@classmethod
 	def restore(cls, d):
@@ -2090,6 +2392,8 @@ class DocIndex:
 		idx.stats = d.get("stats", {})
 		idx.layout = d.get("layout")
 		idx.trustedLegacy = set(d.get("trustedLegacy", ()))
+		idx.reversedRuns = d.get("reversedRuns", 0)
+		idx.zeroKeys = d.get("zeroKeys", "")
 		idx.legacySource = d.get("legacySource", {})
 		idx.legacyTables = d.get("legacyTables", {})
 		idx._buildF()
