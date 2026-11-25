@@ -36,8 +36,20 @@ NVDA, and with four real government PDFs. Percent of words read right:
   only the safe fixes, and a word of running text is never letter-swapped or joined to the next.
 - A known word is never changed, and a digit inside a word is dropped only with proof from the
   dictionary itself (कोभिड19को stays).
+- Checked on 32 Nepali laws as published (Nepal Law Commission, Supreme Court, national park
+  offices), mostly Word PDFs in Kalimati with Preeti and Fontasy Himali parts, one all-Preeti act
+  and one re-made by Ghostscript. Read from the file, 94 to 99% of their words are dictionary
+  words (the rest are real technical words); Chrome's own text of the same PDFs is 31 to 57%
+  (मनयिावली, िन्त्रालय for नियमावली, मन्त्रालय). Two scanned PDFs have no text at all: use an OCR
+  add-on for those. The 209 lines NVDA really read from two of these acts in Chrome (from a
+  user's log) all read as printed.
+- Word PDFs whose font maps the space to a zero-width joiner read a word cut after a half letter
+  (the Anti-Corruption Act read "भ्रष् टाचार निवारण"); now as printed, "भ्रष्टाचार निवारण".
+- A font re-encoded by Ghostscript gives its Devanagari letters ASCII codes in its own tables; the
+  PDF's Devanagari text is now used for them, and a letter whose drawn shape and text agree is never
+  re-guessed. A park regulation read "(>) कुनै भूभाग कब्जा गन<"; now "(ख) कुनै भूभाग कब्जा गर्न,".
 - Preeti abbreviations and dates typed with the danda key are read as the page shows them (प्र।स।).
-- Saved PDF indexes are rebuilt once (index version 35).
+- Saved PDF indexes are rebuilt once (index version 36).
 
 ### PDFs whose vowel signs come out in the wrong place
 - When the PDF file cannot be read, Chrome's own text is repaired. Many PDFs saved from Word give
@@ -81,7 +93,8 @@ NVDA, and with four real government PDFs. Percent of words read right:
 - New: glyphOrder.py (moved signs), nepaliFreq.dat (word counts, attribution in
   LICENSE-nepali-dictionary.txt).
 - Tests: tests/test_actual_content.py (set NEPALI_TEST_PDFS to a folder with the test PDFs to
-  read real PDFs too), tests/test_moved_signs.py, and tests/bench, which reads the same material
+  read real PDFs too), tests/test_law_pdfs.py (set NEPALI_TEST_LAWS to a folder of law PDFs),
+  tests/test_moved_signs.py, and tests/bench, which reads the same material
   with any version (`python tests/bench/bench.py <version folder> out.json`). All earlier tests pass.
 
 ## [2.1.0] - 2026-11-05

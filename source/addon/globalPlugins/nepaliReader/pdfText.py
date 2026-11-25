@@ -46,7 +46,7 @@ NUKTA = "़"
 REPH = "र्"
 DEP_SIGNS = set("ऺऻािीुूृॄॅॆेैॉॊोौॎॏॕॖॗॢॣऀँंः़")
 INDEPENDENT = set(chr(c) for c in range(0x0904, 0x0915)) | set("ॠॡॲॳॴॵॶॷ")
-INDEX_VERSION = 35
+INDEX_VERSION = 36
 # 2.1.0 replaced a word the index did not know by any document word that starts with the same
 # three or four letters. That is a guess (2.0.9 left it out after real-line tests: चुमनुब्री was
 # read चुन्चेतबाट); a word of the document is now only taken when its letters match.
@@ -527,6 +527,10 @@ class PdfFont:
 					t = t2  # a conjunct shape found in another font of the same design
 			if t is None:
 				t = emb.get(g)
+				if t is not None and not isDeva(t) and isDeva(self.toUnicode.get(code) or ""):
+					# a subset re-encoded by Ghostscript gives its Devanagari glyphs ASCII codes
+					# (ख came out as ">"): the PDF's own Devanagari text is the better reading
+					t = None
 				if t is not None:
 					# only the embedded subset's own tables say so: Word's subsets can map a
 					# letter to the wrong glyph, so this is checked against the document later
@@ -805,7 +809,9 @@ def _isSpace(font, code, span=None):
 		return False
 	t = font.text(code)
 	if t:
-		return not t.strip()
+		# Word maps its space glyph to a zero-width joiner in some fonts, so every space reads
+		# U+200D; it is a space glyph all the same (a joiner is told apart by its width below)
+		return not t.strip("\u200c\u200d").strip()
 	return False
 
 
@@ -2411,7 +2417,9 @@ def _inferFonts(fonts, allWords, isWord, deadline, pause=None):
 		# PDFs give its ि and reph glyphs the text र, न, ह or इ): its other glyphs' texts are
 		# only a first guess, checked against the dictionary like unknown ones
 		weak = f.weak
-		deva = [c for c in f.used if (c not in f.truth or c in weak) and isDeva(f.truth.get(c) or f.text(c)) and not any(ch in _DIGITS_SET for ch in (f.truth.get(c) or f.text(c)))]
+		# (a glyph whose drawn shape and the PDF's own text say the same letter is that letter:
+		# two readings that agree are not re-guessed. A park regulation's Mangal lost न, प, ल, म)
+		deva = [c for c in f.used if (c not in f.truth or c in weak) and isDeva(f.truth.get(c) or f.text(c)) and not any(ch in _DIGITS_SET for ch in (f.truth.get(c) or f.text(c))) and not (c in f.truth and f.truth.get(c) == f.text(c))]
 		# (not for Type3 fonts the add-on knows nothing about: their PDF texts are right far
 		# more often than a guess - a 533-page book read 9% worse)
 		if (f.truth or not getattr(f, "_t3", None)) and len(deva) >= 3 and sum(1 for c in f.used if isDeva(f.truth.get(c) or f.text(c))) >= 20:
