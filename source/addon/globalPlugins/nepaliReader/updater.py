@@ -30,6 +30,7 @@ try:
 except ImportError:
 	import logging
 	log = logging.getLogger("updater")
+	log.debugWarning = log.debug  # (NVDA's logger has debugWarning)
 
 try:
 	import ui
@@ -38,7 +39,26 @@ except ImportError:
 
 GITHUB_REPO = "SuyogDhungel/nepaliReader"
 API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+CHANGELOG_URL = "https://raw.githubusercontent.com/" + GITHUB_REPO + "/{tag}/CHANGELOG.md"
 CHECK_INTERVAL_SECONDS = 86400  # Check once per 24 hours automatically
+
+# set while an update is being checked, offered or downloaded: a second check (the daily one and
+# the menu at the same time) waits for it instead of opening a second window or download
+_busy = threading.Event()
+
+
+def _say(text):
+	"""Speaks a short message from any thread: NVDA's speech is only ever called on its main
+	thread (speaking from the download thread can stall or crash NVDA)."""
+	if not ui:
+		return
+	try:
+		if wx:
+			wx.CallAfter(ui.message, text)
+		else:
+			ui.message(text)
+	except Exception:
+		pass
 
 
 def parseVersion(verStr):
@@ -70,7 +90,8 @@ def stripMarkdown(text):
 	# 3. Remove inline code backticks: `code` -> code
 	s = re.sub(r'`([^`]+)`', r'\1', s)
 	# 4. Remove HTML tags: <br>, <b>, etc.
-	s = re.sub(r'<[^>]+>', '', s)
+	# (only real tags: a "<" in the text, such as a Preeti key quoted in the changelog, stays)
+	s = re.sub(r'</?(?:a|b|i|u|p|br|hr|em|strong|code|kbd|sub|sup|span|div|img|details|summary|ul|ol|li|h[1-6]|table|tr|td|th)\b[^<>\n]*/?>', '', s, flags=re.I)
 	# 5. Remove markdown images and links: ![alt](url) -> alt, [text](url) -> text
 	s = re.sub(r'!\[([^\]]*)\]\([^)]+\)', r'\1', s)
 	s = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', s)
@@ -91,11 +112,107 @@ def stripMarkdown(text):
 		line = re.sub(r'^\s*#{1,6}\s*', '', line)
 		# Convert markdown bullets (- , * , + ) to a clean bullet character
 		line = re.sub(r'^\s*[-*+]\s+', '• ', line)
+		# Tables: the |---| row goes, a row's cells are read one after the other
+		if re.match(r'^\s*\|?[\s:|-]+\|[\s:|-]*$', line) and '-' in line:
+			continue
+		if line.strip().startswith('|'):
+			cells = [c.strip() for c in line.strip().strip('|').split('|')]
+			line = ', '.join(c for c in cells if c)
 		lines.append(line.rstrip())
 	# 8. Collapse 3+ consecutive newlines to 2
 	result = "\n".join(lines)
 	result = re.sub(r'\n{3,}', '\n\n', result).strip()
 	return result
+
+
+def changelogSince(text, currentVer, newVer):
+	"""The sections of CHANGELOG.md for the versions after the installed one, up to the new one
+	(what changes for this user), newest first as the file has them."""
+	if not text:
+		return ""
+	out = []
+	keep = False
+	for line in text.replace("\r\n", "\n").split("\n"):
+		m = re.match(r'^##\s+\[?v?(\d+(?:\.\d+)*)', line)
+		if m:
+			v = parseVersion(m.group(1))
+			keep = currentVer < v <= newVer
+		elif re.match(r'^#\s', line):
+			keep = False
+		if keep:
+			out.append(line)
+	return "\n".join(out).strip()
+
+
+def fetchChangelog(tag, currentVer, newVer):
+	"""What changed since the installed version, from the CHANGELOG.md of the new release ("" when
+	it cannot be had)."""
+	try:
+		req = urllib.request.Request(CHANGELOG_URL.format(tag=tag), headers={"User-Agent": "NepaliReader-NVDA-Addon"})
+		with urllib.request.urlopen(req, timeout=10) as resp:
+			text = resp.read().decode("utf-8", "replace")
+		return changelogSince(text, currentVer, newVer)
+	except Exception as e:
+		log.debugWarning("Nepali Reader: could not read the changelog: %s" % e)
+		return ""
+
+
+def releaseNotes(body, changelog):
+	"""The text shown before updating: the changes since the installed version (CHANGELOG.md),
+	or the release notes when the changelog cannot be had."""
+	notes = stripMarkdown(changelog).strip() if changelog else ""
+	if notes:
+		# "## [2.2.0] - 2026-11-25" reads "Version 2.2.0 - 2026-11-25"
+		notes = re.sub(r'^\[(\d+(?:\.\d+)*)\]', lambda m: _("Version {v}").format(v=m.group(1)), notes, flags=re.M)
+	else:
+		notes = stripMarkdown(body).strip()
+	return notes
+
+
+def checkPackage(path, expectedSize=0):
+	"""None if the downloaded file is a whole Nepali Reader add-on package, else what is wrong."""
+	import zipfile
+	try:
+		size = os.path.getsize(path)
+	except OSError:
+		return _("the downloaded file is missing")
+	if size == 0:
+		return _("the download is empty")
+	if expectedSize and size != expectedSize:
+		return _("the download is incomplete ({got} of {want} bytes)").format(got=size, want=expectedSize)
+	try:
+		with zipfile.ZipFile(path) as z:
+			manifest = z.read("manifest.ini").decode("utf-8", "replace")
+	except Exception:
+		return _("the downloaded file is not an NVDA add-on package")
+	if not re.search(r'^\s*name\s*=\s*"?nepaliReader"?\s*$', manifest, re.M):
+		return _("the downloaded package is not Nepali Reader")
+	return None
+
+
+if wx is not None:
+	class UpdateDialog(wx.Dialog):
+		"""Asks before updating, with everything that changed in a text box that can be read line by
+		line with the arrow keys (a message box reads it all at once, cut short)."""
+
+		def __init__(self, parent, curStr, newStr, notes):
+			super().__init__(parent, title=_("Nepali Reader Update"))
+			sizer = wx.BoxSizer(wx.VERTICAL)
+			intro = wx.StaticText(self, label=_("Nepali Reader {new} is available. You have version {cur}.").format(new=newStr, cur=curStr))
+			sizer.Add(intro, 0, wx.ALL, 10)
+			sizer.Add(wx.StaticText(self, label=_("&What's new:")), 0, wx.LEFT | wx.RIGHT, 10)
+			self.notes = wx.TextCtrl(self, value=notes, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(600, 340))
+			sizer.Add(self.notes, 1, wx.EXPAND | wx.ALL, 10)
+			buttons = wx.BoxSizer(wx.HORIZONTAL)
+			self.updateButton = wx.Button(self, wx.ID_OK, _("&Update now"))
+			buttons.Add(self.updateButton, 0, wx.ALL, 5)
+			buttons.Add(wx.Button(self, wx.ID_CANCEL, _("&Later")), 0, wx.ALL, 5)
+			sizer.Add(buttons, 0, wx.ALIGN_RIGHT | wx.ALL, 5)
+			self.SetSizerAndFit(sizer)
+			self.updateButton.SetDefault()
+			self.notes.SetInsertionPoint(0)
+			self.notes.SetFocus()
+			self.CentreOnScreen()
 
 
 def getCurrentVersion():
@@ -131,13 +248,26 @@ def launchInstaller(destPath):
 
 	launched = False
 
-	# 1. Modern NVDA: gui.addonGui.installAddon(parentWindow, addonPath)
+	# 1. NVDA's own way of installing an add-on file: asks to install (or update), installs, then
+	# offers the restart the new version needs
 	try:
 		import gui.addonGui
-		if hasattr(gui.addonGui, "installAddon"):
+		if hasattr(gui.addonGui, "handleRemoteAddonInstall"):
+			gui.addonGui.handleRemoteAddonInstall(destPath)
+			launched = True
+	except Exception:
+		log.debugWarning("Nepali Reader: gui.addonGui.handleRemoteAddonInstall failed", exc_info=True)
+		launched = False
+
+	# 2. Older NVDA: gui.addonGui.installAddon(parentWindow, addonPath), then the restart prompt
+	try:
+		import gui.addonGui
+		if not launched and hasattr(gui.addonGui, "installAddon"):
 			try:
 				parent = getattr(gui, "mainFrame", None)
-				gui.addonGui.installAddon(parent, destPath)
+				if gui.addonGui.installAddon(parent, destPath):
+					if hasattr(gui.addonGui, "promptUserForRestart") and wx:
+						wx.CallAfter(gui.addonGui.promptUserForRestart)
 				launched = True
 			except TypeError:
 				# Older NVDA: installAddon(bundle)
@@ -147,9 +277,8 @@ def launchInstaller(destPath):
 					launched = True
 	except Exception:
 		log.debugWarning("Nepali Reader: gui.addonGui.installAddon failed", exc_info=True)
-		launched = False
 
-	# 2. Try addonHandler.installAddonBundle
+	# 3. Try addonHandler.installAddonBundle
 	if not launched and addonHandler:
 		try:
 			if hasattr(addonHandler, "installAddonBundle") and hasattr(addonHandler, "AddonBundle"):
@@ -162,7 +291,7 @@ def launchInstaller(destPath):
 			log.debugWarning("Nepali Reader: addonHandler.installAddonBundle failed", exc_info=True)
 			launched = False
 
-	# 3. Universal Windows file handler (triggers NVDA's native install dialog)
+	# 4. Universal Windows file handler (triggers NVDA's native install dialog)
 	if not launched:
 		try:
 			os.startfile(destPath)
@@ -175,7 +304,7 @@ def launchInstaller(destPath):
 			except Exception:
 				pass
 
-	# 4. Message box fallback
+	# 5. Message box fallback
 	if not launched and gui and wx:
 		gui.messageBox(
 			_("Update package downloaded to:\n{path}\n\nPlease open this file to install.").format(path=destPath),
@@ -192,9 +321,16 @@ class DownloadTask:
 		self.newVerStr = newVerStr
 		self.cancelFlag = threading.Event()
 		self.progressDialog = None
-		self.destPath = os.path.join(tempfile.gettempdir(), f"nepaliReader-{newVerStr}.nvda-addon")
+		# a folder of its own: an earlier download of the same version that is still open (being
+		# installed) cannot block this one
+		try:
+			folder = tempfile.mkdtemp(prefix="nepaliReader-update-")
+		except Exception:
+			folder = tempfile.gettempdir()
+		self.destPath = os.path.join(folder, "nepaliReader-{v}.nvda-addon".format(v=newVerStr.lstrip("vV")))
 		self._lastGuiTime = 0.0
 		self._lastPct = -1
+		self.expectedSize = 0
 
 	def start(self):
 		"""Creates progress dialog on the main thread and launches download worker."""
@@ -299,6 +435,7 @@ class DownloadTask:
 					totalSize = int(resp.headers.get("Content-Length", 0) or 0)
 				except Exception:
 					totalSize = 0
+				self.expectedSize = totalSize
 
 				downloaded = 0
 				chunkSize = 65536  # 64 KB chunks
@@ -329,11 +466,7 @@ class DownloadTask:
 							# Announce progress milestones (25%, 50%, 75%) to screen reader users
 							if pct >= lastSpokenPct + 25:
 								lastSpokenPct = (pct // 25) * 25
-								if ui:
-									try:
-										ui.message(f"{lastSpokenPct}%")
-									except Exception:
-										pass
+								_say(f"{lastSpokenPct}%")
 						else:
 							if now - self._lastGuiTime >= 0.2:
 								self._lastGuiTime = now
@@ -353,6 +486,7 @@ class DownloadTask:
 					pass
 
 				def handleCancel():
+					_busy.clear()
 					self._closeDialog()
 					if ui:
 						try:
@@ -366,15 +500,18 @@ class DownloadTask:
 					handleCancel()
 				return
 
+			# a connection that drops can end the download early without an error: only a whole
+			# add-on package is installed
+			problem = checkPackage(self.destPath, self.expectedSize)
+			if problem:
+				raise IOError(problem)
+
 			# Download completed successfully!
 			if not self.cancelFlag.is_set():
-				if ui:
-					try:
-						ui.message("100%")
-					except Exception:
-						pass
+				_say("100%")
 
 			def finish():
+				_busy.clear()
 				self._closeDialog()
 				if wx:
 					wx.CallLater(100, launchInstaller, self.destPath)
@@ -395,6 +532,7 @@ class DownloadTask:
 				pass
 
 			def notifyFail(errMsg):
+				_busy.clear()
 				self._closeDialog()
 				if not self.cancelFlag.is_set() and gui and wx:
 					gui.messageBox(
@@ -413,7 +551,15 @@ class DownloadTask:
 
 def checkUpdate(manual=False, configRef=None):
 	"""Checks GitHub API for new releases in a background worker thread."""
+	if _busy.is_set():
+		# an update is already being checked, offered or downloaded
+		if manual:
+			_say(_("Nepali Reader is already checking for or downloading an update."))
+		return
+	_busy.set()
+
 	def worker():
+		offered = False
 		try:
 			req = urllib.request.Request(
 				API_URL,
@@ -426,7 +572,16 @@ def checkUpdate(manual=False, configRef=None):
 				data = json.loads(resp.read().decode("utf-8"))
 
 			if configRef is not None:
-				configRef["lastUpdateCheck"] = time.time()
+				def noteChecked(when=time.time()):
+					try:
+						configRef["lastUpdateCheck"] = when
+					except Exception:
+						pass
+				# (NVDA's configuration is changed on its main thread only)
+				if wx:
+					wx.CallAfter(noteChecked)
+				else:
+					noteChecked()
 
 			tag = data.get("tag_name", "")
 			body = (data.get("body", "") or "").strip()
@@ -441,32 +596,59 @@ def checkUpdate(manual=False, configRef=None):
 					break
 
 			if remoteVer > currentVer and addonUrl:
-				def promptUser():
-					plainNotes = stripMarkdown(body).strip()
-					notes = plainNotes[:800] + ("..." if len(plainNotes) > 800 else "")
-					msg = _(
-						"An update for Nepali Reader is available!\n\n"
-						"Installed Version: {cur}\n"
-						"Latest Version: {new}\n\n"
-						"Release Notes:\n{notes}\n\n"
-						"Do you want to download and install this update now?"
-					).format(
-						cur=".".join(map(str, currentVer)),
-						new=tag,
-						notes=notes if notes else _("Bug fixes and improvements")
-					)
-					if gui and wx:
-						res = gui.messageBox(
-							msg,
-							_("Nepali Reader Update"),
-							wx.YES_NO | wx.ICON_QUESTION
-						)
-						if res == wx.YES:
-							task = DownloadTask(addonUrl, tag)
-							task.start()
-					elif ui:
-						ui.message(_("An update for Nepali Reader is available: {new}").format(new=tag))
+				# everything that changed since the installed version (CHANGELOG.md of the new release),
+				# read here in the background thread
+				notes = releaseNotes(body, fetchChangelog(tag, currentVer, remoteVer)) or _("Bug fixes and improvements")
 
+				def promptUser():
+					try:
+						_promptUser()
+					except Exception:
+						_busy.clear()
+						log.error("Nepali Reader: update prompt failed", exc_info=True)
+
+				def _promptUser():
+					curStr = ".".join(map(str, currentVer))
+					if gui and wx:
+						res = None
+						try:
+							gui.mainFrame.prePopup()
+							try:
+								dlg = UpdateDialog(gui.mainFrame, curStr, tag, notes)
+								res = dlg.ShowModal()
+								dlg.Destroy()
+							finally:
+								gui.mainFrame.postPopup()
+							update = res == wx.ID_OK
+						except Exception:
+							log.debugWarning("Nepali Reader: update dialog failed", exc_info=True)
+							short = notes[:800] + ("..." if len(notes) > 800 else "")
+							update = gui.messageBox(
+								_(
+									"An update for Nepali Reader is available!\n\n"
+									"Installed Version: {cur}\n"
+									"Latest Version: {new}\n\n"
+									"Release Notes:\n{notes}\n\n"
+									"Do you want to download and install this update now?"
+								).format(cur=curStr, new=tag, notes=short),
+								_("Nepali Reader Update"),
+								wx.YES_NO | wx.ICON_QUESTION
+							) == wx.YES
+						if update:
+							try:
+								task = DownloadTask(addonUrl, tag)
+								task.start()
+							except Exception:
+								_busy.clear()
+								log.error("Nepali Reader: could not start the update download", exc_info=True)
+						else:
+							_busy.clear()
+					else:
+						_busy.clear()
+						if ui:
+							ui.message(_("An update for Nepali Reader is available: {new}").format(new=tag))
+
+				offered = True
 				if wx:
 					wx.CallAfter(promptUser)
 				else:
@@ -504,8 +686,14 @@ def checkUpdate(manual=False, configRef=None):
 					wx.CallAfter(informError)
 				else:
 					informError()
+		finally:
+			if not offered:
+				_busy.clear()
 
-	threading.Thread(target=worker, name="NR_UpdateCheck", daemon=True).start()
+	try:
+		threading.Thread(target=worker, name="NR_UpdateCheck", daemon=True).start()
+	except Exception:
+		_busy.clear()
 
 
 def startAutoUpdateCheck(configRef):

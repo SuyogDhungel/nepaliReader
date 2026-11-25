@@ -167,7 +167,8 @@ def _strongAlone(token, sc, encoding):
 	sig = _KRUTI_SIGNATURE if encoding == "krutidev" else _PREETI_SIGNATURE
 	if sig.search(core):
 		return sc >= STRONG_WORD - 3
-	if neLexicon.isLoaded():
+	if neLexicon.isLoaded() and len(core) >= 2:
+		# (one letter alone is never proof: x is ह and z is श, both dictionary words)
 		conv = legacyFonts.convert(core, encoding)
 		if conv and neLexicon.isWord(conv.strip(_STRIP)) and not isEnglishWord(core.lower()):
 			return True
@@ -260,10 +261,11 @@ def decide(text, encoding="preeti", context=False):
 	# evidence by itself: it follows the line, and in a line that is mostly English it stays as
 	# it is ("git commit && git push", "(a) ... (b) ..." with one odd word in the line)
 	notEnglishLine = legacy > 0 and legacy >= english
+	keep = _keptEnglish(scored, encoding)
 	result = []
-	for t, sc in scored:
+	for k, (t, sc) in enumerate(scored):
 		core = _core(t)
-		if not t or t.isspace() or any("\u0900" <= c <= "\u097f" for c in t):
+		if not t or t.isspace() or any("\u0900" <= c <= "\u097f" for c in t) or k in keep:
 			result.append((t, False))
 		elif isPreetiSymbolNumber(t) and (wholeLine or notEnglishLine or hasDeva or context or core.startswith("?=") or any(c in ",./÷–—" for c in t)):
 			result.append((t, True))
@@ -298,11 +300,56 @@ def decide(text, encoding="preeti", context=False):
 	return result
 
 
+# a unit after a number ("1 in", "5 km") is English, not the Preeti ष्ल, पल
+_UNITS = frozenset("in inch cm mm m km kg g gm mg ft sec hr hrs min ml l kw kwh mw kv ha sqm mph kmph mb gb kb tb".split())
+
+
+def _keptEnglish(scored, encoding):
+	"""Indexes of tokens that stay English in a line with no font name: a unit after a number,
+	and words in brackets that read as English ("(Section 1 of)", "(Chief Executive Officer)")."""
+	keep = set()
+	sig = _KRUTI_SIGNATURE if encoding == "krutidev" else _PREETI_SIGNATURE
+	prev = None
+	for k, (t, sc) in enumerate(scored):
+		if not t or t.isspace():
+			continue
+		if prev is not None and _NUM_TOKEN.match(scored[prev][0].strip(_STRIP)) and _core(t).lower() in _UNITS:
+			keep.add(k)
+		prev = k
+	k = 0
+	while k < len(scored):
+		t = scored[k][0]
+		if t and t.lstrip().startswith("(") and not t.strip().startswith("()"):
+			end = None
+			for j in range(k, min(len(scored), k + 16)):
+				if scored[j][0] and scored[j][0].rstrip().endswith(")"):
+					end = j
+					break
+			if end is not None:
+				span = range(k, end + 1)
+				cores = [_core(scored[j][0]) for j in span if scored[j][0] and not scored[j][0].isspace()]
+				words = [c for c in cores if c and any(ch.isalpha() for ch in c)]
+				eng = [c for c in words if isEnglishWord(c.lower()) and not sig.search(c)]
+				if words and len(eng) * 2 >= len(words) and any(len(c) >= 3 for c in eng) and all(c.isalnum() for c in words):
+					keep.update(span)
+				k = end + 1
+				continue
+		k += 1
+	return keep
+
+
+# keys that type a sign or half letter in Preeti and are rare in English words
+_PREETI_SIGN_KEYS = frozenset("]}[{|\\/;'\"+=~`")
+
+
 def looksLegacy(text, encoding="preeti", context=False):
 	if any(flag for _, flag in decide(text, encoding, context)):
 		return True
 	core = text.strip()
-	if core and neLexicon.isLoaded() and not isEnglishWord(core.lower()):
+	# (a letter or two on its own is no evidence: "e" is भ and "g" is न in Preeti, both dictionary
+	# words, and English letters typed in an editor were read as Nepali. Without a Preeti font or
+	# document, a short word needs a Preeti sign key of its own: sf] is को)
+	if core and neLexicon.isLoaded() and not isEnglishWord(core.lower()) and (context or len(_core(core)) >= 3 or any(ch in _PREETI_SIGN_KEYS for ch in core)):
 		conv = legacyFonts.convert(core, encoding)
 		if conv and neLexicon.isWord(conv.strip(_STRIP)):
 			return True

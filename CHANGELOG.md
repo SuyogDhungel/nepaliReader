@@ -2,6 +2,32 @@
 
 All notable changes to the **Nepali Reader** NVDA add-on are documented here.
 
+## [2.2.0] - 2026-11-25
+
+Nepali Reader is now highly accurate. Many parts of how it reads have been changed, so NVDA reads
+Nepali documents as they are written.
+
+### Reading
+- Reading is highly accurate in PDFs, in Preeti and other legacy-font documents, in Word and on
+  web pages.
+- Reading by line, word and character, selecting and copying all give the same accurate text.
+- English stays English, also in code editors and terminals.
+- After updating, each PDF is read again once, in the background; reading starts at once.
+
+### Updating
+- Check for updates (NVDA menu, Tools, Nepali Reader) and the daily check show everything that
+  changed since your version, in a window you can read line by line, with Update now and Later
+  buttons.
+- The download is checked before it is installed: a download cut short or a wrong file is never
+  installed.
+- The update is installed through NVDA's own add-on installation, which then offers to restart
+  NVDA.
+- No freeze or crash while updating: progress is spoken safely, only one check or download runs
+  at a time, and a check always ends, even without internet.
+- From an older version: 1.1.6, 1.1.7, 2.0 and 2.1.0 offer this version through their own updater
+  (restart NVDA after it is installed). 2.0.1 and 2.0.2 have no updater: download and install this
+  version once.
+
 ## [2.1.0] - 2026-11-05
 
 - Fixed an issue where the add-on did not stop properly when turned off, preventing conflicts with other add-ons.

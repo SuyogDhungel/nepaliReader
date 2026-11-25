@@ -22,3 +22,9 @@ This work has been possible through the support of National University
 of Computer and Emerging Sciences (NUCES), Pakistan, and Pan Asia
 Networking (PAN) program of International Development Research Center
 (IDRC), Canada.
+
+----
+nepaliFreq.dat (word counts, added in Nepali Reader 2.2.0)
+Counts of the words in about 350,000 sentences of Nepali news collected by the nlp-doko project
+(Team Naya, https://github.com/Team-Naya/nlp-doko, published as an open-source NLP database).
+Only the words and how often each occurs are kept, not the sentences.

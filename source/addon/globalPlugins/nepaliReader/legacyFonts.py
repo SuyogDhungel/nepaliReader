@@ -725,6 +725,50 @@ def _visargaOrColon(m):
 	return w + ":"
 
 
+# A word cannot begin with a vowel sign, so a " ' or “ at the start of a word (Preeti's ू, ु, ँ)
+# is a quotation mark around the word, and the same mark at its end closes it: "g]kfn" is "नेपाल",
+# not ूनेपालू. Only for text whose font is not known to be Preeti.
+_OPEN_QUOTES = {'"': '"', "'": "'", "\u201c": "\u201d"}
+
+
+def _splitQuoted(text):
+	"""[(open quote or None, text, close quote)] with quoted words apart, or None if there are none."""
+	parts = re.split(r"(\s+)", text)
+	out = []
+	plain = ""
+	found = False
+	pending = None  # the closing mark of a quote opened in an earlier word ("g]kfn a}+s")
+	for p in parts:
+		q = p[:1]
+		if q in _OPEN_QUOTES and len(p) > 1 and p[1] not in _OPEN_QUOTES and not p[1].isspace():
+			found = True
+			if plain:
+				out.append((None, plain, ""))
+				plain = ""
+			inner = p[1:]
+			close = _OPEN_QUOTES[q]
+			cl = ""
+			if len(inner) > 1 and inner.endswith(close):
+				inner, cl = inner[:-1], close
+				pending = None
+			else:
+				pending = close
+			out.append((q, inner, cl))
+		elif pending and len(p) > 1 and p.endswith(pending) and not p.isspace():
+			if plain:
+				out.append((None, plain, ""))
+				plain = ""
+			out.append(("", p[:-1], pending))
+			pending = None
+		else:
+			plain += p
+	if not found:
+		return None
+	if plain:
+		out.append((None, plain, ""))
+	return out
+
+
 def convert(text, encoding="preeti", bf=None, trusted=False, table=None):
 	if not trusted and "&" in text and ";" in text and any(ent in text for ent in ("&#", "&amp;", "&quot;", "&gt;", "&lt;", "&apos;")):
 		import html
@@ -733,6 +777,10 @@ def convert(text, encoding="preeti", bf=None, trusted=False, table=None):
 		return krutiDevToUnicode(text)
 	if trusted:
 		return preetiFamilyToUnicode(text, encoding, _table=table, bf=bf, trusted=True)
+	if any(q in text for q in _OPEN_QUOTES):
+		quoted = _splitQuoted(text)
+		if quoted is not None:
+			return "".join((q + (convert(t, encoding, bf=bf, table=table) if t else "") + cl) if q is not None else (convert(t, encoding, bf=bf, table=table) if t.strip() else t) for q, t, cl in quoted)
 	# (a "." between digits draws a danda in Preeti and is kept as the danda the page shows)
 	out = preetiFamilyToUnicode(text, encoding, bf=bf)
 	if "ॅ" in out:

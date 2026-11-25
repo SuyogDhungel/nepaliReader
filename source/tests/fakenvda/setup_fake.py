@@ -104,4 +104,5 @@ mod('inputCore')
 mod('cursorManager', CursorManager=type('CursorManager', (), {'script_copyToClipboard': lambda s, g: None}))
 spm.speakSelectionChange = lambda *a, **k: None
 sp.speakSelectionChange = lambda *a, **k: None
+spm._getSelectionMessageSpeech = lambda message, text: [message % text] if isinstance(text, str) else [message.split('%s')[0]] + list(text)
 

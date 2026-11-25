@@ -30,6 +30,7 @@
 <li>Otherwise a built-in detector (letter statistics plus a 234,000-word English dictionary) recognises legacy-font lines. Programming code, web addresses and e-mail addresses are not converted.</li>
 <li>Once a line in a window is confirmed as Preeti, short pieces in that same window (single words, letters while arrowing) are also read as Preeti.</li>
 <li>On web pages and in chat apps (Chrome, Edge, Firefox, WhatsApp, Messenger and similar), text is converted only when the page uses a Preeti or similar font. PDFs opened in a browser are checked like other documents.</li>
+<li>In code editors and terminals (VS Code, Antigravity, Cursor, Visual Studio, Windows Terminal, PowerShell and similar) text is converted only when its font is Preeti or a similar font: what you type there stays English.</li>
 <li>Single letters and very short words cannot always be told apart from English on their own. Once one line in a window is confirmed as Preeti, short pieces in that window are read as Preeti too. Use "always convert" (Settings, Nepali Reader) for a document that is still missed.</li>
 </ol>
 <h2>PDFs</h2>
@@ -38,7 +39,7 @@
 <li>Every line you read (arrow keys, say all) is spoken from the rebuilt text.</li>
 <li>Moving by character (left / right arrow) accurately speaks the exact letter or vowel sign without repetition.</li>
 <li>Moving by word (Ctrl+left / right) says the real word.</li>
-<li>Selecting (Shift+arrows) and copying (Ctrl+C) give the real text.</li>
+<li>Selecting (Shift+arrows) and copying (Ctrl+C) give the real text, also the "selected ..." NVDA says when you come back to a PDF that has text selected. A selection that begins or ends inside a letter reads the letters selected.</li>
 <li>A PDF whose font has no Preeti name but whose letters are drawn as Devanagari (an "untagged" Preeti PDF) is recognised from the shapes of its letters and converted.</li>
 <li>If the PDF file cannot be found or read, the repairs below are used instead.</li>
 </ul>
@@ -56,15 +57,18 @@
 <li>Unicode Devanagari PDFs whose text layer is broken (common with PDFs made in InDesign or compressed with iLovePDF): the text NVDA gets has doubled vowel signs (नााराायणीी), broken characters (विपद्), signs split off with spaces (कुु ल, रहेकाे ा) and similar faults. These are repaired as you read. Words split by a space are joined only when the joined form is a word in the Nepali dictionary. Once a document is found to be broken, the add-on remembers it while that window is open.</li>
 <li>PDFs made with Microsoft Word ("Save as PDF") store some letters wrongly: ि as त/ज/ट, ट as ि, reph as य, ु one letter too far right (घिना for घटना, जजल्ला for जिल्ला, पूणय for पूर्ण). These swaps are undone when the result is a dictionary word.</li>
 <li>PDFs from LibreOffice and from browsers ("print to PDF") repeat pieces of words or put spaces inside words. These are repaired the same way.</li>
+<li>Many PDFs put a vowel sign drawn over or under a letter (ु ू ृ े ै ं ँ) after the next letter, and the reph after its letter: शल्ुक, सवे ा, अनसु ार, सक्नछे, परिमाजर्न for शुल्क, सेवा, अनुसार, सक्नेछ, परिमार्जन. The same happens to Preeti words inside such a PDF (zN's for शुल्क, as+} for बैंक). The signs are put back, a sign cut off with a space goes back to its word, and words the viewer glued together are separated. A word is changed only into a known word, and only where the line or the document shows this pattern. Text copied out of such a PDF into a web page or Word is repaired the same way.</li>
 <li>When a document's text is damaged, the add-on reads the whole document once, in the background, and learns that document's own letter pattern: each PDF made with Word stores its own wrong letters, sometimes like a code (ि stored as ग, ष्ट्र or च; ग, ध and ख stored as ि; व stored as र्). A stored piece may have several meanings; each word is decoded to the meaning that is a dictionary word. When it has learned the pattern it says "learned this document's letter pattern". Words that are already real words are never changed.</li>
 <li>Place names of Nepal (districts, municipalities, rural municipalities) and common bulletin words are included, so they can be checked too.</li>
 <li>The add-on decides per document whether its text is damaged: a fault that never occurs in correct text, or a trial repair that turns many unknown words into real words. Correct documents are left alone.</li>
 <li>Names and new words that are not in the dictionary cannot always be repaired.</li>
 </ul>
+<h2>Updates</h2>
+<p>NVDA menu, Tools, Nepali Reader, "Check for updates" looks for a new version on the project's GitHub page; the add-on also looks once a day (Settings, Nepali Reader, to turn that off). When there is one, a window shows everything that changed since your version in a text box you can read line by line with the arrow keys, with "Update now" and "Later" buttons. Update now downloads the new version, checks that the download is whole, and hands it to NVDA, which asks to update and then offers to restart. The NVDA Add-on Store is not needed.</p>
 <h2>Voice</h2>
 <p>Converted text is marked as Nepali so NVDA can switch voice. Use a synthesizer with a Nepali voice, for example eSpeak NG (built in) or the Hear2Read add-on, and keep "Automatic language switching" on in NVDA's voice settings.</p>
 <h2>Authors and Contributors</h2>
 <p>Creator and Author: Suyog Dhungel. Contributor: Roshan Gautam. Project repository: <a href="https://github.com/SuyogDhungel/nepaliReader">https://github.com/SuyogDhungel/nepaliReader</a>.</p>
 <h2>Credits</h2>
-<p>Kruti Dev rules ported from kru2uni / krutidev-unicode (ISC). Preeti family tables cross-checked with npttf2utf. English word list: Webster's Second International (public domain). Nepali word list: Nepali Hunspell dictionary, Madan Puraskar Pustakalaya (LGPL 2.1). Detector statistics derived from wordfreq.</p>
+<p>Kruti Dev rules ported from kru2uni / krutidev-unicode (ISC). Preeti family tables cross-checked with npttf2utf. English word list: Webster's Second International (public domain). Nepali word list: Nepali Hunspell dictionary, Madan Puraskar Pustakalaya (LGPL 2.1). Nepali word counts: from the nlp-doko news corpus (Team Naya; words and counts only). Detector statistics derived from wordfreq.</p>
 </body></html>

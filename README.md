@@ -1,125 +1,157 @@
 # Nepali Reader for NVDA
 
-[![Download Add-on](https://img.shields.io/badge/Download-nepaliReader--2.0.1.nvda--addon-brightgreen?style=for-the-badge&logo=nvda)](https://github.com/SuyogDhungel/nepaliReader/releases/download/v2.0.1/nepaliReader-2.0.1.nvda-addon)
+[![Download Add-on](https://img.shields.io/badge/Download-nepaliReader--2.2.0.nvda--addon-brightgreen?style=for-the-badge)](https://github.com/SuyogDhungel/nepaliReader/releases/download/v2.2.0/nepaliReader-2.2.0.nvda-addon)
 [![License: GPL v2](https://img.shields.io/badge/License-GPL%20v2-blue.svg)](LICENSE)
 [![NVDA Compatibility](https://img.shields.io/badge/NVDA-2024.1%20to%202026.2-purple.svg)](https://www.nvaccess.org/)
 
-**Nepali Reader** is a free, open-source NVDA screen reader add-on created to solve the long-standing Devanagari reading issues faced by blind and visually impaired computer users in Nepal.
+**Nepali Reader** is a free, open-source add-on for the NVDA screen reader. It makes NVDA read Nepali documents correctly: Preeti and other old Nepali fonts, and PDFs whose Nepali text comes out jumbled. Everything works offline.
+
+**Latest version: 2.2.0** · [Download](https://github.com/SuyogDhungel/nepaliReader/releases/download/v2.2.0/nepaliReader-2.2.0.nvda-addon) · [What changed](CHANGELOG.md)
+
+---
+
+## Why this add-on exists
+
+Blind and visually impaired computer users in Nepal meet three problems in everyday documents:
+
+1. **Old Nepali fonts.** Acts, gazettes, notices, newspapers and school books are often typed in **Preeti**, **Kantipur**, **Sagarmatha**, **Fontasy Himali**, **PCS Nepali** or (for Hindi) **Kruti Dev**. The computer stores these as English letters, so NVDA reads `g]kfn` instead of `नेपाल`.
+2. **Damaged PDF text.** PDFs saved from Microsoft Word, InDesign or web tools store their Nepali text wrongly: vowel signs out of place, letters missing, conjuncts broken (`शल्ुक` for `शुल्क`).
+3. **Silent numbers.** Some voices skip Devanagari digits (`०–९`), so dates and section numbers go unheard.
+
+Nepali Reader fixes all three. For a PDF it reads the PDF file itself, the letters the page actually draws, so NVDA says what is printed.
+
+---
+
+## What's new in 2.2.0
+
+* **Highly accurate reading.** Many parts of how the add-on reads have been changed, so NVDA reads Nepali documents as they are written: PDFs, Preeti and other legacy fonts, Word and web pages.
+* **Reading by line, word and character, selecting and copying** all give the same accurate text.
+* **English stays English**, also in code editors and terminals.
+* **Updating without the Add-on Store:** *Check for updates* shows everything that changed since your version, then downloads, checks and installs the new version, and offers to restart NVDA.
+
+Details: [CHANGELOG.md](CHANGELOG.md).
+
+---
+
+## Download and install
+
+1. Download **[nepaliReader-2.2.0.nvda-addon](https://github.com/SuyogDhungel/nepaliReader/releases/download/v2.2.0/nepaliReader-2.2.0.nvda-addon)** (from the [Releases page](https://github.com/SuyogDhungel/nepaliReader/releases)).
+2. Open your **Downloads** folder and press **Enter** on the file.
+3. NVDA asks whether to install the add-on (or to update it, if an older version is installed). Press **Yes** (`Alt+Y`).
+4. When NVDA offers to restart, choose **Yes**.
+
+Nepali Reader is on from the start. Nothing else needs setting up.
+
+*Other way:* NVDA menu (`NVDA+N`) → Tools → Add-on Store → *Install from external file…*, choose the downloaded file, then restart NVDA.
+
+---
+
+## Updating
+
+**From version 2.2.0 on:** NVDA menu (`NVDA+N`) → Tools → Nepali Reader → **Check for updates…**. The add-on also checks once a day. You can turn that off in Settings → Nepali Reader → *Automatically check for updates from GitHub*.
+
+When a new version is out, a window opens:
+
+* a text box with **everything that changed since your version**. Read it line by line with the arrow keys;
+* **Update now** downloads the new version. NVDA says the progress at 25, 50 and 75%. The download is checked: a download that was cut short, an error page or a wrong file is never installed;
+* NVDA then asks to update the add-on and offers to restart. The new version starts after the restart;
+* **Later** closes the window.
+
+Only one check or download runs at a time, and all of it happens in the background: NVDA keeps reading while the update downloads.
+
+**From an older version:**
+
+| You have | How to get 2.2.0 |
+|---|---|
+| 1.1.6, 1.1.7, 2.0 or 2.1.0 | Your version's own updater offers 2.2.0 (NVDA menu → Tools → Nepali Reader → Check for updates, or the daily check). Answer **Yes**. When it is installed, **restart NVDA**. |
+| 2.0.1 or 2.0.2 (also the Add-on Store version), or 1.1.5 and older | These versions have no updater. Download the file above and install it. Your settings are kept. |
+
+After updating, each PDF is read again once, in the background, the first time you open it. Reading starts at once while that happens.
+
+---
+
+## How to use it
+
+### Keys
+
+| Key | What it does |
+|---|---|
+| **`NVDA+Ctrl+Shift+Space`** | Nepali mode on or off. NVDA says *"Nepali mode on"* or *"Nepali mode off"*. Off is completely off: nothing is hooked into NVDA and no work runs. |
+| **`NVDA+Ctrl+L`** | Opens the Nepali Reader settings. |
+| **`Ctrl+C`** | Works as usual. In Nepali mode the copied text is correct Unicode Nepali (Preeti converted, PDF text rebuilt). |
+
+The other commands (convert selected text, legacy font mode, default legacy font) have no key by default. Use the menu, or give them a key: NVDA menu → Preferences → Input gestures → Nepali Reader → choose the command → **Add** → press your keys → OK.
 
 > [!TIP]
-> **Recommendation**: Keep Nepali Mode OFF (`NVDA + Ctrl + Shift + Space`) when working in English documents, browsing English websites, or programming. Toggle it ON when reading Nepali documents, gazettes, or PDFs.
+> Keep Nepali mode **off** (`NVDA+Ctrl+Shift+Space`) when you work in English documents, browse English websites or write code. Turn it **on** for Nepali documents, gazettes and PDFs.
+
+### Menu
+
+NVDA menu (`NVDA+N`) → Tools → **Nepali Reader**:
+
+* **Nepali mode**: on or off.
+* **Convert selected text or clipboard**: converts the selection (or the clipboard) to Unicode, copies it and reads it.
+* **Check for updates…**
+* **Settings…**
+
+### Settings
+
+NVDA menu → Preferences → Settings → **Nepali Reader** (or `NVDA+Ctrl+L`):
+
+* Nepali mode, legacy font reading (automatic, always convert, off) and the default legacy font
+* read the PDF file itself for the exact text (on by default)
+* repair jumbled Unicode Devanagari from PDFs
+* mark converted text as Nepali so the voice can switch language
+* table header announcements in PDF tables
+* automatic update check
 
 ---
 
-## 📌 Why This Add-on Was Created
+## Reading PDFs and documents
 
-Screen reader users in Nepal regularly encounter two major barriers when reading documents:
+* **Up / Down Arrow** read line by line, as printed.
+* **Left / Right Arrow** move by character. Each key says its letter or vowel sign once. In a Preeti PDF, a key that changes the sign before it says the new sign (ा then ो).
+* **Ctrl+Left / Right Arrow** move by whole Nepali words.
+* **Shift+Arrows** select. NVDA says exactly what is selected, in Nepali.
+* **Tables, headings and formatting**: in Chrome, Edge and Brave the add-on gives NVDA the PDF's tables, headings, bold, italic, underline, alignment and indentation at the right words. `Ctrl+Alt+Arrows` move by table cell, `T` jumps to the next table, `H` to the next heading. A copied table pastes into Word or Excel as a real table.
+* **Works in:** Chrome, Edge, Brave and Firefox (also Chrome's "PDF Viewer" extension), Adobe Reader, Foxit, SumatraPDF, Word, Notepad, web pages and e-mail.
+* **Scanned PDFs** (pictures of pages) have no text to read. Use an OCR add-on for those.
+* **Numbers and dates** like `२०७५`, `१.`, `(१)` are spoken in Nepali.
+* **Voices:** converted text is marked as Nepali, so NVDA can switch to a Nepali voice: eSpeak NG (built in), Hear2Read, or a voice through the **MultiLang** add-on. Keep *Automatic language switching* on in NVDA's voice settings.
 
-1. **Legacy Devanagari Fonts**: Official government acts, gazettes, legal notices, newspapers, and school materials are frequently typed in legacy fonts like **Preeti**, **Kantipur**, **Sagarmatha**, **Fontasy Himali**, and **PCS Nepali**. Screen readers see these fonts as plain English characters, reading meaningless gibberish (such as reading `"g]kfn"` instead of `"नेपाल"`).
-2. **Damaged PDF Text Layers**: When government offices and organizations export documents to PDF from Microsoft Word ("Save as PDF"), InDesign, or web print tools, the underlying Devanagari Unicode text layer becomes heavily jumbled. Matras appear out of order, letters are missing, and conjuncts are broken.
-3. **Silent Numbers in eSpeak**: Screen reader synthesizers like eSpeak often skip or remain silent on Devanagari numerals (`०, १, २, ३, ४, ५, ६, ७, ८, ९`), making section numbers, act years, and dates unreadable.
-
-**Nepali Reader** solves all of these problems automatically and completely **offline**. It reconstructs the text directly from the font shapes and tables inside the document so NVDA speaks natural, accurate Devanagari without any internet connection.
-
----
-
-## 📥 How to Download and Install
-
-You can install and update **Nepali Reader** directly from the official **NVDA Add-on Store** (`NVDA + N` $\to$ **Tools** $\to$ **Add-on Store** $\to$ **Available add-ons** $\to$ search for **Nepali Reader**), or manually:
-
-1. Download the add-on file:
-   👉 [**Click here to download nepaliReader-2.0.1.nvda-addon**](https://github.com/SuyogDhungel/nepaliReader/releases/download/v2.0.1/nepaliReader-2.0.1.nvda-addon)
-2. Once downloaded, open your **Downloads** folder and press **Enter** on `nepaliReader-2.0.1.nvda-addon`.
-3. NVDA will ask: *"Are you sure you want to install this add-on?"* — Press **Yes** (`Alt + Y`).
-4. When prompted to restart NVDA, select **Yes**.
-5. That is all! Nepali Reader activates automatically upon startup.
-
-*Alternative installation method*: Open the **NVDA Menu (`NVDA + N`) $\to$ Tools $\to$ Add-on Store**, switch to the **Installed add-ons** tab, choose **Install from external file...**, select the downloaded file, and restart NVDA.
+The first time you open a long PDF, the add-on reads the file in the background. A small notice takes under a second; a 430-page book takes about a minute. You can read straight away. The work pauses whenever you press a key, so NVDA stays quick. The result is saved, so the next time is instant.
 
 ---
 
-## 🧭 How to Use This Tool
+## Troubleshooting
 
-### 1. Using via the NVDA Menu
-
-You can control all features directly through the NVDA menu using your keyboard:
-
-* **Toggle Nepali Mode on / off**:
-  1. Press **`NVDA + N`** to open the NVDA Menu.
-  2. Press **`T`** to open the **Tools** submenu.
-  3. Navigate to **Nepali Reader** and press **Enter**.
-  4. Check or uncheck **Nepali mode** to turn the add-on on or off.
-
-* **Convert Highlighted Text or Clipboard**:
-  1. If you are in an application where text is not reading, select the text (or copy it to your clipboard).
-  2. Press **`NVDA + N` $\to$ Tools $\to$ Nepali Reader $\to$ Convert selected text or clipboard**.
-  3. NVDA will convert the text to Unicode, copy the clean text to your clipboard, and read it aloud immediately.
-
-* **Add-on Settings**:
-  1. Press **`NVDA + N` $\to$ Preferences $\to$ Settings**.
-  2. In the categories list, press **`N`** until you reach **Nepali Reader**.
-  3. Here you can configure legacy font detection, switch languages automatically, or adjust repair settings.
+* **Something reads wrong or NVDA feels slow:** press `NVDA+Ctrl+Shift+Space` to switch Nepali mode off. NVDA is then exactly as without the add-on.
+* **Reporting a problem:** open an [Issue](https://github.com/SuyogDhungel/nepaliReader/issues) with the document (or a page of it) and the add-on's log, `%APPDATA%\nvda\nepaliReader\diag.log`. The log notes what was read and what the add-on made of it.
+* **A PDF in a browser is not read exactly:** the add-on needs the PDF file. For a web PDF it downloads the file once; a copy in Downloads, Desktop or Documents is used too.
+* **Update check says it cannot connect:** check your internet connection and try again later. Nothing is changed until a whole, checked download is ready.
 
 ---
 
-### 2. Default Keyboard Shortcuts
+## For developers
 
-| Shortcut | What It Does |
-|---|---|
-| **`NVDA + Ctrl + Shift + Space`** | **Toggle Nepali Mode**: turns the add-on on or off. Off is completely off: nothing is hooked into NVDA and no work runs. NVDA announces *"Nepali mode on"* or *"Nepali mode off"*. |
-| **`NVDA + Ctrl + L`** | **Open Settings**: directly opens the Nepali Reader settings dialog. |
-| **`Ctrl + C`** | **Smart Copy**: while Nepali mode is on, copying selected text puts clean Unicode Devanagari on the clipboard. |
-
-The other commands (convert selected text, legacy font mode, default font family) have no key by default. Use the NVDA menu, Tools, Nepali Reader, or assign a key yourself as described below.
+* Source: `source/addon` (the add-on), `source/tests` (tests). Build with `python build.py`.
+* Tests run without NVDA: `python tests/<test>.py` from the `source` folder. Some read real documents when a folder is given: `NEPALI_TEST_PDFS`, `NEPALI_TEST_LAWS`, `NEPALI_TEST_BOOK`.
 
 ---
 
-### 3. How to Create or Customize Your Own Shortcuts
+## Changelog
 
-If any shortcut conflicts with another add-on or if you prefer different keys, you can assign your own:
+See [CHANGELOG.md](CHANGELOG.md) for every version.
 
-1. Press **`NVDA + N`** to open the NVDA Menu.
-2. Go to **Preferences** and press Enter on **Input gestures...**.
-3. In the tree view, press **`N`** until you find the **Nepali Reader** category, then press **Right Arrow** to expand it.
-4. You will see a list of actions:
-   * *Toggle Nepali mode*
-   * *Convert the selected text or the clipboard to Unicode*
-   * *Legacy font reading: automatic, always convert, off*
-   * *Default legacy font family*
-5. Select the action you wish to change.
-6. Press **`Alt + A`** (or Tab to the **Add** button and press Enter).
-7. Press the exact key combination you want to use on your keyboard (any free combination).
-8. Select whether to use this shortcut for `all layouts` or your current keyboard layout and press **Enter**.
-9. Tab to the **OK** button and press Enter to save your new shortcut.
+## License
 
----
+GNU General Public License v2.0 (GPL-2.0). See [LICENSE](LICENSE).
 
-## 📑 Reading PDFs and Documents
+## Project and support
 
-* **Up / Down Arrow**: Reads line by line. Scrambled government PDFs are rebuilt into clear Nepali sentences.
-* **Left / Right Arrow**: Moves character by character. Accurately speaks individual characters and vowel signs without repetition.
-* **Ctrl + Left / Right Arrow**: Moves word by word through real Devanagari words.
-* **Shift + Arrows**: Selects text accurately without broken characters.
-* **Tables, headings and formatting in place**: Chrome, Edge and Brave give NVDA a PDF's text as plain lines. The add-on reads the PDF's tables (from the structure Word saves, or from the drawn cell borders), its headings and what the page draws (bold, italic, underline, alignment, indentation) and gives them to NVDA at the exact words, so NVDA reports rows, columns, headers, heading levels and formatting as on a web page, per its Document Formatting settings. Ctrl+Alt+Arrows move by table cell, T jumps to the next table, H to the next heading. Copying (Ctrl+C) a selection that includes table cells pastes into Word or Excel as a real table, and as tab-separated rows in plain text.
-* **Numbers & Dates**: Dates like `२०७५` and numbers like `१.`, `(१)`, `२३` are announced in spoken Nepali via eSpeak.
-* **MultiLang & Multi-Voice TTS Support**: Seamlessly integrates with the **MultiLang** virtual synthesizer add-on. If MultiLang is active, Nepali Reader ensures Devanagari text is correctly recognized as Nepali (`ne`) rather than forced to Hindi (`hi`), and automatically routes speech to installed Nepali TTS voices (such as **Hear2Read Indic Voices** with Google Nepali voice or **eSpeak NG**) across Word documents, PDFs, and web browsers.
-
----
-
-## 📜 Changelog
-
-See [CHANGELOG.md](CHANGELOG.md) for the full history of every version.
-
----
-
-## ⚖️ License
-
-Distributed under the **GNU General Public License v2.0 (GPL-2.0)**. See [LICENSE](LICENSE) for details.
-
-## 🤝 Project & Support
-* **Creator & Author**: Suyog Dhungel
-* **Contributor**: Roshan Gautam
-* **Project**: Nepali Reader for NVDA
-* **GitHub Repository**: [https://github.com/SuyogDhungel/nepaliReader](https://github.com/SuyogDhungel/nepaliReader)
-* **Feedback & Issues**: Please report issues or suggest improvements by opening an [Issue](https://github.com/SuyogDhungel/nepaliReader/issues) on GitHub.
-* **Tags**: `nepali`, `nvda`, `nvda-addon`, `preeti-font`, `screen-reader`, `accessibility`, `devanagari`, `kantipur-font`
+* **Creator and author:** Suyog Dhungel
+* **Contributor:** Roshan Gautam
+* **Repository:** [github.com/SuyogDhungel/nepaliReader](https://github.com/SuyogDhungel/nepaliReader)
+* **Feedback and issues:** [open an Issue](https://github.com/SuyogDhungel/nepaliReader/issues)
+* **Credits:** Kruti Dev rules from kru2uni / krutidev-unicode (ISC). Preeti tables cross-checked with npttf2utf. Nepali word list: Nepali Hunspell dictionary, Madan Puraskar Pustakalaya (LGPL 2.1). Nepali word counts: nlp-doko news corpus. English word list: Webster's Second International (public domain).
+* **Tags:** `nepali`, `nvda`, `nvda-addon`, `preeti-font`, `screen-reader`, `accessibility`, `devanagari`, `kantipur-font`
