@@ -297,7 +297,10 @@ def _findRecentPdfByTitle(title):
 		meta_title = _extractPdfTitle(p)
 		if meta_title:
 			m_low = meta_title.lower()
-			if clean_low == m_low or (len(m_low) >= 12 and len(clean_low) >= 12 and (clean_low in m_low or m_low in clean_low)):
+			# the window shows the PDF's title (perhaps cut short), not a longer title that only
+			# holds it: a Teams window "Assignments | Example Open College | ..." is not the
+			# PDF whose title is "Example Open College"
+			if clean_low == m_low or (len(clean_low) >= 12 and m_low.startswith(clean_low)):
 				return p
 
 	# 1. Match title byte substring in recent PDFs (first 5MB)

@@ -357,7 +357,7 @@ class _PlainTextInfo:
 
 def keyOf_(info):
 	try:
-		return pdfText.keyOf(info.text or "")
+		return pdfText.keyOf(_memoText(_unwrap(info)))
 	except Exception:
 		return ""
 
@@ -396,6 +396,114 @@ def _unwrap(info):
 	while isinstance(info, (_PlainTextInfo, _ConvertingTextInfo)):
 		info = info.__dict__["_nrInfo"]
 	return info
+
+
+def _wordSetOf(idx):
+	"""The words of a PDF index (a set), made once."""
+	ws = getattr(idx, "_wordSet", None)
+	if ws is None:
+		ws = set()
+		for fixed, _amap, _enc, key in idx.words:
+			w = (fixed if fixed is not None else key).strip(".,;:!?()[]{}\"'‘’“”-–—।॥|/")
+			if w:
+				ws.add(w)
+		idx._wordSet = ws
+	return ws
+
+
+class _ReadMemo:
+	"""What the add-on asked the document during one read (one key), by place in the document.
+
+	Every question to the browser (the text of a range, the line around a place) goes to another
+	process and is what makes reading slow: one arrow key in a PDF asked Chrome for the same line
+	four or five times, and twice more for the text before a place whose length the offsets
+	already give. Within one read each answer is asked once; the next read starts empty, so
+	nothing is ever read from an older copy of the document."""
+
+	MAX_AGE = 0.5  # (a read that was not started through the usual way still starts afresh)
+
+	def __init__(self):
+		self.texts = {}
+		self.lines = {}
+		self.neighbours = {}
+		self.t = 0.0
+
+	def begin(self):
+		self.texts.clear()
+		self.lines.clear()
+		self.neighbours.clear()
+		self.t = time.monotonic()
+
+	def fresh(self):
+		if time.monotonic() - self.t > self.MAX_AGE:
+			self.begin()
+
+
+_MEMO = _ReadMemo()
+
+
+def _offsets(ti):
+	"""(start, end) of a TextInfo that works with offsets (browse mode in Chrome, Edge and
+	Firefox, edit fields), or None."""
+	try:
+		s = ti._startOffset
+		e = ti._endOffset
+	except Exception:
+		return None
+	if type(s) is int and type(e) is int and 0 <= s <= e:
+		return s, e
+	return None
+
+
+def _memoText(ti):
+	"""ti.text, asked of the document once per read for each range."""
+	o = _offsets(ti)
+	if o is None:
+		return ti.text or ""
+	_MEMO.fresh()
+	k = (id(getattr(ti, "obj", None)), o)
+	t = _MEMO.texts.get(k)
+	if t is None:
+		t = ti.text or ""
+		_MEMO.texts[k] = t
+	return t
+
+
+def _memoLine(ti):
+	"""A copy of ti expanded to its line, the line asked of the document once per read (a line
+	depends only on where the range starts)."""
+	o = _offsets(ti)
+	k = None
+	if o is not None:
+		_MEMO.fresh()
+		k = (id(getattr(ti, "obj", None)), o[0])
+		got = _MEMO.lines.get(k)
+		if got is not None:
+			line = ti.copy()
+			try:
+				line._startOffset, line._endOffset = got
+				if _offsets(line) == got:
+					return line
+			except Exception:
+				pass
+	line = ti.copy()
+	line.expand(textInfos.UNIT_LINE)
+	if k is not None:
+		lo = _offsets(line)
+		if lo is not None:
+			_MEMO.lines[k] = lo
+			# (the line's own start is the same line: asked next from there, it is known)
+			_MEMO.lines[(k[0], lo[0])] = lo
+	return line
+
+
+def _offsetIn(line, lineText, ti):
+	"""Where ti starts in its line, from the offsets when they count the line's characters
+	(None when they do not: then the text before it is asked for)."""
+	o, lo = _offsets(ti), _offsets(line)
+	if o is None or lo is None or not lo[0] <= o[0] <= lo[1] or len(lineText) != lo[1] - lo[0]:
+		return None
+	return o[0] - lo[0]
 
 
 _PLAIN_NUMBER = re.compile(r"^[/(]?[0-9]+(?:[.,:/\-][0-9]+)*[%)]?$|^[/(]?[0-9]*[.,/][0-9]+[%)]?$")
@@ -554,13 +662,26 @@ def _neighbourLine(info, forward):
 	"""The text of the line before (or after) a TextInfo's text, or ""."""
 	try:
 		raw = _unwrap(info)
+		o = _offsets(raw)
+		k = None
+		if o is not None:
+			_MEMO.fresh()
+			k = (id(getattr(raw, "obj", None)), o, forward)
+			got = _MEMO.neighbours.get(k)
+			if got is not None:
+				return got
 		other = raw.copy()
 		other.collapse(end=forward)
 		if not forward:
 			if other.move(textInfos.UNIT_LINE, -1) == 0:
+				if k is not None:
+					_MEMO.neighbours[k] = ""
 				return ""
 		other.expand(textInfos.UNIT_LINE)
-		return other.text or ""
+		text = _memoText(other)
+		if k is not None:
+			_MEMO.neighbours[k] = text
+		return text
 	except Exception:
 		return ""
 
@@ -663,18 +784,20 @@ def _lineSpans(info):
 		cur.collapse()
 		out = []
 		for _k in range(400):
-			line = cur.copy()
-			line.expand(textInfos.UNIT_LINE)
-			pre = line.copy()
-			pre.setEndPoint(cur, "endToStart")
+			line = _memoLine(cur)
 			piece = line.copy()
 			piece.setEndPoint(cur, "startToStart")
 			if piece.compareEndPoints(end, "endToEnd") > 0:
 				piece.setEndPoint(end, "endToEnd")
-			text = line.text or ""
-			pt = piece.text or ""
+			text = _memoText(line)
+			pt = _memoText(piece)
 			if pdfText.keyOf(pt):
-				out.append((line, text, len(pre.text or ""), len(pt)))
+				off = _offsetIn(line, text, cur)
+				if off is None:
+					pre = line.copy()
+					pre.setEndPoint(cur, "endToStart")
+					off = len(_memoText(pre))
+				out.append((line, text, off, len(pt)))
 			if line.compareEndPoints(end, "endToEnd") >= 0:
 				break
 			nxt = line.copy()
@@ -3424,15 +3547,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		idx = self._readyIndex(None)
 		if idx is None:
 			return None
-		ws = getattr(idx, "_wordSet", None)
-		if ws is None:
-			ws = set()
-			for fixed, _amap, _enc, key in idx.words:
-				w = (fixed if fixed is not None else key).strip(".,;:!?()[]{}\"'‘’“”-–—।॥|/")
-				if w:
-					ws.add(w)
-			idx._wordSet = ws
-		return ws
+		return _wordSetOf(idx)
 
 	def _readyIndex(self, obj):
 		"""The PDF index of the foreground window if it is already built (never starts or waits)."""
@@ -3527,6 +3642,18 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			st.full = True
 			st.status = "ready"
 			self._cache.clear()
+			# the tables a lookup needs, built here and not at the first key (NVDA froze for up to
+			# three seconds on a long PDF), resting while the user reads
+			t1 = time.monotonic()
+			try:
+				idx.prepare(_Yield(stopped=stopped))
+				_wordSetOf(idx)
+				diag.write("pdf: lookup tables ready in %.1f s" % (time.monotonic() - t1))
+			except _Stopped:
+				raise
+			except Exception:
+				# (the index stays ready: a lookup builds what it needs itself)
+				diag.exception("lookup tables")
 		except _Stopped:
 			# Nepali mode was switched off while this PDF was being read
 			st.status = "none"
@@ -3585,6 +3712,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
 	def _indexText(self, info, idx, text):
 		"""The real text for one run of what the viewer gave, or None if the index doesn't know it."""
+		if "\u2068" in text or "\u2069" in text:
+			# the viewer's own labels ("Page ⁨1⁩ of ⁨12⁩", the page thumbnails): never text of the
+			# PDF (looking them up word by word took seconds on a long PDF)
+			return None
 		joined = _joinBrokenLines(idx, text)
 		if joined != text:
 			# one line of the page that the viewer broke into several (a sign below its letter)
@@ -3612,7 +3743,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			# search which can hit an English number or viewer toolbar instead.
 			ctx = self._lineContext(info) if info is not None else None
 			if ctx and pdfText.matchKey(ctx[0]) != pdfText.matchKey(s_text):
-				pieces = idx.spanAt(ctx[0], ctx[1], len(info.text or text))
+				pieces = idx.spanAt(ctx[0], ctx[1], len(_memoText(_unwrap(info)) or text))
 				if pieces and all(ok for _pc, ok in pieces):
 					return "".join(pc for pc, _ok in pieces)
 			return None
@@ -3640,7 +3771,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			if ctx:
 				lineText, offset = ctx
 				if pdfText.keyOf(lineText) != key:
-					pieces = idx.spanAt(lineText, offset, len(info.text or text))
+					pieces = idx.spanAt(lineText, offset, len(_memoText(_unwrap(info)) or text))
 		if pieces is None:
 			pieces = idx.lookup(text)
 		if pieces and any(not ok and _isEnglishOutside(idx, pc) for pc, ok in pieces):
@@ -3769,11 +3900,14 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		"""(text of the line holding info, offset of info in it) or None."""
 		try:
 			rawInfo = _unwrap(info)
-			line = rawInfo.copy()
-			line.expand(textInfos.UNIT_LINE)
-			pre = line.copy()
-			pre.setEndPoint(rawInfo, "endToStart")
-			return line.text, len(pre.text)
+			line = _memoLine(rawInfo)
+			text = _memoText(line)
+			off = _offsetIn(line, text, rawInfo)
+			if off is None:
+				pre = line.copy()
+				pre.setEndPoint(rawInfo, "endToStart")
+				off = len(_memoText(pre))
+			return text, off
 		except Exception:
 			return None
 
@@ -4047,6 +4181,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		c = conf()
 		if not isOn():
 			return info.getTextWithFields(formatConfig)
+		_MEMO.begin()
 		if diag.wanted():
 			# (the text NVDA gave is kept from the conversion: asking the document again cost a
 			# second read of every line)
@@ -4073,7 +4208,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		"""Resolves a single character during Left/Right Arrow navigation, repairing hybrid residue,
 		decomposed matras, glued digit keys, Preeti keys, and inverted reph from word context."""
 		fields = info.getTextWithFields(formatConfig)
-		orig_char = info.text or ""
+		orig_char = _memoText(info)
 		if not orig_char:
 			return fields
 
@@ -4125,6 +4260,12 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 						pieces = idx.lookup(line)
 						if pieces and orig_char in "".join(pc for pc, ok in pieces if ok):
 							return fields
+
+		if orig_char in (" ", "\t", "\r", "\n", "\r\n"):
+			# a space or line break is said as it is: nothing below changes it (no word holds it),
+			# and asking the document for its word and the characters around it made every space
+			# in a PDF slow (a third of a second each)
+			return fields
 
 		ctx = self._lineContext(info)
 		word = None
@@ -4380,7 +4521,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
 	def _convertFieldsCore(self, info, formatConfig, c, unit=None):
 		try:
-			rawText = info.text or ""
+			rawText = _memoText(info)
 			if rawText:
 				self._docState().recordWords(rawText)
 		except Exception:
@@ -4468,13 +4609,14 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		same place line reading gives it)."""
 		try:
 			rawInfo = _unwrap(info)
-			line = rawInfo.copy()
-			line.expand(textInfos.UNIT_LINE)
-			pre = line.copy()
-			pre.setEndPoint(rawInfo, "endToStart")
-			text = line.text or ""
-			off = len(pre.text or "")
-			length = max(1, len(rawInfo.text or ""))
+			line = _memoLine(rawInfo)
+			text = _memoText(line)
+			off = _offsetIn(line, text, rawInfo)
+			if off is None:
+				pre = line.copy()
+				pre.setEndPoint(rawInfo, "endToStart")
+				off = len(_memoText(pre))
+			length = max(1, len(_memoText(rawInfo)))
 		except Exception:
 			return None
 		if not pdfText.keyOf(text):
@@ -4507,7 +4649,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			roles = _structureRoles()
 			if roles is None:
 				return fields
-			raw = _unwrap(info).text or ""
+			raw = _memoText(_unwrap(info))
 			if not pdfText.keyOf(raw):
 				return fields
 			if unit in (textInfos.UNIT_CHARACTER, getattr(textInfos, "UNIT_WORD", "word")):
