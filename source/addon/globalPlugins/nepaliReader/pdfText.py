@@ -26,6 +26,7 @@ try:
 	from . import pdfReader
 	from . import sfnt
 	from . import devanagariRepair
+	from . import glyphOrder
 	from . import pdfLayout
 	from .detector import cleanGluedTokens
 except ImportError:
@@ -35,6 +36,7 @@ except ImportError:
 	import pdfReader
 	import sfnt
 	import devanagariRepair
+	import glyphOrder
 	import pdfLayout
 	from detector import cleanGluedTokens
 
@@ -44,7 +46,11 @@ NUKTA = "़"
 REPH = "र्"
 DEP_SIGNS = set("ऺऻािीुूृॄॅॆेैॉॊोौॎॏॕॖॗॢॣऀँंः़")
 INDEPENDENT = set(chr(c) for c in range(0x0904, 0x0915)) | set("ॠॡॲॳॴॵॶॷ")
-INDEX_VERSION = 33
+INDEX_VERSION = 35
+# 2.1.0 replaced a word the index did not know by any document word that starts with the same
+# three or four letters. That is a guess (2.0.9 left it out after real-line tests: चुमनुब्री was
+# read चुन्चेतबाट); a word of the document is now only taken when its letters match.
+STEM_GUESS = False
 STYLE_BOLD = 1
 STYLE_ITALIC = 2
 STYLE_UNDERLINE = 4
@@ -1165,7 +1171,63 @@ class DocIndex:
 			B.append(key.translate(_NORM))
 			pos += len(key)
 		self.B = "".join(B)
+		self._fixMovedSigns(pause)
 		self._buildF()
+
+	def _fixMovedSigns(self, pause=None):
+		"""Signs a PDF maker wrote one letter too far right (शल्ुक for शुल्क, परिमाजर्न for परिमार्जन),
+		also in Preeti words. First the words whose letters cannot be right as they stand; when that
+		shows the document has the pattern (three words proven by the dictionary), also the words
+		that could be right but are no words. A word is only changed into a known word, except a
+		word that cannot be right as it stands."""
+		pattern = glyphOrder.Pattern()
+		self.movedSigns = 0
+		todo = []
+		for n, (fixed, amap, enc, key) in enumerate(self.words):
+			if pause and not n & 255:
+				pause()
+			text = fixed if fixed is not None else key
+			if not text or not glyphOrder._DEVA_RE.search(text):
+				continue
+			lead, core, trail = glyphOrder._split(text)
+			if not core or " " in core:
+				continue
+			if not glyphOrder.valid(core):
+				fx = glyphOrder.fixWord(core, pattern, allowValid=True, force=False)
+				if fx is not None:
+					pattern.note(fx[1])
+					self.words[n] = (lead + fx[0] + trail, None, enc, key)
+					self.movedSigns += 1
+					continue
+				todo.append(n)
+			else:
+				todo.append(n)
+		if not (pattern.shows("mark") or pattern.shows("reph")):
+			# not this document's pattern: only words that cannot be right get the likeliest move
+			for n in todo:
+				fixed, amap, enc, key = self.words[n]
+				text = fixed if fixed is not None else key
+				lead, core, trail = glyphOrder._split(text)
+				if not glyphOrder.valid(core):
+					fx = glyphOrder.fixWord(core, pattern, allowValid=True, force=True)
+					if fx is not None:
+						self.words[n] = (lead + fx[0] + trail, None, enc, key)
+						self.movedSigns += 1
+			return
+		for c, n in enumerate(todo):
+			if pause and not c & 255:
+				pause()
+			fixed, amap, enc, key = self.words[n]
+			text = fixed if fixed is not None else key
+			lead, core, trail = glyphOrder._split(text)
+			fx = glyphOrder.fixWord(core, pattern, allowValid=True, force=True)
+			if fx is None and not glyphOrder.known(core) and len(core) >= 4:
+				sp = glyphOrder.splitGlued(core, pattern)
+				if sp is not None:
+					fx = (" ".join(sp[0]), sp[1])
+			if fx is not None:
+				self.words[n] = (lead + fx[0] + trail, None, enc, key)
+				self.movedSigns += 1
 
 	def _buildF(self):
 		"""F: the real text without spaces (when the viewer already shows correct text, it is found here)."""
@@ -1843,7 +1905,8 @@ class DocIndex:
 				toks.append(t)
 		try:
 			from . import devanagariRepair
-			cl_text = devanagariRepair.cleanShuffled(text, legacyArtifacts=True)
+			# (not the Preeti-leftover clean-up: नेपालका] was read नेपालको, see 2.0.9)
+			cl_text = devanagariRepair.cleanShuffled(text)
 			if cl_text != text:
 				text = cl_text
 		except Exception:
@@ -1853,7 +1916,8 @@ class DocIndex:
 		i = 0
 		while i < len(toks):
 			done = False
-			for span in (4, 3, 2, 1):
+			# at most three pieces together (four joined ० ० ० into ०००, झापा गौरादह into one word)
+			for span in (3, 2, 1):
 				if i + span > len(toks):
 					continue
 				span_toks = toks[i:i + span]
@@ -1870,11 +1934,11 @@ class DocIndex:
 				if f is None and k not in self._ambiguousKeys:
 					try:
 						from . import devanagariRepair
-						k_cl = matchKey(devanagariRepair.cleanShuffled("".join(span_toks), legacyArtifacts=True))
+						k_cl = matchKey(devanagariRepair.cleanShuffled("".join(span_toks)))
 						f = self._byKey.get(k_cl) or self._byBag.get(movementKey(k_cl))
 					except Exception:
 						pass
-				if f is None and k not in self._ambiguousKeys and len(k) >= 3:
+				if STEM_GUESS and f is None and k not in self._ambiguousKeys and len(k) >= 3:
 					cand_fixed = self._byStem.get(k[:4]) or self._byStem.get(k[:3])
 					if cand_fixed is not None:
 						if span == 1 and abs(len(k) - len(cand_fixed)) <= 2:
@@ -1928,8 +1992,13 @@ def _wordTexts(w):
 	shown = []
 	segs = []  # (font, [(code, shownText)])
 	spans = set()
+	# glyphs inside the PDF's own /ActualText: the document says what they are, so a reading
+	# worked out from the dictionary never replaces them (2.0.9-2.2.0 read a situation report's
+	# "जिल्ला प्रशासन कार्यालय" as "हल्ला न का")
+	inSpan = []
 	for g in w.glyphs:
 		font, code, span = g[0], g[1], g[6]
+		inSpan.append(span is not None)
 		if span is not None:
 			# marked content with /ActualText: the viewer shows that text instead of the glyphs'
 			t = span[1] if span[0] not in spans else ""
@@ -1994,6 +2063,7 @@ def _wordTexts(w):
 	guessed = False
 	checker = None
 	gi = 0
+	gpos = 0  # glyph position in inSpan
 	for font, items in segs:
 		if font.legacy:
 			raw = "".join(keysOf(font, c, t) for c, t in items)
@@ -2005,12 +2075,15 @@ def _wordTexts(w):
 			for c, t in items:
 				charGlyph.extend([gi] * len(keyOf(t)))
 			gi += 1
+			gpos += len(items)
 			continue
 		inferred = getattr(font, "inferred", None)
 		for code, t in items:
+			spanned = inSpan[gpos]
+			gpos += 1
 			real = font.truth.get(code)
 			plainToks.append((real if real is not None else _CONTROL.sub("", _PUA.sub("", t or "")), gi))
-			if (real is None or code in font.weak) and inferred is not None and code in inferred and not _keepDigit(t, letters):
+			if (real is None or code in font.weak) and inferred is not None and code in inferred and not _keepDigit(t, letters) and not spanned:
 				real = inferred[code]
 				guessed = True
 			elif real is None:
@@ -2025,7 +2098,7 @@ def _wordTexts(w):
 	if (not certain or guessed) and _wordCheck is not None:
 		# no exact glyph letters for this word: if what the viewer shows is already a real word,
 		# keep it
-		sk = keyOf(shownText)
+		sk = _undouble(keyOf(shownText))
 		core = sk.strip(_PUNCT)
 		if len(core) >= 2 and isDeva(core) and not _PUA.search(core) and all(_wordCheck(p) for p in re.split(r"[-/]", core) if p):
 			return shownText, sk, None, None
@@ -2058,7 +2131,7 @@ def _wordTexts(w):
 			# a reading that helps most words can still be wrong in this one: the PDF's own text
 			# wins when it makes a dictionary word
 			if checker is not None and len(plainToks) == len(toks):
-				plain = "".join(t for t, g in reorder(list(plainToks)))
+				plain = _undouble("".join(t for t, g in reorder(list(plainToks))))
 				pc = plain.strip(_PUNCT)
 				if pc and isDeva(pc) and all(checker(x) for x in re.split(r"[-/]", pc) if x):
 					return shownText, devanagariRepair.composeMatras(plain), None, None
@@ -2231,6 +2304,41 @@ def _bfPreferences(fonts, allWords, isWord):
 
 
 _REPH_DOUBLE = re.compile("(र्([\u0915-\u0939]))\\2")
+# a sign written twice in a row (some producers give a base glyph the text of its sign too:
+# था + ा reads थाा). Unicode never has the same sign twice, so one goes: not a guess.
+_DOUBLED = re.compile("([\u0901-\u0903\u093e-\u094c\u0962\u0963])\\1+")
+
+
+def _undouble(s):
+	return _DOUBLED.sub(r"\1", s) if s else s
+
+
+def _ownTextReads(words, isWord, least=0.5):
+	"""True if the PDF's own text of these words (its /ActualText, else each glyph's text in
+	Unicode order) mostly makes dictionary words."""
+	n = hits = 0
+	for w in words[:600]:
+		spans = set()
+		shown = []
+		toks = []
+		spanned = False
+		for i, g in enumerate(w.glyphs):
+			sp = g[6]
+			if sp is not None:
+				spanned = True
+				t = sp[1] if sp[0] not in spans else ""
+				spans.add(sp[0])
+			else:
+				t = g[0].truth.get(g[1]) or g[0].text(g[1]) or ""
+			shown.append(t)
+			toks.append((t, i))
+		text = "".join(shown) if spanned else "".join(t for t, i in reorder(toks))
+		text = _REPH_DOUBLE.sub(r"\1", _undouble(_CONTROL.sub("", _PUA.sub("", text)))).strip(_PUNCT)
+		if len(text) < 2 or not isDeva(text) or any(c in _DIGITS_SET for c in text):
+			continue
+		n += 1
+		hits += all(isWord(p) for p in re.split(r"[-/]", text) if p)
+	return n >= 20 and hits >= least * n
 
 
 def _shapeKey(f, c):
@@ -2291,6 +2399,7 @@ def _inferFonts(fonts, allWords, isWord, deadline, pause=None):
 	dictionary words."""
 	junk = _gluedJunk(allWords)
 	groups = {}
+	fontWords = None
 	for f in fonts:
 		if not f.used or f.legacy or _isSymbolFont(f):
 			continue
@@ -2306,8 +2415,21 @@ def _inferFonts(fonts, allWords, isWord, deadline, pause=None):
 		# (not for Type3 fonts the add-on knows nothing about: their PDF texts are right far
 		# more often than a guess - a 533-page book read 9% worse)
 		if (f.truth or not getattr(f, "_t3", None)) and len(deva) >= 3 and sum(1 for c in f.used if isDeva(f.truth.get(c) or f.text(c))) >= 20:
-			fj = fj | set(deva)
-			junk[id(f)] = fj
+			# ...but only when the PDF's own text for this font does not read: a font whose text
+			# makes dictionary words (once a sign written twice is taken out) is what the page
+			# says, and guessing its letters only breaks it (a situation report's Sama Devanagari:
+			# जिल्ला प्रशासन कार्यालय was read हल्ला न का)
+			if fontWords is None:
+				fontWords = {}
+				for w in allWords:
+					seen = set()
+					for g in w.glyphs:
+						if id(g[0]) not in seen:
+							seen.add(id(g[0]))
+							fontWords.setdefault(id(g[0]), []).append(w)
+			if not _ownTextReads(fontWords.get(id(f), ()), isWord):
+				fj = fj | set(deva)
+				junk[id(f)] = fj
 		unknown = [c for c in f.used if (c not in f.truth or c in weak) and (_isUnknownText(f.text(c)) or c in fj) and not (f.text(c) and all(ch in _DIGITS_SET for ch in f.text(c)))]
 		if not unknown:
 			continue
@@ -2423,7 +2545,7 @@ def _inferFonts(fonts, allWords, isWord, deadline, pause=None):
 
 		def score(si):
 			key, cnt = seqList[si]
-			w = wordOf(key).strip(_PUNCT)
+			w = _undouble(wordOf(key)).strip(_PUNCT)
 			if not w or not isDeva(w) or any(c in _DIGITS_SET for c in w):
 				return 0
 			r = cache.get(w)

@@ -1,6 +1,6 @@
 # Nepali Reader for NVDA
 
-[![Download Add-on](https://img.shields.io/badge/Download-nepaliReader--2.0.1.nvda--addon-brightgreen?style=for-the-badge&logo=nvda)](https://github.com/SuyogDhungel/nepaliReader/releases/download/v2.0.1/nepaliReader-2.0.1.nvda-addon)
+[![Download Add-on](https://img.shields.io/badge/Download-nepaliReader--2.2.0.nvda--addon-brightgreen?style=for-the-badge&logo=nvda)](https://github.com/SuyogDhungel/nepaliReader/releases/download/v2.2.0/nepaliReader-2.2.0.nvda-addon)
 [![License: GPL v2](https://img.shields.io/badge/License-GPL%20v2-blue.svg)](LICENSE)
 [![NVDA Compatibility](https://img.shields.io/badge/NVDA-2024.1%20to%202026.2-purple.svg)](https://www.nvaccess.org/)
 
@@ -23,13 +23,25 @@ Screen reader users in Nepal regularly encounter two major barriers when reading
 
 ---
 
+## ✨ What's New in 2.2.0
+
+* **Reads what the document says.** For a PDF, the add-on reads the letters the file itself draws and the text it stores for them. That text is no longer replaced by dictionary guesses (a situation report read "हल्ला न का" for "जिल्ला प्रशासन कार्यालय"; it now reads as printed).
+* **Correct PDF text is left alone.** Real words are no longer "repaired" into other words (वापत stayed वापत, कोडको stayed कोडको).
+* **PDFs whose vowel signs come out in the wrong place** (शल्ुक, सवे ा) are read correctly (शुल्क, सेवा) when the PDF file itself cannot be read.
+* **Preeti words inside Unicode lines** (zN's, as+}) are read as Nepali (शुल्क, बैंक); English, units ("5 km") and English in brackets stay English.
+* **English typed in code editors and terminals** is never read as Preeti.
+
+See [CHANGELOG.md](CHANGELOG.md) for details and measurements.
+
+---
+
 ## 📥 How to Download and Install
 
 You can install and update **Nepali Reader** directly from the official **NVDA Add-on Store** (`NVDA + N` $\to$ **Tools** $\to$ **Add-on Store** $\to$ **Available add-ons** $\to$ search for **Nepali Reader**), or manually:
 
 1. Download the add-on file:
-   👉 [**Click here to download nepaliReader-2.0.1.nvda-addon**](https://github.com/SuyogDhungel/nepaliReader/releases/download/v2.0.1/nepaliReader-2.0.1.nvda-addon)
-2. Once downloaded, open your **Downloads** folder and press **Enter** on `nepaliReader-2.0.1.nvda-addon`.
+   👉 [**Click here to download nepaliReader-2.2.0.nvda-addon**](https://github.com/SuyogDhungel/nepaliReader/releases/download/v2.2.0/nepaliReader-2.2.0.nvda-addon)
+2. Once downloaded, open your **Downloads** folder and press **Enter** on `nepaliReader-2.2.0.nvda-addon`.
 3. NVDA will ask: *"Are you sure you want to install this add-on?"* — Press **Yes** (`Alt + Y`).
 4. When prompted to restart NVDA, select **Yes**.
 5. That is all! Nepali Reader activates automatically upon startup.

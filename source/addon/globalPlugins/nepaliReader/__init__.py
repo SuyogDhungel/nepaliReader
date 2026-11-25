@@ -36,6 +36,7 @@ from scriptHandler import script
 
 from . import detector
 from . import devanagariRepair
+from . import glyphOrder
 from . import glyphRefs
 from . import legacyFonts
 from . import neLexicon
@@ -223,8 +224,12 @@ class _DocState:
 		if self.decided:
 			return
 		if devanagariRepair.isBroken(text):
-			self.broken = self.decided = True
-			return
+			# one typing slip (भयोे) is no damaged text layer: three lines with fault marks are
+			# (a line with a fault mark still gets the full repair by itself)
+			self.faultLines = getattr(self, "faultLines", 0) + 1
+			if self.faultLines >= 3:
+				self.broken = self.decided = True
+				return
 		k, w = devanagariRepair.wordStats(text)
 		self.known += k
 		self.seenWords += w
@@ -366,10 +371,25 @@ def _appName(obj):
 	try:
 		return (_realObj(obj).appModule.appName or "").lower()
 	except Exception:
-		try:
-			return (api.getForegroundObject().appModule.appName or "").lower()
-		except Exception:
-			return ""
+		for get in (api.getForegroundObject, api.getFocusObject):
+			try:
+				return (get().appModule.appName or "").lower()
+			except Exception:
+				pass
+		return ""
+
+
+# editors and terminals: what is typed there is code and English. Preeti is converted only where
+# the font says Preeti, never guessed (in Antigravity a typed "e" was read भ)
+_CODE_APPS = frozenset((
+	"code", "code - insiders", "antigravity", "cursor", "windsurf", "devenv", "notepad++", "sublime_text",
+	"windowsterminal", "cmd", "conhost", "powershell", "pwsh", "mintty", "idea64", "pycharm64",
+	"webstorm64", "rider64", "clion64", "android studio", "studio64", "eclipse", "zed",
+))
+
+
+def _isCodeApp(obj):
+	return _appName(obj) in _CODE_APPS
 
 
 def _unwrap(info):
@@ -960,6 +980,25 @@ class _NepaliNormalizedObject(NVDAObjects.NVDAObject):
 		return orig
 
 
+def _fontName(field):
+	"""The font name of a format field as text. Some documents in Chrome give it as a COM object
+	instead of a string; that stopped the conversion of the whole line."""
+	if not field:
+		return None
+	try:
+		name = field.get("font-name")
+	except Exception:
+		return None
+	if name is None or isinstance(name, str):
+		return name or None
+	try:
+		name = str(name)
+	except Exception:
+		return None
+	# the text of a COM pointer ("<POINTER(IUnknown) object at ...>") is not a font name
+	return None if name.startswith("<") else name
+
+
 class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
 	def chooseNVDAObjectOverlayClasses(self, obj, clsList):
@@ -969,6 +1008,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 	def __init__(self, *args, **kwargs):
 		super().__init__(*args, **kwargs)
 		self._cache = _LRU()
+		# the word counts are loaded with the dictionaries in the background, never by a reading
+		glyphOrder.setAutoLoad(False)
 		self._contextWindow = None
 		self._contextEncoding = None
 		self._contextUntil = 0.0
@@ -1074,6 +1115,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		self._pdfs.clear()
 		self._clearContext()
 		devanagariRepair.setDocumentSwaps([], None)
+		devanagariRepair.setDocumentPattern(None)
 
 	def _current(self, gen):
 		"""True while Nepali mode is still on in the period that started this work."""
@@ -1267,6 +1309,13 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		except Exception:
 			log.error("Nepali Reader: could not load confusions map", exc_info=True)
 		try:
+			# word counts of running Nepali text: which form of a damaged word is the common one
+			glyphOrder.setDictionary(neLexicon.isWord)
+			glyphOrder.setEnglishCheck(detector.isEnglishWord)
+			glyphOrder.loadFrequencies()
+		except Exception:
+			log.error("Nepali Reader: could not load Nepali word counts", exc_info=True)
+		try:
 			glyphRefs.load(cacheDir=_cacheDir())
 		except Exception:
 			log.error("Nepali Reader: could not load glyph references", exc_info=True)
@@ -1436,7 +1485,11 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			# स्, the Preeti key, in a Unicode act read in Chrome)
 			uniPdf = isPdf and not ctxEnc and self._pdfIsUnicode()
 			inCtx = bool(ctxEnc or (isPdf and not uniPdf))
-			if mode != "off" and not urlish:
+			try:
+				inCode = _isCodeApp(fg)
+			except Exception:
+				inCode = False
+			if mode != "off" and not urlish and not (inCode and not ctxEnc):
 				# a short piece (a table header, a cell) only in a Preeti document or a PDF, and never a
 				# plain number or page count ("/14", "100%", "1.5" are what they say); a symbol alone
 				# only where Preeti has been seen
@@ -3969,10 +4022,12 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		unicodeFont = False
 		for field in fields:
 			if isinstance(field, textInfos.FieldCommand) and field.command == "formatChange" and field.field:
-				name = field.field.get("font-name") or ""
+				name = _fontName(field.field) or ""
 				fontEnc = legacyFonts.encodingForFontName(name) or fontEnc
 				unicodeFont = unicodeFont or any(f in name.lower() for f in UNICODE_DEVANAGARI_FONTS)
 		if unicodeFont and not fontEnc and not self._isPdfWindow(info.obj) and not self._isBrokenDoc():
+			return fields
+		if not fontEnc and _isCodeApp(info.obj):
 			return fields
 		if fontEnc and not orig_char.isalpha() and not devanagariRepair.hasDevanagari(orig_char):
 			converted = legacyFonts.convert(orig_char, fontEnc, trusted=True)
@@ -4450,7 +4505,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 					groups.append(cur)
 				lastWasText = True
 			elif isinstance(item, textInfos.FieldCommand) and item.command == "formatChange":
-				name = item.field.get("font-name") if item.field else None
+				name = _fontName(item.field)
 				newKey = ((name or "").split(",")[0].strip().lower() or None, legacyFonts.encodingForFontName(name) if name else None)
 				if newKey != key:
 					key = newKey
@@ -4560,7 +4615,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				if item:
 					runs.append((i, item, "unicode" if unicodeFont else fontKnown, curEnc))
 			elif isinstance(item, textInfos.FieldCommand) and item.command == "formatChange":
-				name = item.field.get("font-name") if item.field else None
+				name = _fontName(item.field)
 				fontKnown = bool(name)
 				curEnc = legacyFonts.encodingForFontName(name) if name else None
 				lower = (name or "").lower()
@@ -4658,6 +4713,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			st = self._docState()
 			if pdfLayer:
 				devanagariRepair.setDocumentSwaps(st.swaps, (id(st), len(st.swaps)))
+			# the moved-sign pattern is learned per document (window)
+			devanagariRepair.setDocumentPattern(id(st))
 			for grp in groups:
 				active = [r for r in grp if r[0] not in rebuilt]
 				if not active:
@@ -4884,6 +4941,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
 	def _decideUnknown(self, info, unknown, convert, c, allowVisual=True, isUnicodeDoc=False):
 		"""Runs with no font information (most PDFs): detector, window context and the screen check."""
+		if _isCodeApp(info.obj):
+			return
 		joined = detector.cleanGluedTokens("".join(t for _, t in unknown))
 		# window memory ("this document is Preeti") only for text without font information;
 		# text in an ordinary font (Calibri...) is judged on its own words
@@ -4924,7 +4983,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				convert[i] = (used, False)
 			return
 		if not legacyWords:
-			if words == 1 and neLexicon.isLoaded() and not detector.isEnglishWord(joined.strip().strip(".,:;").lower()):
+			# (one short word alone, in no Preeti document, is not converted: in an editor "e" was
+			# read भ and "g" न. Three letters, or a Preeti sign key of its own, are needed)
+			one = joined.strip().strip(".,:;")
+			if words == 1 and (len(detector._core(one)) >= 3 or any(ch in detector._PREETI_SIGN_KEYS for ch in one)) and neLexicon.isLoaded() and not detector.isEnglishWord(one.lower()):
 				conv_w = legacyFonts.convert(joined.strip(), used)
 				if conv_w and (neLexicon.isWord(conv_w.strip(".,:;!?()[]{}")) or conv_w in (":", "५", "१", "२", "३", "४", "६", "७", "८", "९", "०")):
 					for i, _t in unknown:

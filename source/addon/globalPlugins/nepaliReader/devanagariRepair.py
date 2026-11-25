@@ -26,8 +26,10 @@ import unicodedata
 
 try:
 	from . import neLexicon
+	from . import glyphOrder
 except ImportError:  # unit tests
 	import neLexicon
+	import glyphOrder
 
 _CONS = "\u0915-\u0939\u0958-\u095f"
 _CLUSTER = "[" + _CONS + "]\u093c?(?:\u094d[" + _CONS + "]\u093c?)*"
@@ -786,7 +788,7 @@ def _gluedIFix(m):
 		return m.group(0)
 	a, b = _wordAround(s, i, m.end())
 	cand = s[a:i] + m.group(1) + "\u093f" + s[m.end():b]
-	if _known(cand):
+	if _proven(cand) or (glyphOrder.frequency(cand) >= 20 and not glyphOrder.known(s[a:b])):
 		return m.group(1) + "\u093f"
 	return m.group(0)
 
@@ -809,7 +811,7 @@ def _gluedFix(m):
 	if all(c in _JUNK_SIGNS for c in junk):
 		return ""
 	a, b = _wordAround(m.string, m.start(), m.end())
-	if _known(m.string[a:m.start()] + m.string[m.end():b]):
+	if _proven(m.string[a:m.start()] + m.string[m.end():b]):
 		return ""
 	return junk
 
@@ -1005,6 +1007,19 @@ def cleanForCharNav(text):
 
 
 
+_settled = [False]
+_docPattern = [glyphOrder.Pattern()]
+
+
+def setDocumentPattern(key):
+	"""Learn and use the moved-sign pattern of the document identified by `key`."""
+	_docPattern[0] = glyphOrder.patternFor(key)
+
+
+def documentPattern():
+	return _docPattern[0]
+
+
 def repair(text, broken=None):
 	"""Repair `text`. `broken`: True when the document is already known to have a broken
 	text layer (the caller remembers this per window); None = decide from this text."""
@@ -1017,6 +1032,28 @@ def repair(text, broken=None):
 		return mixed
 	if broken is None:
 		broken = isBroken(text)
+	if not _settled[0]:
+		text = _JUNK.sub("", text)  # replacement and private-use characters first (जि\ufffdल्ला)
+		# signs drawn one letter too far right, Preeti words inside the line, glued words: the
+		# words this settles are final for this line, so the steps below repair only what lies
+		# between them (never across lines: a word settled here is not settled anywhere else)
+		got = []
+		fixed = glyphOrder.fixLine(text, _docPattern[0], typed=not broken, convertPreeti=bool(broken),
+			markExact=got.append)
+		if fixed != text:
+			added = []
+			for tok in " ".join(got).split():
+				for t in (tok, tok.strip(_EXACT_STRIP)):
+					if t and _DEVANAGARI.search(t) and t not in _EXACT:
+						_EXACT[t] = True
+						added.append(t)
+			_settled[0] = True
+			try:
+				return repair(fixed, broken)
+			finally:
+				_settled[0] = False
+				for t in added:
+					_EXACT.pop(t, None)
 	text = cleanShuffled(text, legacyArtifacts=bool(broken))
 	text = _JUNK.sub("", text)
 	if broken:
@@ -1170,6 +1207,7 @@ def repairTyped(text):
 	mixed = _aroundExact(text, repairTyped)
 	if mixed is not None:
 		return mixed
+	text = glyphOrder.fixLine(text, None, typed=True, convertPreeti=False)
 	text = unicodedata.normalize("NFC", text)
 	if not _TYPED_FAULT.search(text):
 		return text
@@ -1204,8 +1242,14 @@ def repairTyped(text):
 def repairIn(text, pdf=False, brokenDoc=False):
 	"""The repair for where the text comes from: a PDF's text layer (or a document already shown
 	to be damaged) gets the full repair; typed Unicode only loses what cannot be correct."""
-	if pdf or brokenDoc:
+	if brokenDoc:
 		return repair(text, broken=True)
+	if pdf:
+		# a PDF whose text layer has not shown damage: only lines with fault marks, or with a word
+		# that letter swaps turn into a common word (बालबाललका -> बालबालिका), get the full repair
+		# (2.0.9; 1.8.2 changed 5 of 250 correct lines, 2.1.0 changed 118 by swapping letters in
+		# correct words: नसकेको -> सिकेको, दिनुभयो -> दर्नुभयो)
+		return repair(text, broken=True if (isBroken(text) or _swapEvidence(text)) else None)
 	return repairTyped(text)
 
 _DEVA_BASE = frozenset(chr(c) for c in list(range(0x0904, 0x093A)) + list(range(0x0958, 0x0962)) + list(range(0x0972, 0x0980)))
@@ -1236,6 +1280,13 @@ def _core(tok):
 	return tok.strip(_EDGE_PUNCT)
 
 
+def _proven(word):
+	"""The dictionary itself (no word counts): the proof needed before a character is dropped."""
+	if not neLexicon.isLoaded() or not word:
+		return False
+	return neLexicon.isWord(word)
+
+
 def _known(word):
 	"""Dictionary word. र्‍य (with a joiner, the eyelash ra of गर्‍यो) and र्य are two spellings of the
 	same word, and the dictionary has some words only one way (पुर्‍याइ was read सर्‍याइ, भर्याङ मर्याङ)."""
@@ -1247,9 +1298,10 @@ def _known(word):
 		plain = word.replace("\u200d", "").replace("\u200c", "")
 		if plain and neLexicon.isWord(plain):
 			return True
-	if "\u0930\u094d\u092f" in word:
-		return neLexicon.isWord(word.replace("\u0930\u094d\u092f", "\u0930\u094d\u200d\u092f"))
-	return False
+	if "\u0930\u094d\u092f" in word and neLexicon.isWord(word.replace("\u0930\u094d\u092f", "\u0930\u094d\u200d\u092f")):
+		return True
+	# words of running Nepali text (कोडको, बैंकले, वापत): left as they are
+	return glyphOrder.solid(word)
 
 
 _fixCache = {}
@@ -1298,10 +1350,18 @@ def _splitWord(w):
 		a, b = w[:i], w[i:]
 		if b[0] in _SIGN_CHARS or a[-1] == "\u094d":
 			continue
-		if _known(a) and _known(b):
+		if _splitPart(a) and _splitPart(b):
 			if best is None or min(len(a), len(b)) > min(len(best[0]), len(best[1])):
 				best = (a, b)
-	return best and best[0] + " " + best[1]
+	if best is None or glyphOrder.known(w):
+		return None  # a word of running text (पूर्वसूचना, आतिथ्यतामा) is not cut
+	return best[0] + " " + best[1]
+
+
+def _splitPart(p):
+	"""A piece a stuck-together word may be cut into: a dictionary word, or a common word of the
+	news text (a rare one, often a name or a typo there, is not enough: पञ्चासेमा is no पञ्चा सेमा)."""
+	return _proven(p) or (glyphOrder.solid(p) and glyphOrder.frequency(p) >= 20)
 
 
 _SIGN_CHARS = set(chr(c) for c in range(0x093E, 0x094E)) | {"\u0901", "\u0902", "\u0903", "\u093c"}
@@ -1417,8 +1477,39 @@ def _isRealPiece(piece):
 	return _known(core) or isSpellingVariant(core) or bool(_DIGITS.search(core))
 
 
+def _swapReadingOf(core):
+	"""A known word the letter-swap readings make of `core` (for glyphOrder), or None."""
+	if not neLexicon.isLoaded() or len(core) < 3:
+		return None
+	r = _readings(core, allowSwaps=True)
+	return r if r and r != core and _known(r) else None
+
+
+glyphOrder.setSwapReading(_swapReadingOf)
+
+
+def _swapEvidence(text):
+	"""A word no list knows that letter swaps make a common word (seen 60 times or more in the
+	news text): the line comes from a text layer with swapped glyphs."""
+	if not neLexicon.isLoaded():
+		return False
+	for tok in text.split():
+		core = _core(tok)
+		if len(core) < 4 or not _DEVANAGARI.search(core) or glyphOrder.known(core):
+			continue
+		r = _swapReadingOf(core)
+		if r and glyphOrder.frequency(r) >= 60:
+			return True
+	return False
+
+
 def _bestForm(pieces):
 	"""(score, text) for one group of pieces read as one word."""
+	if len(pieces) == 1:
+		lead1, core1, trail1 = _edges(pieces[0])
+		if core1 and glyphOrder.solid(core1):
+			# a word of running Nepali text is kept: no letter swap (नसकेको was read सिकेको)
+			return (_wscore(core1), pieces[0])
 	phrase = " ".join(pieces)
 	if len(pieces) > 1 and _known(phrase):
 		return (_wscore(phrase), phrase)
