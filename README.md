@@ -30,6 +30,8 @@ Screen reader users in Nepal regularly encounter two major barriers when reading
 * **PDFs whose vowel signs come out in the wrong place** (शल्ुक, सवे ा) are read correctly (शुल्क, सेवा) when the PDF file itself cannot be read.
 * **Preeti words inside Unicode lines** (zN's, as+}) are read as Nepali (शुल्क, बैंक); English, units ("5 km") and English in brackets stay English.
 * **English typed in code editors and terminals** is never read as Preeti.
+* **Arrow keys and selections in Preeti books** read the page: every key says something, "selected ..." is read in Nepali (also when you come back to the PDF), and the words of long InDesign paragraphs are no longer run together.
+* **Update without the Add-on Store**: NVDA menu, Tools, Nepali Reader, Check for updates shows everything that changed since your version, then downloads, checks and installs the new version and offers to restart NVDA.
 
 See [CHANGELOG.md](CHANGELOG.md) for details and measurements.
 

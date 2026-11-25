@@ -49,7 +49,42 @@ NVDA, and with four real government PDFs. Percent of words read right:
   PDF's Devanagari text is now used for them, and a letter whose drawn shape and text agree is never
   re-guessed. A park regulation read "(>) कुनै भूभाग कब्जा गन<"; now "(ख) कुनै भूभाग कब्जा गर्न,".
 - Preeti abbreviations and dates typed with the danda key are read as the page shows them (प्र।स।).
-- Saved PDF indexes are rebuilt once (index version 36).
+- Saved PDF indexes are rebuilt once (index version 37).
+
+### Arrow keys, selection and long paragraphs (Preeti books made in InDesign)
+Checked on Nepal Parichaya, 12th edition (सूचना तथा प्रसारण विभाग, 2081), read in Chrome, with the
+lines, keys and selections from a user's NVDA log.
+- "selected ..." when focus comes back to a PDF with text selected was spoken in Preeti keys
+  ("selected ];|f] ;+:s/0f M @)&@"): NVDA speaks that selection outside the add-on's selection
+  hook. Every selection message now goes through the PDF's own text: "selected तेस्रो संस्करण :
+  २०७२ वैशाख". "ho ho g]kfn" reads "जय जय नेपाल" there too.
+- Shift+Arrow selections that begin or end inside a letter read the letters selected: s/0f is
+  "करण" (was "रण", the क dropped), and ];|f] is "ेस्रो". Selections in Preeti words cut by Chrome at
+  a sign key (] , @ ) are read as Nepali, no longer as the keys.
+- Arrow keys: every key says something (the } of चौथो was silent), and a key that changes the
+  sign before it says the new sign (f then ] says ा then ो; rf} says ौ). A reph key says र्.
+- The colon typed with Preeti's M key is read as a colon in line, character and selection
+  reading and when copied (was ः, the visarga, in the new index).
+- Long paragraphs: InDesign's tight lines draw the word space as a zero-width glyph and a small
+  gap. Words were run together ("विषयहरूसमेटेरमुलुककोसमग्रपक्षकासम्बन्धमा...",
+  "नेपालकोऐतिहासिक,भौगोलिक,...", "मुक्तिनाथहिन्दूतथाबौद्धमार्गीहरूको"); now they read apart, and
+  numbers in headings are apart from the heading (४. नेपाललाई). On the 430 pages, the words run
+  together went from 19 to none.
+- A Preeti sign the PDF stores apart from its word (u/sf] ] xf]) goes back into the word: "गरेको हो"
+  (was "गरको ] हो").
+- Unicode PDFs (Word, Kalimati) read in Chrome: where the viewer gives several characters for
+  one letter group (गनन for गर्न, पररपूलिन for परिपूर्ति), each arrow key says its own part (ग, र्, न)
+  instead of the whole group two or three times.
+
+### Updating without the Add-on Store
+- Check for updates (NVDA menu, Tools, Nepali Reader) and the daily check show what changed since
+  the installed version in a text box that can be read line by line, with Update now and Later
+  buttons. The text comes from this changelog in the new release (the release notes when it
+  cannot be read); before, a message box showed the first 800 characters of the release notes.
+- The downloaded file is checked before it is installed: a download cut short, an error page or
+  another add-on is not installed, and NVDA says why.
+- The update is installed through NVDA's own add-on install (which asks to update and then offers
+  to restart NVDA); before, NVDA was not asked to restart after updating this way.
 
 ### PDFs whose vowel signs come out in the wrong place
 - When the PDF file cannot be read, Chrome's own text is repaired. Many PDFs saved from Word give
@@ -94,7 +129,7 @@ NVDA, and with four real government PDFs. Percent of words read right:
   LICENSE-nepali-dictionary.txt).
 - Tests: tests/test_actual_content.py (set NEPALI_TEST_PDFS to a folder with the test PDFs to
   read real PDFs too), tests/test_law_pdfs.py (set NEPALI_TEST_LAWS to a folder of law PDFs),
-  tests/test_moved_signs.py, and tests/bench, which reads the same material
+  tests/test_moved_signs.py, tests/test_nepal_parichaya.py (set NEPALI_TEST_BOOK to the book's PDF), and tests/bench, which reads the same material
   with any version (`python tests/bench/bench.py <version folder> out.json`). All earlier tests pass.
 
 ## [2.1.0] - 2026-11-05

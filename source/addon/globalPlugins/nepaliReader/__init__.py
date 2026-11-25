@@ -1497,7 +1497,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				symbolsOnly = bool(core) and not any(ch.isalnum() for ch in core)
 				# (punctuation that converted text has as well is never converted again: a Preeti M
 				# read as ":" became स् here)
-				plainPunct = symbolsOnly and all(ch in ":()/.,-\u2013\u2014?!" or ch.isspace() for ch in core)
+				plainPunct = symbolsOnly and all(ch in ":()/.,-\u2013\u2014?!\u2018\u2019" or ch.isspace() for ch in core)
 				if (len(core) <= 4 and inCtx and not _PLAIN_NUMBER.match(core) and not (symbolsOnly and not ctxEnc) and not plainPunct
 						and not detector.isEnglishWord(detector._core(text).lower())):
 					conv_short = legacyFonts.convert(text.strip(), defaultEnc)
@@ -1679,6 +1679,28 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			self._patched2.append((speech, "speakSelectionChange", origSelTop, speakSelectionChange))
 		except Exception:
 			log.debugWarning("Nepali Reader: could not hook selection speech", exc_info=True)
+
+		try:
+			import speech.speech as speechModule
+			# "selected ..." when focus comes back to a document that has a selection (switching back
+			# to Chrome): NVDA speaks the selection's raw text, not through speakSelectionChange. Every
+			# selection message goes through one helper (_getSelectionMessageSpeech in NVDA 2025 and
+			# later, speakSelectionMessage before that)
+			name = "_getSelectionMessageSpeech" if hasattr(speechModule, "_getSelectionMessageSpeech") else "speakSelectionMessage"
+			origMsg = getattr(speechModule, name)
+
+			def selectionMessage(message, text, *args, **kwargs):
+				if isOn() and isinstance(text, str):
+					try:
+						text = plugin._selectionString(text)
+					except Exception:
+						diag.exception("selection message")
+				return origMsg(message, text, *args, **kwargs)
+
+			setattr(speechModule, name, selectionMessage)
+			self._patched2.append((speechModule, name, origMsg, selectionMessage))
+		except Exception:
+			log.debugWarning("Nepali Reader: could not hook selection messages", exc_info=True)
 
 	def _patchWordUnits(self):
 		"""Word navigation and word selection (Ctrl+Arrow, Ctrl+Shift+Arrow) step over whole words:
@@ -3241,6 +3263,40 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		diag.write("select %r -> %r" % (raw[:80], (conv or "")[:80]))
 		return conv
 
+	def _selectionString(self, text):
+		"""The real text of a selection NVDA has only as a string ("selected ..." when focus comes
+		back to the document). Text that is already Nepali (from speakSelectionChange) is left as
+		it is."""
+		if not text or text.isspace() or len(text) > 5000:
+			return text
+		if devanagariRepair.hasDevanagariLetters(text) or not any(ch.isascii() and not ch.isspace() for ch in text):
+			return text
+		try:
+			obj = api.getFocusObject()
+		except Exception:
+			obj = None
+		if obj is not None and self._isPdfWindow(obj):
+			idx = self._pdfIndex(obj)
+			if idx is not None:
+				got = self._indexText(None, idx, text)
+				if got is not None:
+					got = devanagariRepair.visargaAsColon(got) if "ः" in got else got
+					diag.write("select (string) %r -> %r" % (text[:80], got[:80]))
+					return got
+		c = conf()
+		if c["mode"] == "off" or _ADDRESS.search(text):
+			return text
+		ctxEnc = self._inContext()
+		inCtx = bool(ctxEnc or (obj is not None and self._isPdfWindow(obj) and not self._pdfIsUnicode()))
+		if not inCtx:
+			return text
+		enc = ctxEnc or c["encoding"]
+		conv = detector.convertMixed(text, lambda t: legacyFonts.convert(t, enc) or t, encoding=enc, context=True)
+		if conv and conv != text and "ः" in conv:
+			conv = devanagariRepair.visargaAsColon(conv)
+		diag.write("select (string) %r -> %r" % (text[:80], (conv or "")[:80]))
+		return conv or text
+
 	def _centralText(self, info):
 		"""In a PDF whose real text is known, the one text every way of reading (line, word,
 		character, selection, copy) shares: what the index says. None when there is no index."""
@@ -3285,6 +3341,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			except Exception:
 				diag.exception("central text fallback")
 				new = raw
+		if new and "ः" in new:
+			# Preeti's M alone is the colon (संस्करण : २०७२), as line reading says it
+			new = devanagariRepair.visargaAsColon(new)
 		return new
 
 	def _pdfTextOfString(self, text):
@@ -4051,9 +4110,21 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 							if isinstance(item, str):
 								fields[i] = chAt
 						return fields
-					if chAt and chAt.isascii() and orig_char.isascii() and chAt == orig_char:
-						# English letter, digit or sign: the PDF itself says it is not Preeti
+					if chAt and chAt == orig_char:
+						# English letter, digit, sign or quotation mark: the PDF itself says it is
+						# itself, not a Preeti key (‘नेपाल: the ‘ is not ॅ)
 						return fields
+					if chAt and chAt.strip() and not any(ch.isalnum() for ch in chAt):
+						# a mark the PDF draws for this key (Preeti's M alone is the colon)
+						for i, item in enumerate(fields):
+							if isinstance(item, str):
+								fields[i] = chAt
+						return fields
+					if not orig_char.isascii() and not orig_char.isspace() and not devanagariRepair.hasDevanagari(orig_char):
+						# a sign the line reading keeps as it is (सर्वाधिकार©: the © is not र)
+						pieces = idx.lookup(line)
+						if pieces and orig_char in "".join(pc for pc, ok in pieces if ok):
+							return fields
 
 		ctx = self._lineContext(info)
 		word = None
@@ -4227,6 +4298,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		if res is not None:
 			# converter-internal markers must never reach the speech
 			res = res.replace("\ue001", "\u093f").replace("\ue002", "\u0930\u094d").replace("\ue003", "")
+			if not res and orig_char.strip():
+				# a key that is part of the sign before it (the े of ो) still says something: the
+				# arrow key never lands on silence
+				res = (legacyFonts.PREETI_MAP.get(orig_char) if inLegacy else None) or orig_char
 			for idx, item in enumerate(fields):
 				if isinstance(item, str):
 					fields[idx] = res

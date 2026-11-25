@@ -46,7 +46,10 @@ NUKTA = "़"
 REPH = "र्"
 DEP_SIGNS = set("ऺऻािीुूृॄॅॆेैॉॊोौॎॏॕॖॗॢॣऀँंः़")
 INDEPENDENT = set(chr(c) for c in range(0x0904, 0x0915)) | set("ॠॡॲॳॴॵॶॷ")
-INDEX_VERSION = 36
+INDEX_VERSION = 37
+# a gap this wide (in em) after a zero-width space glyph separates two words (InDesign's condensed
+# lines: "मुक्तिनाथ हिन्दू तथा" has 0.04-0.05); a space glyph with no gap after it is drawn inside a word
+_ZSP_GAP = 0.03
 # 2.1.0 replaced a word the index did not know by any document word that starts with the same
 # three or four letters. That is a guess (2.0.9 left it out after real-line tests: चुमनुब्री was
 # read चुन्चेतबाट); a word of the document is now only taken when its letters match.
@@ -160,6 +163,18 @@ def reorder(toks):
 	return toks
 
 
+def _akPieces(ak):
+	"""The parts of one akshar a reader steps over: each letter with its virama or nukta, and each
+	sign (र्ति: र्, त, ि)."""
+	out = []
+	for ch in ak:
+		if out and ch in (VIRAMA, NUKTA, "\u200d", "\u200c") and not out[-1].endswith(VIRAMA):
+			out[-1] += ch
+		else:
+			out.append(ch)
+	return out
+
+
 def aksharas(s):
 	"""Split Devanagari text into syllables (aksharas): क्षि, र्मा, आं ..."""
 	out = []
@@ -218,6 +233,10 @@ _NORM = str.maketrans({"\xbf": "'", "\u2018": "'", "\u2019": "'", "\u201c": '"',
 
 def matchKey(s):
 	return keyOf(s).translate(_NORM)
+
+
+# Preeti keys that draw a sign over or under a letter (े ै ु ू ृ र् ं ँ ा ी ि ः)
+_PREETI_SIGN_KEYS = frozenset("]}'\"[{+F\u201c\u201dfLlM\u00bf")
 
 
 # ---------------------------------------------------------------- fonts
@@ -881,6 +900,7 @@ def _words(glyphs, page):
 	words = []
 	cur = None
 	lineV = None
+	zsp = None  # where a zero-width space glyph was drawn, until the next letter
 	endU = 0.0
 	pend = []    # space glyphs of this line not yet passed: (u, advance)
 	lastV = None
@@ -898,13 +918,14 @@ def _words(glyphs, page):
 			cur = Word((page, True))
 			lineV = v
 			endU = u
+			zsp = None
 			# a line may begin with the space that follows a sign drawn after it (LibreOffice
 			# draws "• " as the space, then the bullet in another font)
 			pend = [(u, adv)] if blank and adv > 0.05 * size else []
 		elif blank and adv <= 0.05 * size:
 			# a space glyph that does not move the pen (InDesign draws runs of them) is no break;
 			# a real gap after it is still found by the distance test
-			pass
+			zsp = max(endU, u)
 		elif blank:
 			# decided at the next glyphs: a "space" that the next letter is drawn over is an
 			# invisible joiner (Word puts ZWJ/ZWNJ as a space glyph), not a word break; and
@@ -921,17 +942,23 @@ def _words(glyphs, page):
 					keep.append((su, sadv))  # drawn before the space: it still separates what follows
 				# else: drawn over the space - a joiner, no break
 			pend = keep
-			if brk or is_bullet or prev_is_bullet or symbolBoundary:
+			if brk or is_bullet or prev_is_bullet or symbolBoundary or (zsp is not None and u - zsp > _ZSP_GAP * size and not _isTrailingSign(font, code)):
 				if cur.glyphs:
 					words.append(cur)
 					cur = Word((page, False))
-		elif (u - endU > 0.2 * size and not (cur.glyphs and _isTrailingSign(font, code))) or is_bullet or prev_is_bullet or symbolBoundary:
+		elif ((u - endU > 0.2 * size or (zsp is not None and u - zsp > _ZSP_GAP * size)) and not (cur.glyphs and _isTrailingSign(font, code))) or is_bullet or prev_is_bullet or symbolBoundary:
+			# (a zero-width space then a visible gap is a word space: InDesign sets tight lines that
+			# way, and "विषयहरू समेटेर मुलुकको" was read as one word)
 			if cur.glyphs:
 				words.append(cur)
 				cur = Word((page, False))
 		if not blank:
 			cur.glyphs.append(g)
 			lastV = v
+			if adv > 0.05 * size:
+				zsp = None  # (a sign drawn without moving the pen, like Preeti's reph, keeps it)
+			elif zsp is not None:
+				zsp = max(zsp, u + adv)  # (the gap is measured from the end of a sign drawn after the space: खारे|ज)
 		endU = max(endU, u + adv)
 	if cur is not None and cur.glyphs:
 		words.append(cur)
@@ -1163,6 +1190,8 @@ class DocIndex:
 			order.append(len(self.words))
 			self.starts.append(pos)
 			self.lineStart.append(w.page[1] if isinstance(w.page, tuple) else False)
+			if fixed == "\u0903":
+				fixed = ":"  # a visarga standing alone is the colon typed with the same key (संस्करण : २०७२)
 			if fixed is not None and fixed != shown:
 				self.fixedWords += 1
 			self.words.append((fixed, amap, enc, key))
@@ -1510,6 +1539,11 @@ class DocIndex:
 			if dd != text:
 				text = dd
 				key = matchKey(text)
+		if self.B.find(key) < 0:
+			ps = self._placeLoneSigns(text)
+			if ps != text:
+				text = ps
+				key = matchKey(text)
 		clean = cleanGluedTokens(text)
 		if clean != text:
 			res = self._tokens(clean)
@@ -1644,6 +1678,26 @@ class DocIndex:
 			self._hint = self.starts[ids[0]]
 		return ids or None
 
+	def _placeLoneSigns(self, text):
+		"""A Preeti sign key the viewer gives as a word of its own after the word it is drawn in
+		("u/sf] ] xf]": InDesign keeps the े of गरेको after the word and draws it over र): put it back
+		where the document's own letters have it. The text as it was if no place makes it found."""
+		toks = re.split(r"(\s+)", text)
+		words = [i for i, t in enumerate(toks) if t and not t.isspace()]
+		if len(words) < 2 or not any(t and all(c in _PREETI_SIGN_KEYS for c in t) and len(t) <= 3 for t in toks):
+			return text
+		for n, i in enumerate(words[1:], 1):
+			sign = toks[i]
+			if not all(c in _PREETI_SIGN_KEYS for c in sign) or len(sign) > 3:
+				continue
+			prev = toks[words[n - 1]]
+			for k in range(len(prev), 0, -1):
+				cand = toks[:words[n - 1]] + [prev[:k] + sign + prev[k:]] + toks[words[n - 1] + 1:i] + toks[i + 1:]
+				joined = "".join(cand)
+				if self.B.find(matchKey(joined)) >= 0:
+					return joined
+		return text
+
 	def _dropRepeats(self, text):
 		"""Viewers repeat text that a PDF draws twice for a bold look (PDFium does): 'नाम नाम'.
 		Drop a word run that follows itself when the document itself does not have it twice."""
@@ -1755,6 +1809,10 @@ class DocIndex:
 			return (fixed, True)
 		if not amap[lo:hi]:
 			return ("", True)
+		if not enc and len(aks) > 3 and len(set(amap)) <= 2 and len(amap) > 3:
+			# no real map from the viewer's characters to this word's letters (a word with a
+			# sign from another font: सर्वाधिकार©): a part of it is not known here
+			return (key[lo:hi], False)
 		# each akshar belongs to the piece holding its first character, so pieces read one after
 		# the other (sayAll, NVDA's text chunks) never say an akshar twice
 		first = {}
@@ -1771,18 +1829,66 @@ class DocIndex:
 				own.append(k)
 		if hi - lo == 1 and (enc or len(fixed) == len(key)):
 			if enc:
-				conv = legacyFonts.convert(self.legacySource.get(i, key)[lo], enc, trusted=i in self.trustedLegacy, table=self.legacyTables.get(i))
+				# one key of a legacy-font word (arrow keys in a Preeti PDF): what this key adds to the
+				# word, never nothing and never the key itself (s/0f: र, ण्, ा; xfnsf]: ा then को)
+				src = self.legacySource.get(i, key)
+				def cv(t):
+					return legacyFonts.convert(t, enc, trusted=i in self.trustedLegacy, table=self.legacyTables.get(i)) or ""
+				if key[lo] in "\u2018\u2019\u201c\u201d\"'" and key[lo] in fixed:
+					return (key[lo], True)  # a quotation mark the word keeps (‘नेपाल)
+				if len(key) == 1:
+					return (fixed, True)  # a word of one key: what the word reads (M alone is the colon)
+				pre = cv(src[:lo]) if lo else ""
+				whole = cv(src[:lo + 1])
+				if whole.startswith(pre) and whole[len(pre):] and not whole[len(pre):].isascii():
+					return (whole[len(pre):], True)
+				if whole and not whole.isascii() and not whole.startswith(pre):
+					if "\u0930\u094d" in whole and whole.replace("\u0930\u094d", "", 1) == pre:
+						return ("\u0930\u094d", True)  # the reph key: र् (dflh{: र्)
+					n = 0
+					while n < min(len(pre), len(whole)) and pre[n] == whole[n]:
+						n += 1
+					rest = whole[n:]
+					if rest and rest[0] in DEP_SIGNS and not rest.isascii():
+						# the key turns the sign before it into another (f then ]: ो; rf}: ौ), as
+						# arrowing over the same word in Unicode says the sign
+						return (rest, True)
+					# the key completes the akshar before it (km: फ; 0f: ण)
+					return (aksharas(whole)[-1], True)
+				conv = cv(src[lo])
 				if conv and conv.isascii() and key[lo].isascii() and lo < len(fixed) and not fixed.isascii():
-					# a lone digit/sign key is a letter inside a Preeti word: take it from the word
-					pre = legacyFonts.convert(self.legacySource.get(i, key)[:lo], enc, trusted=i in self.trustedLegacy, table=self.legacyTables.get(i)) or "" if lo else ""
-					whole = legacyFonts.convert(self.legacySource.get(i, key)[:lo + 1], enc, trusted=i in self.trustedLegacy, table=self.legacyTables.get(i)) or ""
-					if whole.startswith(pre) and whole[len(pre):] and not whole[len(pre):].isascii():
-						return (whole[len(pre):], True)
-					return (fixed[min(amap[lo], len(aks) - 1)] if False else aks[min(amap[lo], len(aks) - 1)], True)
+					return (aks[min(amap[lo], len(aks) - 1)], True)
 				return (conv or key[lo], True)
 			if lo < len(fixed):
 				return (fixed[lo], True)
 			return (key[lo], True)
+		if enc and hi - lo > 1 and amap and len(amap) == len(key):
+			# a selection that begins or ends inside an akshar (s/0f of ;+:s/0f, ];|f] of t];|f]):
+			# the letters and signs these keys draw, as the page shows them (करण, ेस्रो), not
+			# whole akshars that would drop or add a letter
+			cutLo = lo > 0 and amap[lo - 1] == amap[lo]
+			cutHi = hi < len(amap) and amap[hi - 1] == amap[hi]
+			src = self.legacySource.get(i, key)
+			if (cutLo or cutHi) and len(src) == len(key):
+				got = legacyFonts.convert(src[lo:hi], enc, trusted=i in self.trustedLegacy, table=self.legacyTables.get(i)) or ""
+				if got.strip() and not any(ch.isascii() and ch.isalpha() for ch in got):
+					return (got, True)
+		if hi - lo == 1 and not enc and len(amap) == len(key) and 0 <= amap[lo] < len(aks) and (not own or own == [amap[lo]]):
+			# one of several characters the viewer gives for one akshar (गनन for गर्न, पररपूलिन for
+			# परिपूर्ति): each says its own part of it, in order (र्, न), not the whole akshar again
+			k = amap[lo]
+			a = lo
+			while a > 0 and amap[a - 1] == k:
+				a -= 1
+			b = lo + 1
+			while b < len(amap) and amap[b] == k:
+				b += 1
+			if b - a > 1:
+				pieces = _akPieces(aks[k])
+				r, n = lo - a, b - a
+				if len(pieces) >= n:
+					return (pieces[r] if r < n - 1 else "".join(pieces[n - 1:]), True)
+				return (pieces[min(r, len(pieces) - 1)], True)
 		if not own:
 			# nothing starts here: say its akshar
 			sel = amap[lo:hi]
