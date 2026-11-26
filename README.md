@@ -1,12 +1,12 @@
 # Nepali Reader for NVDA
 
-[![Download Add-on](https://img.shields.io/badge/Download-nepaliReader--2.2.1.nvda--addon-brightgreen?style=for-the-badge)](https://github.com/SuyogDhungel/nepaliReader/releases/download/v2.2.1/nepaliReader-2.2.1.nvda-addon)
+[![Download Add-on](https://img.shields.io/badge/Download-nepaliReader--2.2.2.nvda--addon-brightgreen?style=for-the-badge)](https://github.com/SuyogDhungel/nepaliReader/releases/download/v2.2.2/nepaliReader-2.2.2.nvda-addon)
 [![License: GPL v2](https://img.shields.io/badge/License-GPL%20v2-blue.svg)](LICENSE)
 [![NVDA Compatibility](https://img.shields.io/badge/NVDA-2024.1%20to%202026.2-purple.svg)](https://www.nvaccess.org/)
 
 **Nepali Reader** is a free, open-source add-on for the NVDA screen reader. It makes NVDA read Nepali documents correctly: Preeti and other old Nepali fonts, and PDFs whose Nepali text comes out jumbled. Everything works offline.
 
-**Latest version: 2.2.1** · [Download](https://github.com/SuyogDhungel/nepaliReader/releases/download/v2.2.1/nepaliReader-2.2.1.nvda-addon) · [What changed](CHANGELOG.md)
+**Latest version: 2.2.2** · [Download](https://github.com/SuyogDhungel/nepaliReader/releases/download/v2.2.2/nepaliReader-2.2.2.nvda-addon) · [What changed](CHANGELOG.md)
 
 ---
 
@@ -21,6 +21,14 @@ Blind and visually impaired computer users in Nepal meet three problems in every
 Nepali Reader fixes all three. For a PDF it reads the PDF file itself, the letters the page actually draws, so NVDA says what is printed.
 
 ---
+
+## What's new in 2.2.2
+
+* **Every way of reading says the same:** moving by character, word or line, and selecting, give the same text in the same order as reading the whole line, in Preeti and in Unicode PDFs.
+* **Letters in the right order:** moving by character follows the line as it is read, also in PDFs that store their text in an unusual order.
+* **English words stay English** when moving by word in a Nepali PDF.
+* **Words the PDF viewer cuts or reorders** are read as printed.
+* **Ready sooner:** a PDF opened for the first time is ready much sooner, also while you are already reading.
 
 ## What's new in 2.2.1
 
@@ -40,7 +48,7 @@ Details: [CHANGELOG.md](CHANGELOG.md).
 
 ## Download and install
 
-1. Download **[nepaliReader-2.2.1.nvda-addon](https://github.com/SuyogDhungel/nepaliReader/releases/download/v2.2.1/nepaliReader-2.2.1.nvda-addon)** (from the [Releases page](https://github.com/SuyogDhungel/nepaliReader/releases)).
+1. Download **[nepaliReader-2.2.2.nvda-addon](https://github.com/SuyogDhungel/nepaliReader/releases/download/v2.2.2/nepaliReader-2.2.2.nvda-addon)** (from the [Releases page](https://github.com/SuyogDhungel/nepaliReader/releases)).
 2. Open your **Downloads** folder and press **Enter** on the file.
 3. NVDA asks whether to install the add-on (or to update it, if an older version is installed). Press **Yes** (`Alt+Y`).
 4. When NVDA offers to restart, choose **Yes**.

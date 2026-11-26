@@ -235,6 +235,9 @@ def matchKey(s):
 	return keyOf(s).translate(_NORM)
 
 
+# Preeti keys of signs drawn without width, over or under a letter (ू ु ं ँ ृ ् े र् ्र ै)
+_LEGACY_ZERO_KEYS = "\"'+F[\\]{|}\u00ab"
+
 # Preeti keys that draw a sign over or under a letter (े ै ु ू ृ र् ं ँ ा ी ि ः)
 _PREETI_SIGN_KEYS = frozenset("]}'\"[{+F\u201c\u201dfLlM\u00bf")
 
@@ -868,6 +871,7 @@ def _isSymbolFont(font):
 
 
 # a fill-in line of a form (dots, underscores, Preeti's = for the dot)
+_FILL_CHARS = frozenset("=._-\u2013\u2014\u2026\u00b7")
 _FILLER = re.compile(r"^[=._\-\u2013\u2014\u2026\u00b7]{3,}$")
 
 # letters of scripts written right to left: their runs are drawn right to left on purpose
@@ -1581,7 +1585,9 @@ class DocIndex:
 		ZB = getattr(self, "ZB", "")
 		if not ZB:
 			return -1
-		drop = self._zeroDrop
+		return self._findInSkel(key, ZB, self.ZBpos, self._zeroDrop)
+
+	def _findInSkel(self, key, ZB, pos, drop):
 		sk = "".join(ch for ch in key if not drop.match(ch))
 		n = len(key)
 		if len(sk) < 3 or len(sk) == n:
@@ -1590,7 +1596,6 @@ class DocIndex:
 		while lead < n and drop.match(key[lead]):
 			lead += 1
 		want = sorted(key)
-		pos = self.ZBpos
 		hs = bisect.bisect_left(pos, self._hint) if self._hint else 0
 		for start in ((hs, 0) if hs else (0,)):
 			q = ZB.find(sk, start)
@@ -1603,10 +1608,47 @@ class DocIndex:
 				q = ZB.find(sk, q + 1)
 		return -1
 
+	def _buildSignSkel(self, pause=None):
+		"""For a Preeti (or other legacy-font) PDF not drawn backwards: B without the keys of signs
+		drawn over or under a letter (े ु ं र् ...), which a viewer sometimes gives a letter or a
+		word later than the PDF ("u/sf] ]" for u/]sf]: गरेको). Character and word reading place
+		such a line with it; line reading has its own ways."""
+		if getattr(self, "zeroKeys", "") or getattr(self, "_signSkel", None) is not None:
+			return
+		if not any(w[2] for w in self.words):
+			self._signSkel = ()
+			return
+		drop = re.compile("[%s]" % re.escape(_LEGACY_ZERO_KEYS))
+		keep = []
+		zpos = array.array("i")
+		for i, ch in enumerate(self.B):
+			if pause and i % 20000 == 0:
+				pause()
+			if not drop.match(ch):
+				keep.append(ch)
+				zpos.append(i)
+		self._signSkel = ("".join(keep), zpos, drop)
+
+	def _findPlaced(self, key):
+		"""_find, and for character and word reading also a line whose legacy-font signs the viewer
+		moved (when the tables for that are ready: never built on NVDA's thread)."""
+		p = self._find(key)
+		if p >= 0:
+			return p
+		sk = getattr(self, "_signSkel", None)
+		if sk:
+			p = self._findInSkel(key, sk[0], sk[1], sk[2])
+		return p
+
 	def _find(self, key):
 		"""Start of `key` in the document text. Viewers sometimes put a vowel sign one letter
 		later than the PDF does (PDFium orders by position), so when the exact text is not found,
 		pieces of it are used as anchors and the span is accepted if it holds the same letters."""
+		misses = self.__dict__.setdefault("_misses", set())
+		if key in misses:
+			# (looked for before and not there: a line read again by character or word asks
+			# again for the same text many times)
+			return -1
 		B = self.B
 		p = B.find(key, self._hint)
 		if p < 0:
@@ -1659,9 +1701,155 @@ class DocIndex:
 							best = (score, cand)
 				if best[0] >= 0.9 * n and _MOVABLE_SIGNS.sub("", B[best[1]:best[1] + n]) == _MOVABLE_SIGNS.sub("", key):
 					p = best[1]
+		if p < 0 and self.zeroKeys:
+			p = self._findShuffled(key)
 		if p >= 0:
 			self._hint = p
+		else:
+			if len(misses) > 5000:
+				misses.clear()
+			misses.add(key)
 		return p
+
+	def _sortedWord(self, k):
+		"""Start in B of the document word nearest the last place read that has the characters of
+		`k` in some order (a word of a run drawn backwards that the viewer gives in pieces, ko| fu]
+		for k|of]u), or -1. Only for words of three characters or more."""
+		if len(k) < 3:
+			return -1
+		d = self.__dict__.get("_bySorted")
+		if d is None:
+			d = {}
+			for i, w in enumerate(self.words):
+				if len(w[3]) >= 3:
+					d.setdefault("".join(sorted(w[3])), []).append(i)
+			self._bySorted = d
+		ws = d.get("".join(sorted(k)))
+		if not ws:
+			return -1
+		h = self._hint
+		starts = self.starts
+		after = [i for i in ws if starts[i] >= h]
+		i = min(after, key=lambda i: starts[i] - h) if after else min(ws, key=lambda i: abs(starts[i] - h))
+		return starts[i]
+
+	def _sameWordOrder(self, key, seg, c):
+		"""True if the viewer's line `key` has the words of `seg` (the same characters, at c in B) in
+		the document's order: inside a word any order, and a fill-in line (dots, dashes) anywhere;
+		but two columns the viewer gives in another order are not the same line."""
+		al = self._alignShuffled(key, seg)
+		if al is None:
+			return False
+		starts = self.starts
+		last = -1
+		for i, j in enumerate(al):
+			if key[i] in _FILL_CHARS:
+				continue
+			w = bisect.bisect_right(starts, c + j) - 1
+			if w < last:
+				return False
+			last = w
+		return True
+
+	def _findShuffled(self, key):
+		"""Start in B of `key` as the viewer shows a line of a run drawn backwards whose pieces it
+		put in another order: a form's fill-in line drawn through its label ("k ===== l/rokq"
+		for "kl/ro kq ====="), a number's brackets before its signs ("g -!_ =+" for "g+=-!_").
+		The same characters, all of them, as whole words of the document, near a piece of the line
+		that is there as it is."""
+		n = len(key)
+		if n < 4:
+			return -1
+		cache = self.__dict__.setdefault("_shufCache", {})
+		got = cache.get(key)
+		if got is not None:
+			return got
+		got = self._sortedWord(key)
+		if got >= 0:
+			cache[key] = got
+			return got
+		B = self.B
+		starts = self.starts
+		want = sorted(key)
+		size = 8 if n >= 16 else max(3, n // 2)
+		tried = set()
+		# anchors: pieces of the line spread over it, never a run of one character (a fill-in line
+		# of dots is everywhere in a form)
+		anchors = []
+		offs = list(range(0, max(1, n - size + 1), max(1, size // 2)))
+		if len(offs) > 48:
+			offs = [offs[(k * (len(offs) - 1)) // 47] for k in range(48)]
+		t0 = time.perf_counter()
+		for a in offs:
+			chunk = key[a:a + size]
+			if len(chunk) >= 3 and len(set(chunk)) >= 3 and B.find(chunk) >= 0:
+				anchors.append(a)
+			if time.perf_counter() - t0 > 0.03:
+				break
+		if len(anchors) > 8:
+			# (spread over the line: a piece the viewer moved shifts the anchors near it)
+			anchors = [anchors[(k * (len(anchors) - 1)) // 7] for k in range(8)]
+		for a in anchors:
+			chunk = key[a:a + size]
+			q = B.find(chunk, max(0, self._hint - 400))
+			if q < 0:
+				q = B.find(chunk)
+			tries = 0
+			while q >= 0 and tries < 8 and got < 0:
+				tries += 1
+				# the line starts at a word near where the anchor says (a piece moved before the
+				# anchor shifts it by its length)
+				lo = bisect.bisect_left(starts, max(0, q - a - 48))
+				hi = bisect.bisect_right(starts, min(q, q - a + 48))
+				for c in starts[lo:hi]:
+					if c in tried or c + n < q + len(chunk):
+						continue
+					tried.add(c)
+					e = bisect.bisect_left(starts, c + n)
+					if not (e >= len(starts) or starts[e] == c + n):
+						continue
+					if sorted(B[c:c + n]) == want and self._sameWordOrder(key, B[c:c + n], c):
+						got = c
+						break
+				q = B.find(chunk, q + 1)
+			if got >= 0:
+				break
+		if len(cache) > 2000:
+			cache.clear()
+		cache[key] = got
+		return got
+
+	def _findLine(self, key):
+		"""(p, h): the viewer's line `key` at p in B, its first h characters being the viewer's own
+		text, not the document's (Chrome puts "Finished loading PDF" in front of the first line),
+		or (-1, 0). Character and word reading place themselves in the line with it."""
+		p = self._findPlaced(key)
+		if p >= 0:
+			return p, 0
+		cache = self.__dict__.setdefault("_headCache", {})
+		got = cache.get(key)
+		if got is None:
+			got = (-1, 0)
+			n = len(key)
+			B = self.B
+			# (a quick test first: some six letters of the rest are in the document as they are)
+			hs = range(1, min(48, n - 8))
+			first = [h for h in hs if B.find(key[h:h + 6]) >= 0]
+			later = [h for h in hs if h not in first and any(len(key[h + a:h + a + 6]) == 6 and B.find(key[h + a:h + a + 6]) >= 0 for a in (6, 12))]
+			t0 = time.perf_counter()
+			for h in (first + later)[:16]:
+				if time.perf_counter() - t0 > 0.05:
+					break  # (a line that is not in the document: a key press never waits long)
+				q = self._findPlaced(key[h:])
+				if q >= 0:
+					got = (q, h)
+					break
+			if len(cache) > 2000:
+				cache.clear()
+			cache[key] = got
+		if got[0] >= 0:
+			self._hint = got[0]
+		return got
 
 	def lookup(self, text):
 		"""Real text for what the viewer gave: list of (piece, certain) or None if unknown here.
@@ -2003,9 +2191,26 @@ class DocIndex:
 					return legacyFonts.convert(t, enc, trusted=i in self.trustedLegacy, table=self.legacyTables.get(i)) or ""
 				if key[lo] in "\u2018\u2019\u201c\u201d\"'" and key[lo] in fixed:
 					return (key[lo], True)  # a quotation mark the word keeps (‘नेपाल)
+				tail = key[lo:]
+				if not any(ch.isalnum() for ch in tail) and fixed.endswith(tail) and not fixed.isascii():
+					return (key[lo], True)  # a mark at the end the word keeps as it is (पर्छ. with its .)
 				if len(key) == 1:
 					return (fixed, True)  # a word of one key: what the word reads (M alone is the colon)
+				if cv(src[lo]) == "ि":
+					# the short i key, drawn before its letter: ि (a prefix ending in it converts
+					# with the sign out of place: a}+l is बैिं)
+					return ("ि", True)
 				pre = cv(src[:lo]) if lo else ""
+				j = lo - 1
+				while j >= 0 and cv(src[j]).endswith("्"):
+					j -= 1  # (half letters of the cluster the short i is drawn before)
+				if j >= 0 and cv(src[j]) == "ि":
+					# after the short i key: a half letter says itself (स्), the letter that
+					# completes the cluster says the cluster with the i (स्थि, कि)
+					own = cv(src[lo])
+					if own.endswith("्") and not own.isascii():
+						return (own, True)
+					pre = cv(src[:j]) if j else ""
 				whole = cv(src[:lo + 1])
 				if whole.startswith(pre) and whole[len(pre):] and not whole[len(pre):].isascii():
 					return (whole[len(pre):], True)
@@ -2016,6 +2221,10 @@ class DocIndex:
 					while n < min(len(pre), len(whole)) and pre[n] == whole[n]:
 						n += 1
 					rest = whole[n:]
+					for ch in pre[n:]:
+						# (a nasal sign the key before already said: 5f+}, ौ not ौं)
+						if ch in "\u0901\u0902\u0903" and ch in rest[1:]:
+							rest = rest[:1] + rest[1:].replace(ch, "", 1)
 					if rest and rest[0] in DEP_SIGNS and not rest.isascii():
 						# the key turns the sign before it into another (f then ]: ो; rf}: ौ), as
 						# arrowing over the same word in Unicode says the sign
@@ -2091,94 +2300,142 @@ class DocIndex:
 			conflicts = self._ambiguousShown = {k for k, v in candidates.items() if len(v) > 1}
 		return conflicts
 
-	def spanAt(self, lineText, offset, length):
+	def spanAt(self, lineText, offset, length, fallback=True):
 		"""Real text for `length` characters at `offset` of the viewer's line (character / word
 		navigation): list of (piece, certain) or None."""
 		key = matchKey(lineText)
-		if not key or key in self._ambiguousSourceKeys():
+		if not key or key in self._ambiguousSourceKeys() or key.isdigit():
+			# (a line of digits alone - a page number - is not looked for anywhere in the
+			# document: line reading keeps it as it is)
 			return None
-		p = self._find(key)
+		p, h = self._findLine(key) if fallback else (self._findPlaced(key), 0)
 		if p < 0:
-			return None
-		a = len(keyOf(lineText[:offset]))
+			return self._inToken(lineText, offset, length, self.spanAt) if fallback else None
+		a = len(keyOf(lineText[:offset])) - h
 		b = a + len(keyOf(lineText[offset:offset + length]))
-		if b <= a:
+		if a < 0 or b <= a:
 			return None
-		q, r = self._placeIn(key, p, a, b)
+		q, r = self._placeIn(key[h:], p, a, b)
 		return self._span(q, r)
 
-	def charAt(self, lineText, offset, length=1):
+	def _inToken(self, lineText, offset, length, how):
+		"""A line not found in the document (the viewer joined or split it differently): the piece
+		read in the word (between spaces) that holds it, when that word is found."""
+		if lineText.strip() == lineText[offset:offset + length].strip() or not lineText[offset:offset + length].strip():
+			return None
+		s = offset
+		while s > 0 and not lineText[s - 1].isspace():
+			s -= 1
+		e = offset + max(1, length)
+		if any(ch.isspace() for ch in lineText[offset:e].strip()):
+			return None
+		while e < len(lineText) and not lineText[e].isspace():
+			e += 1
+		token = lineText[s:e]
+		k = matchKey(token)
+		if token == lineText:
+			return None
+		alone = len(k) >= 2
+		if alone and (len(k) > 4 or not self.zeroKeys):
+			got = how(token, offset - s, length, fallback=False)
+			if got is not None:
+				return got
+			alone = False
+		# a word the viewer cut in pieces (a run drawn backwards: "ko| fu]" for प्रयोग; PDFium's
+		# मलु कु ी): with the piece after it, before it, or both - as line reading joins them
+		toks = [(m.start(), m.end()) for m in re.finditer(r"\S+", lineText)]
+		n = next((j for j, (a, b) in enumerate(toks) if a == s), None)
+		if n is None:
+			return None
+		for lo, hi in ((n, n + 1), (n - 1, n), (n - 1, n + 1), (n, n + 2), (n - 2, n)):
+			if lo < 0 or hi >= len(toks) or hi - lo > 2:
+				continue
+			a, b = toks[lo][0], toks[hi][1]
+			got = how(lineText[a:b], offset - a, length, fallback=False)
+			if got is not None:
+				return got
+		if alone:
+			return how(token, offset - s, length, fallback=False)
+		return None
+
+	def charAt(self, lineText, offset, length=1, fallback=True):
 		"""The syllable of the real text at character `offset` of the viewer's line (or None);
 		`length` is the size of the unit the viewer steps over (a cluster such as म्िाः)."""
 		key = matchKey(lineText)
 		pre = keyOf(lineText[:offset])
 		here = keyOf(lineText[offset:offset + max(length, 1)])
-		if not key or not here or key in self._ambiguousSourceKeys():
+		if not key or not here or key in self._ambiguousSourceKeys() or key.isdigit():
 			return None
-		p = self._find(key)
+		p, h = self._findLine(key) if fallback else (self._findPlaced(key), 0)
 		if p < 0:
-			return None
-		q, r = self._placeIn(key, p, len(pre), len(pre) + len(here))
+			return self._inToken(lineText, offset, max(length, 1), self.charAt) if fallback else None
+		if len(pre) < h:
+			return None  # the viewer's own text in front of the line
+		q, r = self._placeIn(key[h:], p, len(pre) - h, len(pre) - h + len(here))
 		res = self._span(q, r)
 		if res and all(r[1] for r in res):
-			return "".join(r[0] for r in res)
+			got = "".join(r[0] for r in res)
+			if len(here) == 1 and len(aksharas(got)) > 2:
+				# a whole word for one character: this word's letters are not known one by one
+				# (the viewer's text of it is damaged), so the character says itself
+				return None
+			return got
 		return None
 
 	def _placeIn(self, key, p, a, b):
-		"""Where characters a..b of the viewer's line `key` (found at p) are in B. Usually the
-		same places; for a line of a run drawn backwards, whose signs the viewer moved (मरो/े for
-		मेरो/), each letter is placed at its own letter and each sign at its own sign."""
-		n = len(key)
-		seg = self.B[p:p + n]
-		if seg == key or not self.zeroKeys:
-			return p + a, p + b
-		al = self._alignMoved(key, seg)
-		if al is None:
-			return p + a, p + b
-		picked = [al[i] for i in range(a, min(b, n))]
-		return p + min(picked), p + max(picked) + 1
+		"""Where characters a..b of the viewer's line `key` (found at p) are in B: the same places,
+		counted along the line. A line whose characters the viewer gives in another order than the
+		document (a run drawn backwards: मरो/े for मेरो/; a fill-in line drawn through its label) is
+		read in the document's order: the k-th character of the line says the k-th character of the
+		document's line, so moving along it by character, word or selection says exactly what line
+		reading says, in the same order."""
+		return p + a, p + b
 
-	def _alignMoved(self, key, seg):
-		"""For each character of the viewer's `key`, its place in `seg` (the document's text of
-		the same letters, signs drawn without width in other places), or None. The letters keep
-		their order; a sign goes to the same sign nearest its letter."""
-		cache = self.__dict__.setdefault("_alignCache", {})
-		got = cache.get((key, seg))
-		if got is not None or (key, seg) in cache:
-			return got
-		zk = self.zeroKeys
-		res = None
-		if len(key) == len(seg) and sorted(key) == sorted(seg):
-			kb = [i for i, ch in enumerate(key) if ch not in zk]
-			sb = [i for i, ch in enumerate(seg) if ch not in zk]
-			if len(kb) == len(sb) and all(key[i] == seg[j] for i, j in zip(kb, sb)):
-				res = [None] * len(key)
-				for i, j in zip(kb, sb):
-					res[i] = j
-				used = set()
-				# the letter each sign follows in the viewer's text (it was moved past it)
-				nb = 0
-				for i, ch in enumerate(key):
-					if ch not in zk:
-						nb += 1
-						continue
-					# in seg: the same sign, from just before the letter it follows here
-					best = None
-					for j, sc in enumerate(seg):
-						if sc != ch or j in used:
-							continue
-						before = sum(1 for x in sb if x < j)
-						d = abs(before - (nb - 1))
-						if best is None or d < best[0]:
-							best = (d, j)
-					if best is None:
-						res = None
-						break
-					used.add(best[1])
-					res[i] = best[1]
-		if len(cache) > 500:
-			cache.clear()
-		cache[(key, seg)] = res
+	@staticmethod
+	def _alignShuffled(key, seg):
+		"""For each character of `key`, its place in `seg` (the same characters in another order):
+		the longest runs in the same order are matched first, then every other character goes to
+		the same character, unused, nearest the place its neighbours have."""
+		import difflib
+		n = len(key)
+		res = [None] * n
+		used = set()
+		# letters first (a fill-in line's dots, wherever the viewer put them, are only dots)
+		ki = [i for i, ch in enumerate(key) if ch not in _FILL_CHARS]
+		si = [j for j, ch in enumerate(seg) if ch not in _FILL_CHARS]
+		ks = "".join(key[i] for i in ki)
+		ss = "".join(seg[j] for j in si)
+		for blk in difflib.SequenceMatcher(None, ks, ss, autojunk=False).get_matching_blocks():
+			for k in range(blk.size):
+				res[ki[blk.a + k]] = si[blk.b + k]
+				used.add(si[blk.b + k])
+		free = {}
+		for j, ch in enumerate(seg):
+			if j not in used:
+				free.setdefault(ch, []).append(j)
+		for i in range(n):
+			if res[i] is not None:
+				continue
+			if key[i] in _FILL_CHARS:
+				continue
+			# where it would be: just after the place of the character before it
+			prev = next((res[k] for k in range(i - 1, -1, -1) if res[k] is not None), -1)
+			cands = free.get(key[i])
+			if not cands:
+				return None
+			j = min(cands, key=lambda x: abs(x - (prev + 1)))
+			cands.remove(j)
+			res[i] = j
+		for i in range(n):
+			if res[i] is None:
+				# the dots: the nearest free dot of the same kind
+				prev = next((res[k] for k in range(i - 1, -1, -1) if res[k] is not None), -1)
+				cands = free.get(key[i])
+				if not cands:
+					return None
+				j = min(cands, key=lambda x: abs(x - (prev + 1)))
+				cands.remove(j)
+				res[i] = j
 		return res
 
 	def prepare(self, pause=None):
@@ -2197,6 +2454,7 @@ class DocIndex:
 				pause()
 			if self._byKey is None:
 				self._buildTokenMaps(pause)
+			self._buildSignSkel(pause)
 		finally:
 			self.preparing = False
 
@@ -2348,7 +2606,7 @@ class DocIndex:
 					break
 			if not done and self.zeroKeys:
 				# (a document with runs drawn backwards: the viewer also joins words and cuts others,
-				# "v ftfjfnsf]gfd" for "vftfjfnsf] gfd"; pieces that together are whole words of the
+				# "k l/rokq" for "kl/ro kq"; pieces that together are whole words of the
 				# document, in place, are read as those words)
 				for span in (3, 2):
 					if i + span > len(toks) or any(_FILLER.match(t) for t in toks[i:i + span]):
@@ -2367,6 +2625,26 @@ class DocIndex:
 							i += span
 							done = True
 							break
+			if not done and self.zeroKeys:
+				# (pieces that together are one word of the document in another order: "ugk{' g{]5"
+				# for ug'{kg]{5, "al+}su+" for a}+ls+u)
+				for span in (3, 2, 1):
+					if i + span > len(toks) or any(_FILLER.match(t) for t in toks[i:i + span]):
+						continue
+					k = matchKey("".join(toks[i:i + span]))
+					if len(k) < (3 if span > 1 else 4) or not any(c.isalpha() for c in k):
+						continue
+					p = self._sortedWord(k)
+					if p < 0:
+						continue
+					got = self._span(p, p + len(k))
+					if got and all(ok for _pc, ok in got):
+						out.extend(got)
+						found += 1
+						self._hint = p
+						i += span
+						done = True
+						break
 			if not done:
 				out.append((toks[i], False))
 				i += 1

@@ -18,7 +18,7 @@ import threading
 import time
 import unicodedata
 import zlib
-from collections import OrderedDict
+from collections import OrderedDict, deque
 
 import addonHandler
 import api
@@ -95,6 +95,8 @@ CONTEXT_SECONDS = 300.0  # a window stays "known legacy" this long after confirm
 CHECK_INTERVAL = 0.2     # seconds between "is this a web page" lookups
 VISUAL_SLOW = 0.05       # a screen check slower than this is switched off for that window class for a minute
 PDF_FIRST_WAIT = 0.3     # the longest NVDA waits, once per PDF, for the file's text (a PDF read before)
+# Brave/Chrome put their status message in front of the first line of a PDF
+_VIEWER_PREFIXES = ("Finished loading PDF", "Loading PDF")
 QUIET_AFTER_KEY = 0.2    # background work rests this long after each key and each thing NVDA says
 
 # Web browsers and chat apps: text there is Unicode, so only convert when the page names a legacy font.
@@ -1017,11 +1019,12 @@ class _Yield:
 	otherwise rests 15 ms after about 8 ms of work. When Nepali mode is switched off, the work
 	stops at its next pause."""
 
-	def __init__(self, work=0.008, rest=0.015, stopped=None, quiet=None):
+	def __init__(self, work=0.008, rest=0.015, stopped=None, quiet=None, maxWait=1.0):
 		self.work = work
 		self.rest = rest
 		self.stopped = stopped
 		self.quiet = QUIET_AFTER_KEY if quiet is None else quiet
+		self.maxWait = maxWait
 		self.last = time.perf_counter()
 
 	def __call__(self):
@@ -1030,8 +1033,8 @@ class _Yield:
 		waited = 0.0
 		while True:
 			idle = time.monotonic() - _activity[0]
-			if idle >= self.quiet or waited >= 1.0:
-				# (a second of keys without a break: one slice of work, so the work still ends)
+			if idle >= self.quiet or waited >= self.maxWait:
+				# (keys without a break: one slice of work, so the work still ends)
 				break
 			step = min(0.05, self.quiet - idle + 0.005)
 			time.sleep(step)
@@ -1612,7 +1615,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				inCode = _isCodeApp(fg)
 			except Exception:
 				inCode = False
-			if mode != "off" and not urlish and not (inCode and not ctxEnc):
+			if mode != "off" and not urlish and not (inCode and not ctxEnc) and not self._fromDocument(item):
 				# a short piece (a table header, a cell) only in a Preeti document or a PDF, and never a
 				# plain number or page count ("/14", "100%", "1.5" are what they say); a symbol alone
 				# only where Preeti has been seen
@@ -1869,6 +1872,35 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			new = make(orig)
 			setattr(owner, "_getWordOffsets", new)
 			self._patched2.append((owner, "_getWordOffsets", orig, new))
+
+		# moving by character (Left / Right Arrow, Shift+Arrow) in a PDF: a space the viewer put
+		# inside a word of the PDF is no stop of its own, so the letters said one by one are the
+		# word as line reading says it
+		charLocal = threading.local()
+
+		def makeChar(orig):
+			def _getCharacterOffsets(ti, offset):
+				res = orig(ti, offset)
+				if getattr(charLocal, "busy", False) or not isOn():
+					return res
+				charLocal.busy = True
+				try:
+					new = plugin._realCharOffsets(ti, offset, res, orig)
+				except Exception:
+					diag.exception("character offsets")
+					new = None
+				finally:
+					charLocal.busy = False
+				return new if new is not None else res
+			return _getCharacterOffsets
+
+		for owner in owners:
+			orig = owner.__dict__.get("_getCharacterOffsets")
+			if orig is None:
+				continue
+			new = makeChar(orig)
+			setattr(owner, "_getCharacterOffsets", new)
+			self._patched2.append((owner, "_getCharacterOffsets", orig, new))
 
 	# -- tables and headings of a PDF, in the viewer itself -------------------------------
 
@@ -3256,11 +3288,19 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		rel = offset - lineStart
 		if lineText[rel].isspace():
 			return None
+		viewerStart = None
+		pre = self._viewerPrefix(lineText) if lineText[:1] in "FL" else 0
+		if pre and start - lineStart < pre < end - lineStart:
+			# the browser's "Finished loading PDF" glued to the PDF's first word ("PDFDear"): its
+			# own word, and the PDF's word after it its own
+			if rel < pre:
+				return (start, lineStart + pre)
+			viewerStart = start = lineStart + pre
 		idx = self._readyIndex(getattr(ti, "obj", None))
 		if idx is not None:
 			span = self._indexWordSpan(idx, lineText, rel)
 		else:
-			span = self._legacyWordSpan(lineText, rel)
+			span = self._legacyWordSpan(lineText, rel, pdf=self._isPdfWindow(getattr(ti, "obj", None)))
 			if span is not None:
 				# never across a table cell, link or other control: only inside the piece of text
 				# NVDA itself keeps words in (in browse mode, one field of the buffer)
@@ -3270,16 +3310,34 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 					b = min(span[1], fb[1] - lineStart)
 					span = (a, b) if a <= rel < b else None
 		if span is None:
-			return None
-		ns = min(start, lineStart + span[0])
-		ne = max(end, lineStart + span[1])
-		if (ns, ne) == (start, end):
+			return (start, end) if viewerStart is not None else None
+		if idx is not None:
+			# the document's own word, exactly: a word of the viewer that holds the end of one real
+			# word and the start of the next (xfdf|]b]z: हाम्रो देश) is cut where they meet,
+			# so moving word by word never says a word twice
+			ns, ne = lineStart + span[0], lineStart + span[1]
+		else:
+			ns = min(start, lineStart + span[0])
+			ne = max(end, lineStart + span[1])
+		if viewerStart is not None:
+			ns = max(ns, viewerStart)
+		if (ns, ne) == (start, end) and viewerStart is None:
 			return None
 		return (ns, ne)
 
 	def _indexWordSpan(self, idx, lineText, rel):
 		"""The word of the PDF's real text that the character at `rel` of the viewer's line belongs
 		to, as (start, end) in the line (with its trailing spaces), or None."""
+		for s, e in self._docWordSpans(idx, lineText):
+			if s <= rel < e:
+				while e < len(lineText) and lineText[e] in " \t\xa0":
+					e += 1
+				return (s, e)
+		return None
+
+	def _docWordSpans(self, idx, lineText):
+		"""(start, end) in the viewer's line of each word of the PDF's real text it holds (without
+		the spaces after it; a space the viewer put inside a word is inside its span)."""
 		cache = getattr(self, "_wordSpans", None)
 		if cache is None:
 			cache = self._wordSpans = _LRU(64)
@@ -3288,35 +3346,116 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		if spans is None:
 			spans = []
 			key = pdfText.matchKey(lineText)
-			p = idx._find(key) if key else -1
+			p, h = idx._findLine(key) if key else (-1, 0)
 			if p >= 0:
-				starts = idx.starts
-				cur = s0 = last = None
-				q = p
-				for i, ch in enumerate(lineText):
-					k = pdfText.keyOf(ch)
-					if not k:
-						continue
-					wi = bisect.bisect_right(starts, q) - 1
-					q += len(k)
-					if wi != cur:
-						if cur is not None:
-							spans.append((s0, last + 1))
-						cur, s0 = wi, i
-					last = i
-				if cur is not None:
-					spans.append((s0, last + 1))
+				spans = self._spansAt(idx, lineText, p, h)
+			elif key:
+				# a line not found as a whole (the viewer joined or split it differently): each of
+				# its words between spaces that is found in the document, on its own; a word the
+				# viewer gives in pieces ("ko| fu]", मलु कु ी) with its pieces together, when they
+				# are one word of the document - as line reading reads them
+				toks = list(re.finditer(r"\S+", lineText))
+				t = 0
+				while t < len(toks):
+					done = False
+					for size in (3, 2, 1):
+						if t + size > len(toks):
+							continue
+						a, b = toks[t].start(), toks[t + size - 1].end()
+						k = pdfText.matchKey(lineText[a:b])
+						if len(k) < (2 if size == 1 else 4) or k in idx._ambiguousSourceKeys():
+							continue
+						q = idx._findPlaced(k) if hasattr(idx, "_findPlaced") else idx._find(k)
+						if q >= 0:
+							got = [(s0 + a, e0 + a) for s0, e0 in self._spansAt(idx, lineText[a:b], q, 0)]
+							if size > 1 and not any(s0 < toks[t + 1].start() < e0 for s0, e0 in got):
+								continue  # (pieces that are not one word together: each on its own)
+							spans.extend(got)
+							t += size
+							done = True
+							break
+					if not done:
+						t += 1
 			cache.put(ck, spans)
-		for s, e in spans:
-			if s <= rel < e:
-				while e < len(lineText) and lineText[e] in " \t\xa0":
-					e += 1
-				return (s, e)
+		return spans
+
+	def _realCharOffsets(self, ti, offset, res, orig):
+		"""(start, end) of the character at `offset` with a space the viewer put inside a word of the
+		PDF taken in ("ko| fu]" for प्रयोग, "xg' ]" for हुने), so moving by character never stops
+		on a space line reading does not have; or None to keep the viewer's character."""
+		start, end = res[0], res[1]
+		if end <= start:
+			return None
+		idx = self._readyIndex(getattr(ti, "obj", None))
+		if idx is None:
+			return None
+		# (one short look first: only a space here or right after it needs the line)
+		near = ti._getTextRange(start, end + 1)
+		if not near or not any(ch in " \xa0" for ch in near):
+			return None
+		lineStart, lineEnd = ti._getLineOffsets(offset)
+		if not (lineStart <= start < end <= lineEnd) or lineEnd - lineStart > 4000:
+			return None
+		lineText = ti._getTextRange(lineStart, lineEnd)
+		if not lineText or len(lineText) != lineEnd - lineStart:
+			return None
+		a, b = start - lineStart, end - lineStart
+		here = lineText[a:b]
+		for s, e in self._docWordSpans(idx, lineText):
+			if not (s <= a < e):
+				continue
+			j = b
+			while j < e and lineText[j] in " \xa0":
+				j += 1
+			if not here.strip(" \xa0"):
+				# a space inside the word: one character with the one before it
+				i = a
+				while i > s and lineText[i - 1] in " \xa0":
+					i -= 1
+				if i <= s:
+					return None
+				ps = orig(ti, lineStart + i - 1)[0]
+				return (ps, lineStart + j) if j < e else None
+			if b < j < e:
+				# the character before a space inside the word: the space with it
+				return (start, lineStart + j)
+			return None
 		return None
 
-	def _legacyWordSpan(self, lineText, rel):
+	@staticmethod
+	def _spansAt(idx, lineText, p, h):
+		"""(start, end) in `lineText` of each document word it holds, the line found at p in the
+		document text, its first h characters being the viewer's own."""
+		spans = []
+		starts = idx.starts
+		cur = s0 = last = None
+		# (counted along the line: a line whose characters the viewer gives in another order is
+		# read in the document's order, its k-th character being the document's k-th - pdfText._placeIn)
+		ki = -h
+		for i, ch in enumerate(lineText):
+			k = pdfText.keyOf(ch)
+			if not k:
+				continue
+			if ki < 0:
+				ki += len(k)
+				continue
+			q = p + ki
+			ki += len(k)
+			wi = bisect.bisect_right(starts, q) - 1
+			if wi != cur:
+				if cur is not None:
+					spans.append((s0, last + 1))
+				cur, s0 = wi, i
+			last = i
+		if cur is not None:
+			spans.append((s0, last + 1))
+		return spans
+
+	def _legacyWordSpan(self, lineText, rel, pdf=False):
 		"""A Preeti word that NVDA breaks at one of its sign keys (btf{, a'em\\g'): the whole word
-		between spaces, or None for anything else (English keeps NVDA's own words)."""
+		between spaces, or None for anything else (English keeps NVDA's own words). In a PDF whose
+		real text is still being read, a word is what line reading takes as one: all of it between
+		spaces (btf{ for दर्ता, not bt and f{)."""
 		c = conf()
 		if c["mode"] == "off":
 			return None
@@ -3333,7 +3472,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		if not core or detector.isEnglishWord(core.lower()):
 			return None
 		ctxEnc = self._inContext()
-		if not ctxEnc and not detector.looksLegacy(run, c["encoding"], context=False):
+		if not ctxEnc and not detector.looksLegacy(run, c["encoding"], context=pdf and not self._pdfIsUnicode()):
 			return None
 		while e < len(lineText) and lineText[e] in " \t\xa0":
 			e += 1
@@ -3603,10 +3742,15 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			if idx is None:
 				t0 = time.monotonic()
 				pause = _Yield(stopped=stopped)
+				# the first index of the PDF being read is made without long rests: until it is
+				# there, words and letters can only be guessed (a user who starts reading at once
+				# kept the work resting and heard guesses for a minute). It rests only while NVDA
+				# answers a key (60 ms) and takes a short turn at least every 0.3 s
+				eager = _Yield(stopped=stopped, quiet=0.06, maxWait=0.3, work=0.02, rest=0.01)
 				if len(data) > 400 * 1024:
 					# a long document: the first pages first, so reading can start at once
 					try:
-						first = pdfText.DocIndex.build(data, detector=detector, pause=pause, isWord=neLexicon.isWord, maxPages=2)
+						first = pdfText.DocIndex.build(data, detector=detector, pause=eager, isWord=neLexicon.isWord, maxPages=2)
 						if stopped is not None and stopped():
 							raise _Stopped()
 						st.index = first
@@ -3615,7 +3759,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 						diag.write("pdf: first pages ready in %.1f s" % (time.monotonic() - t0))
 					except Exception:
 						diag.exception("first pages")
-				idx = pdfText.DocIndex.build(data, detector=detector, pause=pause, isWord=neLexicon.isWord)
+				idx = pdfText.DocIndex.build(data, detector=detector, pause=pause if st.status == "ready" else eager, isWord=neLexicon.isWord)
 				if stopped is not None and stopped():
 					raise _Stopped()
 				log.info("Nepali Reader: rebuilt %s in %.1f s: %r" % (loc, time.monotonic() - t0, idx.stats))
@@ -3721,7 +3865,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			# one line of the page that the viewer broke into several (a sign below its letter)
 			got = self._indexText(None if "\n" in joined.rstrip("\r\n") else info, idx, joined)
 			return got if got is not None else joined
-		for pre in ("Finished loading PDF", "Loading PDF"):
+		for pre in _VIEWER_PREFIXES:
 			# Brave/Chrome put their status message in front of the first line of the page
 			if text.startswith(pre) and len(text) > len(pre):
 				rest = text[len(pre):]
@@ -3733,6 +3877,12 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		s_text = text.strip()
 		if not s_text:
 			return None
+		if info is not None and len(text) <= 40:
+			ctx = self._lineContext(info)
+			if ctx and ctx[1] + len(text.rstrip()) <= self._viewerPrefix(ctx[0]):
+				# a piece of the browser's own message in front of the first line: as it is
+				self._noteEnglish(text.split())
+				return text
 		if all(unicodedata.category(ch) in ("Pi", "Pf") for ch in s_text):
 			# a quotation mark alone (PDF.js gives “ and ” as pieces of their own): the closing one
 			# was found as the opening one
@@ -3748,6 +3898,13 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 					return "".join(pc for pc, _ok in pieces)
 			return None
 		if all("\u0900" <= c <= "\u0903" or "\u093a" <= c <= "\u094f" or "\u0951" <= c <= "\u0957" or "\u0962" <= c <= "\u0963" for c in s_text):
+			# signs alone ("िा", PDFium's text of वा): only through their line, which says which
+			# word they are; alone they could be any word
+			ctx = self._lineContext(info) if info is not None else None
+			if ctx and pdfText.matchKey(ctx[0]) != pdfText.matchKey(s_text):
+				pieces = idx.spanAt(ctx[0], ctx[1], len(_memoText(_unwrap(info)) or text))
+				if pieces and all(ok for _pc, ok in pieces):
+					return "".join(pc for pc, _ok in pieces)
 			return None
 		lines = text.splitlines(True)
 		if len(lines) > 2:
@@ -3765,13 +3922,20 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 					out.append(ln)
 			return "".join(out) if found else None
 		pieces = None
-		if info is not None and len(key) <= 100 and keyOf_(info) == key:
-			# a character, word, or short line selection: find it through its line
+		inLine = False
+		if info is not None and len(key) <= 400 and keyOf_(info) == key:
+			# a character, word (also a long fill-in line of dots), or a selection in one line: find
+			# it through its line
 			ctx = self._lineContext(info)
 			if ctx:
 				lineText, offset = ctx
 				if pdfText.keyOf(lineText) != key:
+					inLine = True
 					pieces = idx.spanAt(lineText, offset, len(_memoText(_unwrap(info)) or text))
+		if pieces is None and inLine and len(key) <= 2 and devanagariRepair.hasDevanagari(text):
+			# a letter or two of damaged Unicode text whose line is not found: anywhere in the
+			# document they could be part of any word (घ of घटनाहरू read as घाइते)
+			return None
 		if pieces is None:
 			pieces = idx.lookup(text)
 		if pieces and any(not ok and _isEnglishOutside(idx, pc) for pc, ok in pieces):
@@ -3795,6 +3959,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			except Exception:
 				pass
 			return None
+		self._noteEnglish([pc for pc, ok in pieces if ok])
 		out = []
 		for piece, ok in pieces:
 			if not piece:
@@ -3910,6 +4075,15 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			return text, off
 		except Exception:
 			return None
+
+	@staticmethod
+	def _viewerPrefix(lineText):
+		"""Length of the browser's own message in front of a PDF's first line ("Finished loading
+		PDF"), 0 when there is none."""
+		for pre in _VIEWER_PREFIXES:
+			if lineText.startswith(pre) and len(lineText) > len(pre):
+				return len(pre)
+		return 0
 
 	@staticmethod
 	def _wordContext(info):
@@ -4204,6 +4378,32 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			diag.write("slow read %dms app=%s | %r" % (took * 1000, _appName(info.obj), (self._lastRaw or "")[:70]))
 		return fields
 
+	def _noteEnglish(self, pieces):
+		"""Keeps the words a PDF's own text has just shown to be English (or other text the PDF has
+		as it is): the speech filter must not turn them into Nepali (an English "to" of a Preeti
+		PDF, read as a word, became तय there)."""
+		try:
+			said = self.__dict__.get("_docEnglish")
+			if said is None:
+				said = self._docEnglish = deque(maxlen=200)
+			now = time.monotonic()
+			for pc in pieces:
+				if pc and pc.isascii() and pc.strip():
+					said.append((now, pc.strip()))
+		except Exception:
+			pass
+
+	def _fromDocument(self, item):
+		"""True if every word of `item` (a piece of speech) is one the PDF's own text has just shown
+		to be English."""
+		said = self.__dict__.get("_docEnglish")
+		toks = item.split()
+		if not said or not toks or not item.isascii():
+			return False
+		now = time.monotonic()
+		recent = {pc for t, pc in said if now - t <= 5}
+		return all(tok in recent for tok in toks)
+
 	def _resolveCharacter(self, info, formatConfig, c):
 		"""Resolves a single character during Left/Right Arrow navigation, repairing hybrid residue,
 		decomposed matras, glued digit keys, Preeti keys, and inverted reph from word context."""
@@ -4232,6 +4432,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
 		# Check DocIndex first if reading a PDF (only when it is ready: a character never waits)
 		if self._isPdfWindow(info.obj):
+			ctx = self._lineContext(info)
+			if ctx and ctx[1] < self._viewerPrefix(ctx[0]):
+				return fields  # the browser's own "Finished loading PDF" in front of the first line
 			idx = self._readyIndex(info.obj)
 			if idx is not None:
 				ctx = self._lineContext(info)
@@ -4301,15 +4504,23 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		ptext = ""
 		ntext = ""
 		try:
-			raw = _unwrap(info)
-			prev = raw.copy()
-			if prev.move(textInfos.UNIT_CHARACTER, -1) != 0:
-				prev.expand(textInfos.UNIT_CHARACTER)
-				ptext = prev.text or ""
-			nxt = raw.copy()
-			if nxt.move(textInfos.UNIT_CHARACTER, 1) != 0:
-				nxt.expand(textInfos.UNIT_CHARACTER)
-				ntext = nxt.text or ""
+			# the characters before and after it, from its line (asking the document for them
+			# took six more calls into the browser); at either end of the line, from the document
+			n = len(orig_char)
+			inLine = bool(ctx) and 0 < ctx[1] and ctx[1] + n < len(ctx[0])
+			if inLine:
+				ptext = ctx[0][ctx[1] - 1]
+				ntext = ctx[0][ctx[1] + n]
+			else:
+				raw = _unwrap(info)
+				prev = raw.copy()
+				if prev.move(textInfos.UNIT_CHARACTER, -1) != 0:
+					prev.expand(textInfos.UNIT_CHARACTER)
+					ptext = prev.text or ""
+				nxt = raw.copy()
+				if nxt.move(textInfos.UNIT_CHARACTER, 1) != 0:
+					nxt.expand(textInfos.UNIT_CHARACTER)
+					ntext = nxt.text or ""
 		except Exception:
 			pass
 
@@ -4538,6 +4749,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			if tok is not None:
 				orig, conv = tok
 				if conv == orig:
+					# kept as line reading keeps it (English, a number): the speech filter must not
+					# turn it into Nepali afterwards ("o," and "I/We" of a PDF still being read)
+					self._noteEnglish([orig] + rawText.split())
 					return info.getTextWithFields(formatConfig)
 				if rawText.strip() == orig:
 					fields = list(info.getTextWithFields(formatConfig))
@@ -4564,7 +4778,38 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			log.error("Nepali Reader: conversion failed", exc_info=True)
 			diag.exception("conversion failed")
 			return fields
+		if unit == getattr(textInfos, "UNIT_WORD", "word") and len(rawText.strip()) == 1 and not (rawText.strip().isascii() and rawText.strip().isalnum()) and not devanagariRepair.hasDevanagari(rawText) and c["mode"] != "off":
+			fields = self._oneKeyWord(info, formatConfig, c, fields, rawText)
 		return fields
+
+	def _oneKeyWord(self, info, formatConfig, c, fields, rawText):
+		"""A word of one character (NVDA's word for a Preeti sign key of a PDF line, | of k|:tfjgf)
+		that word reading left as it is: what character reading says for it, so moving by word
+		and selecting the word say the same."""
+		try:
+			said = "".join(f for f in fields if isinstance(f, str))
+			if said.strip() != rawText.strip() or not self._isPdfWindow(info.obj):
+				return fields
+			ch = _unwrap(info).copy()
+			ch.collapse()
+			lead = len(rawText) - len(rawText.lstrip())
+			if lead:
+				ch.move(textInfos.UNIT_CHARACTER, lead)
+			ch.expand(textInfos.UNIT_CHARACTER)
+			got = "".join(f for f in self._resolveCharacter(ch, formatConfig, c) if isinstance(f, str))
+			if not got.strip() or got.strip() == rawText.strip():
+				return fields
+			new = rawText.replace(rawText.strip(), got.strip(), 1)
+			out = list(fields)
+			done = False
+			for i, f in enumerate(out):
+				if isinstance(f, str):
+					out[i] = "" if done else new
+					done = True
+			return out
+		except Exception:
+			diag.exception("one key word")
+			return fields
 
 	def _lineWords(self, info, idx, raw):
 		"""The index words of the text of a TextInfo, each line at its own place in the document

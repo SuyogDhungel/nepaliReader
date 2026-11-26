@@ -2,6 +2,26 @@
 
 All notable changes to the **Nepali Reader** NVDA add-on are documented here.
 
+## [2.2.2] - 2026-11-26
+
+### Reading
+- Reading by character, by word and by line, and selecting, now always give the same text in the
+  same order, in Preeti and in Unicode PDFs.
+- Moving by character says the letters in the order the line is read, also in PDFs that store
+  their text in an unusual order, and no longer stops on a space the viewer puts inside a word.
+- The first line of a PDF in the browser reads correctly by character and by word too.
+- Short English words in a Nepali PDF are no longer read as Nepali when moving by word.
+- Words the PDF viewer cuts into pieces or gives in another order, and labels with a dotted fill-in
+  line drawn through them, are read as printed, by line, by word and by character.
+- Moving by character over a short i (ि), or over a vowel sign after the nasal sign (ं), says each
+  sign once.
+- Moving word by word no longer says part of a word twice.
+
+### Faster
+- A PDF opened for the first time is ready much sooner, also while you are already reading it.
+  Until it is ready, moving by word and by character says the same as reading the line.
+- Moving by character in a PDF asks the browser less.
+
 ## [2.2.1] - 2026-11-25
 
 ### Faster
