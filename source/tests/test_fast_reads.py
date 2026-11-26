@@ -197,7 +197,9 @@ def said(info, unit):
 
 
 failures = 0
-LIMITS = {'line': (5, 8), 'char': (6, 10), 'word': (5, 6)}  # (average, most)
+# (average, most; a word of one Preeti sign key that NVDA's own word leaves alone also says what
+# the key says by character, as character reading does: a few calls more, for those few words)
+LIMITS = {'line': (5, 8), 'char': (6, 10), 'word': (5, 12)}
 
 
 def check(name, ok, detail=''):
